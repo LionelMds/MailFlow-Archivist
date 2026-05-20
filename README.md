@@ -23,6 +23,7 @@ Cette premiere tranche met en place :
 - scanner et exporteur Outlook mockables ;
 - service de scan Outlook par compte, racine, annee et projet optionnel ;
 - pipeline de previsualisation regles + IA + decision ;
+- parametrage IA dans l'interface avec cle OpenAI stockee dans `keyring` ;
 - export HTML projet centralise dans `Correspondance` avec pieces jointes liees ;
 - surveillance Outlook par scan regulier avec confirmation avant mise a jour HTML ;
 - export CSV de rapport sans corps de mails ;
@@ -49,6 +50,21 @@ avant de mettre a jour le journal HTML.
 Quand la surveillance est active, fermer la fenetre masque MailFlow dans la zone de
 notification au lieu de l'arreter. Le menu de l'icone permet de rouvrir l'application,
 d'activer ou desactiver la surveillance, ou de quitter completement.
+
+## Mode IA
+
+Le mode IA se configure dans le bloc `Configuration` :
+
+- `desactivee` : seules les regles locales sont utilisees ;
+- `ambigu seulement` : l'IA intervient lorsque les regles manquent de confiance ;
+- `tout classifier` : chaque mail est aussi classe par IA.
+
+Le modele par defaut est `gpt-5.4-nano`, choisi pour un usage de classification
+rapide et economique. Il peut etre remplace dans le champ `Modele IA`.
+
+La cle OpenAI est enregistree dans le coffre Windows via `keyring`, jamais dans le
+fichier JSON ni dans les logs. L'option d'envoi du corps peut etre desactivee pour
+n'envoyer que sujet, metadonnees et noms des pieces jointes.
 
 ## Commandes utiles
 

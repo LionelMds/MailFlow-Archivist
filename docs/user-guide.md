@@ -23,6 +23,26 @@ Avant tout archivage, l'utilisateur garde la main sur :
 - Les fichiers existants ne sont pas remplaces automatiquement.
 - Les pieces jointes completes ne sont pas envoyees a l'IA dans le MVP.
 
+## Mode IA
+
+Dans `Configuration`, choisir le mode IA :
+
+- `desactivee` pour rester en regles locales uniquement ;
+- `ambigu seulement` pour appeler l'IA seulement quand les regles sont incertaines ;
+- `tout classifier` pour demander une classification IA sur tous les mails.
+
+Coller la cle OpenAI dans `Cle API OpenAI`, puis cliquer sur `Enregistrer cle`.
+La cle est stockee dans le coffre Windows et n'est pas sauvegardee dans le JSON.
+Le modele par defaut est `gpt-5.4-nano`; il peut etre remplace dans `Modele IA`.
+
+Options de confidentialite :
+
+- `Envoyer l'extrait nettoye du corps a l'IA` peut etre decoche ;
+- `Masquer les numeros de telephone avant IA` remplace les numeros detectes.
+
+Si le mode IA est actif mais qu'aucune cle n'est disponible, MailFlow continue avec
+les regles locales et affiche un avertissement dans les logs.
+
 ## Export HTML projet
 
 1. Scanner le dossier Outlook projet.

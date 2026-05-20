@@ -42,6 +42,18 @@ class FakeAiClassifier:
         )
 
 
+class FailingAiClassifier:
+    def classify(
+        self,
+        mail: MailMetadata,
+        *,
+        include_body: bool = True,
+        privacy_mask_phone_numbers: bool = False,
+        known_context: dict[str, str] | None = None,
+    ) -> AiMailClassification:
+        raise RuntimeError("OpenAI indisponible")
+
+
 def sample_mail(*, subject: str, body: str = "") -> MailMetadata:
     return MailMetadata(
         entry_id=f"ENTRY-{subject}",
@@ -110,6 +122,19 @@ def test_pipeline_calls_ai_for_ambiguous_mail(tmp_path: Path) -> None:
 def test_pipeline_disabled_ai_keeps_ambiguous_mail_for_review(tmp_path: Path) -> None:
     (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
     pipeline = ClassificationPipeline(projects_root=tmp_path, ai_mode=AiMode.DISABLED)
+
+    row = pipeline.preview_one(sample_mail(subject="Question", body="Pouvez-vous regarder ?"))
+
+    assert row.classification.ai is None
+    assert row.action == PreviewAction.REVIEW
+
+
+def test_pipeline_falls_back_to_rules_when_ai_fails(tmp_path: Path) -> None:
+    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
+    pipeline = ClassificationPipeline(
+        projects_root=tmp_path,
+        ai_classifier=FailingAiClassifier(),
+    )
 
     row = pipeline.preview_one(sample_mail(subject="Question", body="Pouvez-vous regarder ?"))
 

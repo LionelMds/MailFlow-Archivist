@@ -8,6 +8,7 @@ import pytest
 
 from mailflow.config import AppSettings
 from mailflow.models import (
+    AiMode,
     ArchiveDecision,
     ClassificationResult,
     Direction,
@@ -21,10 +22,12 @@ from mailflow.models import (
 )
 from mailflow.ui.main_window import (
     UI_TEXT,
+    ai_mode_label,
     build_archive_confirmation_message,
     build_manual_classification_update,
     format_outlook_account_label,
     format_project_html_export_result,
+    openai_key_status_text,
     should_hide_to_tray,
     summarize_archive_selection,
 )
@@ -141,6 +144,14 @@ def test_outlook_account_label_includes_smtp_address() -> None:
     assert format_outlook_account_label(account) == "Balz <lionel@balzmetal.test>"
 
 
+def test_ai_settings_labels_are_french() -> None:
+    assert ai_mode_label(AiMode.DISABLED) == "desactivee"
+    assert ai_mode_label(AiMode.AMBIGUOUS_ONLY) == "ambigu seulement"
+    assert ai_mode_label(AiMode.ALL) == "tout classifier"
+    assert openai_key_status_text(True) == "Cle enregistree"
+    assert openai_key_status_text(False) == "Aucune cle"
+
+
 def test_summarize_archive_selection_counts_ready_and_skipped_rows(tmp_path: Path) -> None:
     rows = [
         make_preview_row(tmp_path, PreviewAction.ARCHIVE),
@@ -233,7 +244,7 @@ def test_should_hide_to_tray_requires_watch_and_available_tray() -> None:
 
 def test_main_window_instantiates_when_pyside6_is_available() -> None:
     pytest.importorskip("PySide6")
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QLineEdit
 
     from mailflow.ui.main_window import MainWindow
 
@@ -244,6 +255,10 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert window.windowTitle() == "MailFlow Archivist"
     assert dynamic_window.mailflow_outlook_root_combo.currentText() == "Boite de reception"
     assert dynamic_window.mailflow_mail_preview.isReadOnly()
+    assert dynamic_window.mailflow_ai_mode_combo.currentData() == AiMode.AMBIGUOUS_ONLY.value
+    assert dynamic_window.mailflow_ai_model_input.text() == "gpt-5.4-nano"
+    assert dynamic_window.mailflow_openai_key_input.echoMode() == QLineEdit.EchoMode.Password
+    assert dynamic_window.mailflow_ai_include_body_checkbox.isChecked()
     assert dynamic_window.mailflow_watch_checkbox.text() == "Surveillance Outlook"
     assert dynamic_window.mailflow_watch_timer.interval() == 300000
     assert dynamic_window.mailflow_tray_icon.toolTip() == "MailFlow Archivist"

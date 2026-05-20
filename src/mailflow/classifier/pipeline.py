@@ -107,11 +107,14 @@ class ClassificationPipeline:
             return None
         if self.ai_classifier is None:
             return None
-        return self.ai_classifier.classify(
-            mail,
-            include_body=self.include_body_for_ai,
-            privacy_mask_phone_numbers=self.privacy_mask_phone_numbers,
-        )
+        try:
+            return self.ai_classifier.classify(
+                mail,
+                include_body=self.include_body_for_ai,
+                privacy_mask_phone_numbers=self.privacy_mask_phone_numbers,
+            )
+        except Exception:
+            return None
 
 
 def action_from_decision(*, archive: bool, requires_review: bool) -> PreviewAction:

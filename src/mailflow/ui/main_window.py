@@ -10,6 +10,7 @@ from mailflow.core.archive_actions import rows_to_archive
 from mailflow.core.archive_batch import ArchiveBatchResult
 from mailflow.core.background_watcher import WatchState
 from mailflow.models import (
+    AiMode,
     InterlocutorType,
     MailType,
     ManualClassificationUpdate,
@@ -30,6 +31,8 @@ UI_TEXT = {
     "logs": "Logs",
     "scan_button": "Scanner Outlook",
     "watch_outlook": "Surveillance Outlook",
+    "save_settings": "Enregistrer parametres",
+    "save_openai_key": "Enregistrer cle",
     "archive_selection": "Archiver selection",
     "archive_all_except_review": "Tout archiver sauf a verifier",
     "mark_ignored": "Marquer comme ignore",
@@ -98,6 +101,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QWidget,
     )
 
+    from mailflow.config import (
+        get_openai_api_key,
+        save_settings,
+        set_openai_api_key,
+    )
     from mailflow.core.app_controller import PreviewRequest, build_default_controller
     from mailflow.ui.mail_preview import preview_row_to_html
     from mailflow.ui.preview_table import (
@@ -154,7 +162,35 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     outlook_root_combo.setEditable(True)
     grid.addWidget(outlook_root_combo, 2, 1)
     grid.addWidget(QLabel("Mode IA"), 3, 0)
-    grid.addWidget(QLineEdit(settings.ai_mode.value), 3, 1)
+    ai_mode_combo = QComboBox()
+    for mode in AiMode:
+        ai_mode_combo.addItem(ai_mode_label(mode), mode.value)
+    set_combo_value_by_data(ai_mode_combo, settings.ai_mode.value)
+    grid.addWidget(ai_mode_combo, 3, 1)
+    grid.addWidget(QLabel("Modele IA"), 4, 0)
+    ai_model_input = QLineEdit(settings.ai_model)
+    grid.addWidget(ai_model_input, 4, 1)
+    grid.addWidget(QLabel("Cle API OpenAI"), 5, 0)
+    openai_key_widget = QWidget()
+    openai_key_layout = QHBoxLayout(openai_key_widget)
+    openai_key_layout.setContentsMargins(0, 0, 0, 0)
+    openai_key_input = QLineEdit()
+    openai_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+    openai_key_input.setPlaceholderText("Coller une nouvelle cle puis enregistrer")
+    save_openai_key_button = QPushButton(UI_TEXT["save_openai_key"])
+    openai_key_status = QLabel(openai_key_status_text(get_openai_api_key() is not None))
+    openai_key_layout.addWidget(openai_key_input)
+    openai_key_layout.addWidget(save_openai_key_button)
+    openai_key_layout.addWidget(openai_key_status)
+    grid.addWidget(openai_key_widget, 5, 1)
+    ai_include_body_checkbox = QCheckBox("Envoyer l'extrait nettoye du corps a l'IA")
+    ai_include_body_checkbox.setChecked(settings.ai_include_body_excerpt)
+    grid.addWidget(ai_include_body_checkbox, 6, 1)
+    privacy_phone_checkbox = QCheckBox("Masquer les numeros de telephone avant IA")
+    privacy_phone_checkbox.setChecked(settings.privacy_mask_phone_numbers)
+    grid.addWidget(privacy_phone_checkbox, 7, 1)
+    save_settings_button = QPushButton(UI_TEXT["save_settings"])
+    grid.addWidget(save_settings_button, 8, 1)
     layout.addWidget(config)
 
     scan = QGroupBox(UI_TEXT["scan"])
@@ -232,6 +268,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     def append_log(message: str) -> None:
         logs.append(message)
+
+    def has_openai_api_key() -> bool:
+        return get_openai_api_key() is not None
+
+    def update_openai_key_status() -> None:
+        openai_key_status.setText(openai_key_status_text(has_openai_api_key()))
 
     def show_window_from_tray() -> None:
         window.show()
@@ -517,10 +559,37 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         settings.selected_outlook_account = selected_account_identifier()
         settings.outlook_root_folder = current_outlook_root_folder()
         settings.selected_year = clean_optional_text(year_input.text())
+        settings.ai_mode = AiMode(str(ai_mode_combo.currentData()))
+        settings.ai_model = clean_optional_text(ai_model_input.text()) or "gpt-5.4-nano"
+        settings.ai_include_body_excerpt = ai_include_body_checkbox.isChecked()
+        settings.privacy_mask_phone_numbers = privacy_phone_checkbox.isChecked()
+
+    def save_current_settings() -> None:
+        try:
+            update_projects_root()
+            save_settings(settings)
+            append_log("Parametres enregistres.")
+        except Exception as exc:
+            append_log(f"Erreur enregistrement parametres: {exc}")
+
+    def save_openai_key_from_input() -> None:
+        api_key = clean_optional_text(openai_key_input.text())
+        if api_key is None:
+            append_log("Aucune nouvelle cle OpenAI a enregistrer.")
+            return
+        try:
+            set_openai_api_key(api_key)
+            openai_key_input.clear()
+            update_openai_key_status()
+            append_log("Cle OpenAI enregistree dans le coffre Windows.")
+        except Exception as exc:
+            append_log(f"Erreur enregistrement cle OpenAI: {exc}")
 
     def scan_current_preview() -> list[PreviewRow]:
         nonlocal active_controller
         update_projects_root()
+        if settings.ai_mode != AiMode.DISABLED and not has_openai_api_key():
+            append_log("Mode IA actif sans cle OpenAI: classement par regles uniquement.")
         if not controller_was_injected:
             active_controller = build_default_controller(settings)
             dynamic_window.mailflow_controller = active_controller
@@ -714,6 +783,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     watch_timer.timeout.connect(run_watch_scan)
     report_button.clicked.connect(on_export_report)
     export_html_button.clicked.connect(on_export_project_html)
+    save_openai_key_button.clicked.connect(save_openai_key_from_input)
+    save_settings_button.clicked.connect(save_current_settings)
     ignore_button.clicked.connect(on_mark_ignored)
     archive_button.clicked.connect(on_archive_selection)
     archive_all_button.clicked.connect(on_archive_all_except_review)
@@ -733,6 +804,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_export_html_button = export_html_button
     dynamic_window.mailflow_watch_checkbox = watch_checkbox
     dynamic_window.mailflow_watch_timer = watch_timer
+    dynamic_window.mailflow_ai_mode_combo = ai_mode_combo
+    dynamic_window.mailflow_ai_model_input = ai_model_input
+    dynamic_window.mailflow_openai_key_input = openai_key_input
+    dynamic_window.mailflow_openai_key_status = openai_key_status
+    dynamic_window.mailflow_save_openai_key_button = save_openai_key_button
+    dynamic_window.mailflow_ai_include_body_checkbox = ai_include_body_checkbox
+    dynamic_window.mailflow_privacy_phone_checkbox = privacy_phone_checkbox
+    dynamic_window.mailflow_save_settings_button = save_settings_button
     dynamic_window.mailflow_tray_icon = tray_icon
     dynamic_window.mailflow_tray_open_action = tray_open_action
     dynamic_window.mailflow_tray_watch_action = tray_watch_action
@@ -756,6 +835,28 @@ def format_outlook_account_label(account: OutlookAccount) -> str:
     if account.smtp_address:
         return f"{account.display_name} <{account.smtp_address}>"
     return account.display_name
+
+
+def ai_mode_label(mode: AiMode) -> str:
+    labels = {
+        AiMode.DISABLED: "desactivee",
+        AiMode.AMBIGUOUS_ONLY: "ambigu seulement",
+        AiMode.ALL: "tout classifier",
+    }
+    return labels[mode]
+
+
+def openai_key_status_text(has_key: bool) -> str:
+    return "Cle enregistree" if has_key else "Aucune cle"
+
+
+def set_combo_value_by_data(combo: Any, value: str) -> None:
+    for index in range(combo.count()):
+        if combo.itemData(index) == value:
+            combo.setCurrentIndex(index)
+            return
+    if combo.currentIndex() < 0 and combo.count() > 0:
+        combo.setCurrentIndex(0)
 
 
 def summarize_archive_selection(

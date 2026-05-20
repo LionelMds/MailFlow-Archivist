@@ -50,7 +50,7 @@ class AppSettings(BaseModel):
     selected_outlook_account: str | None = None
     selected_year: str | None = None
     ai_mode: AiMode = AiMode.AMBIGUOUS_ONLY
-    ai_model: str = "gpt-4o-mini"
+    ai_model: str = "gpt-5.4-nano"
     ai_include_body_excerpt: bool = True
     privacy_mask_phone_numbers: bool = False
     rule_confidence_threshold: float = 0.80

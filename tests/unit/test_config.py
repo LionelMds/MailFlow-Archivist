@@ -21,3 +21,6 @@ def test_settings_round_trip_without_api_key(tmp_path: Path) -> None:
     assert loaded.selected_year == "2025"
     assert "openai_api_key" not in (tmp_path / "config.json").read_text(encoding="utf-8")
 
+
+def test_settings_default_ai_model_is_fast_low_cost() -> None:
+    assert AppSettings().ai_model == "gpt-5.4-nano"

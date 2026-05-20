@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Protocol
 
 from mailflow.classifier.prompt import SYSTEM_PROMPT, build_ai_payload
@@ -20,7 +21,7 @@ class AiClassifier:
         self,
         *,
         api_key: str,
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-5.4-nano",
         client: OpenAiClient | None = None,
     ) -> None:
         self._api_key = api_key
@@ -45,7 +46,10 @@ class AiClassifier:
             model=self._model,
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": str(payload)},
+                {
+                    "role": "user",
+                    "content": json.dumps(payload, ensure_ascii=False),
+                },
             ],
             text_format=AiMailClassification,
         )

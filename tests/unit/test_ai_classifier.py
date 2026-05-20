@@ -50,8 +50,9 @@ def test_ai_classifier_uses_structured_output_and_metadata_only() -> None:
 
     assert result == parsed
     assert responses.kwargs is not None
+    assert responses.kwargs["model"] == "gpt-5.4-nano"
     assert responses.kwargs["text_format"] is AiMailClassification
     user_payload = responses.kwargs["input"][1]["content"]
+    assert '"project_number": "2025-4893"' in user_payload
     assert "offre.xlsx" in user_payload
     assert "+41 22" not in user_payload
-

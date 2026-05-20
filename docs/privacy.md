@@ -10,3 +10,5 @@ Le MVP limite les donnees envoyees a l'IA :
 
 La cle API OpenAI est stockee via `keyring` et n'est jamais ecrite dans les logs ou le fichier de configuration JSON.
 
+Le mode IA peut etre desactive. L'utilisateur peut aussi ne pas envoyer l'extrait du
+corps du mail et masquer les numeros de telephone avant appel a l'API.
