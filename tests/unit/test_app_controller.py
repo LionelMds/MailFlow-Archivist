@@ -300,6 +300,29 @@ def test_controller_can_restore_all_archivable_rows(tmp_path: Path) -> None:
     assert restored[1].action == PreviewAction.REVIEW
 
 
+def test_controller_restore_forces_ignored_rows_with_archive_false(tmp_path: Path) -> None:
+    ignored = make_row(tmp_path, PreviewAction.IGNORE).model_copy(
+        update={
+            "decision": make_row(tmp_path).decision.model_copy(
+                update={"archive": False, "requires_review": False}
+            )
+        }
+    )
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+    controller.preview_rows = [ignored]
+
+    restored = controller.mark_all_archivable()
+
+    assert restored[0].action == PreviewAction.ARCHIVE
+    assert restored[0].decision.archive is True
+    assert controller.rows_ready_for_archive() == restored
+
+
 def test_controller_updates_preview_folder_tree(tmp_path: Path) -> None:
     row = make_row(tmp_path).model_copy(
         update={

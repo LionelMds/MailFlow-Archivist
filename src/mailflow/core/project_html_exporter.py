@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from mailflow.core.cloud_files import request_local_availability
 from mailflow.core.filenames import build_archive_stem, build_attachment_filename
 from mailflow.core.folder_tree import FolderTreeNode, build_folder_tree, folder_sort_key
 from mailflow.core.project_paths import local_project_path
@@ -26,6 +27,7 @@ class HtmlAttachmentLink:
     name: str
     href: str | None
     path: Path | None
+    local_href: str | None = None
 
 
 @dataclass(frozen=True)
@@ -168,11 +170,13 @@ def _export_attachment_links(
         target = attachment_dir / build_attachment_filename(mail_stem, original_name)
         if not target.exists():
             attachment.SaveAsFile(str(target))
+        request_local_availability(target)
         links.append(
             HtmlAttachmentLink(
                 name=original_name,
                 href=_relative_attachment_href(attachment_dir, target),
                 path=target,
+                local_href=_local_file_href(target),
             )
         )
     return links, inline_images
@@ -500,6 +504,7 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     const cards = Array.from(document.querySelectorAll(".mail-card"));
     const sections = Array.from(document.querySelectorAll(".folder-section"));
     const folderButtons = Array.from(document.querySelectorAll("[data-folder-filter]"));
+    const attachmentLinks = Array.from(document.querySelectorAll("[data-attachment-link]"));
     const search = document.getElementById("search");
     const directionFilter = document.getElementById("directionFilter");
     const typeFilter = document.getElementById("typeFilter");
@@ -544,6 +549,27 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
         activeFolder = button.dataset.folderFilter;
         for (const item of folderButtons) item.classList.toggle("active", item === button);
         applyFilters();
+      }});
+    }}
+
+    function sameLocalFile(relativeHref, localHref) {{
+      try {{
+        return new URL(relativeHref, document.baseURI).href === new URL(localHref).href;
+      }} catch {{
+        return false;
+      }}
+    }}
+
+    for (const link of attachmentLinks) {{
+      link.addEventListener("click", () => {{
+        const localHref = link.dataset.localHref;
+        if (
+          window.location.protocol === "file:" &&
+          localHref &&
+          sameLocalFile(link.getAttribute("href"), localHref)
+        ) {{
+          link.href = localHref;
+        }}
       }});
     }}
 
@@ -694,9 +720,14 @@ def _render_attachments(attachments: list[HtmlAttachmentLink]) -> str:
         if attachment.href is None:
             links.append(f'<span class="attachment-missing">{label} (non exportee)</span>')
         else:
+            local_href = (
+                f' data-local-href="{_e(attachment.local_href)}"'
+                if attachment.local_href is not None
+                else ""
+            )
             links.append(
-                f'<a href="{_e(attachment.href)}" target="_blank" '
-                f'rel="noopener">{label}</a>'
+                f'<a href="{_e(attachment.href)}"{local_href} data-attachment-link '
+                f'target="_blank" rel="noopener">{label}</a>'
             )
     return f'<div class="attachments">{"".join(links)}</div>'
 
@@ -754,6 +785,10 @@ def _relative_attachment_href(attachment_dir: Path, attachment_path: Path) -> st
     return "./" + "/".join(
         [quote(attachment_dir.name, safe=""), quote(attachment_path.name, safe="")]
     )
+
+
+def _local_file_href(attachment_path: Path) -> str:
+    return attachment_path.resolve().as_uri()
 
 
 def _inline_image_from_attachment(

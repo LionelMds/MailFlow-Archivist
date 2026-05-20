@@ -1083,6 +1083,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(f"Erreur archivage: {exc}")
 
     def on_archive_all_except_review() -> None:
+        active_controller.mark_all_archivable()
+        refresh_table()
         indexes = list(range(len(active_controller.preview_rows)))
         summary = summarize_archive_selection(active_controller.preview_rows, indexes)
         if summary.selected_count == 0:

@@ -120,3 +120,23 @@ def test_mark_rows_archivable_restores_safe_archive_actions(tmp_path: Path) -> N
     assert restored[0].action == PreviewAction.ARCHIVE
     assert restored[1].action == PreviewAction.REVIEW
     assert restored[2].action == PreviewAction.ARCHIVED
+
+
+def test_mark_rows_archivable_forces_previously_non_archivable_ignored_rows(
+    tmp_path: Path,
+) -> None:
+    ignored = make_row(PreviewAction.IGNORE, archive=False, tmp_path=tmp_path)
+
+    restored = mark_rows_archivable([ignored])
+
+    assert restored[0].action == PreviewAction.ARCHIVE
+    assert restored[0].decision.archive is True
+    assert restored[0].decision.requires_review is False
+    assert "force" in restored[0].decision.reason
+
+
+def test_rows_to_archive_accepts_restored_rows_with_forced_decision(tmp_path: Path) -> None:
+    ignored = make_row(PreviewAction.IGNORE, archive=False, tmp_path=tmp_path)
+    restored = mark_rows_archivable([ignored])
+
+    assert rows_to_archive(restored) == restored

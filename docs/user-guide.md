@@ -58,7 +58,9 @@ Actions possibles :
   dossier deja propose, utile lorsqu'un doublon accidentel a ete detecte.
 - `Ignorer selection` marque seulement les lignes selectionnees comme ignorees ;
 - `Tout remettre a archiver` remet les lignes archivables en action `Archiver`, sans
-  toucher aux lignes deja archivees ni aux lignes qui exigent une verification.
+  toucher aux lignes deja archivees ni aux lignes qui exigent une verification. Cette
+  action force aussi la decision interne d'archivage pour permettre de re-archiver un
+  mail deja vu dans SQLite ou marque comme archive dans Outlook.
 
 Les changements sont appliques a la previsualisation et au futur export/archivage.
 Ils restent modifiables tant que l'utilisateur n'a pas confirme l'archivage ou l'export.
@@ -135,7 +137,9 @@ correspondance client, demandes de prix fournisseurs, puis commandes fournisseur
 
 Les pieces jointes existantes sont conservees. Les liens vers les pieces jointes sont
 relatifs au fichier HTML, prefixes par `./` et ouverts dans un nouvel onglet/fenetre
-pour mieux fonctionner sur Windows et macOS.
+pour mieux fonctionner sur Windows et macOS. L'export ajoute aussi un lien local direct
+dans le HTML et, sous Windows, demande a OneDrive de rendre les pieces jointes exportees
+disponibles localement lorsqu'elles sont dans un dossier OneDrive.
 
 Les images integrees au corps du mail sont ignorees dans la liste des pieces jointes
 et affichees directement dans le HTML. Les vraies images jointes, par exemple une photo

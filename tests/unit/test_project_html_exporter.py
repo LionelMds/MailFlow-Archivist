@@ -149,6 +149,8 @@ def test_project_html_export_writes_single_html_and_shared_attachments(tmp_path:
     assert 'data-folder="Correspondance"' in html
     assert '<span class="chip">Correspondance</span>' in html
     assert "./2025-4893%20-%20pieces%20jointes/1-R-Offre%20garde-corps%20-%20plan.pdf" in html
+    assert 'data-attachment-link' in html
+    assert 'data-local-href="file:///' in html
     assert 'target="_blank"' in html
     assert not list(result.html_path.parent.glob("*.msg"))
     assert not list(result.attachment_dir.glob("*pieces jointes*"))

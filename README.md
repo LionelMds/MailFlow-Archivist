@@ -46,8 +46,10 @@ Le HTML regroupe les mails envoyes et recus dans la meme arborescence que la
 previsualisation MailFlow. Un panneau lateral permet de naviguer par branche de
 dossiers, et les mails sont affiches sous leur dossier cible. La recherche, les filtres
 et les liens relatifs vers les pieces jointes restent disponibles. Les liens s'ouvrent
-dans un nouvel onglet/fenetre pour mieux fonctionner aussi sur macOS. Les pieces jointes
-deja presentes sont reutilisees et ne sont pas ecrasees.
+dans un nouvel onglet/fenetre pour mieux fonctionner aussi sur macOS. Le HTML contient
+aussi un lien local direct, et l'export demande a OneDrive/Windows de garder les pieces
+jointes disponibles localement quand elles sont dans un dossier OneDrive. Les pieces
+jointes deja presentes sont reutilisees et ne sont pas ecrasees.
 
 Les destinations proposees sont hierarchisees par dossier metier puis entreprise. Les
 correspondances client vont par defaut dans `Correspondance/Entreprise/Approbation`.
