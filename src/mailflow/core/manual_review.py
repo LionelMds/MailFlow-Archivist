@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from mailflow.core.correspondence_hierarchy import is_safe_relative_folder
 from mailflow.core.project_paths import local_project_path
 from mailflow.models import (
     ArchiveDecision,
@@ -48,7 +49,7 @@ def apply_manual_classification(
     projects_root: Path,
     now: datetime | None = None,
 ) -> tuple[PreviewRow, ManualLearningSignal]:
-    if update.target_relative_folder not in MANUAL_DESTINATIONS:
+    if not is_safe_relative_folder(update.target_relative_folder):
         msg = f"Destination manuelle invalide: {update.target_relative_folder}"
         raise ValueError(msg)
 

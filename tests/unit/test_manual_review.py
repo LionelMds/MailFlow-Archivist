@@ -130,11 +130,34 @@ def test_apply_manual_classification_keeps_a_verifier_in_review(tmp_path: Path) 
     assert updated.decision.archive is False
 
 
-def test_apply_manual_classification_rejects_unknown_destination(tmp_path: Path) -> None:
+def test_apply_manual_classification_accepts_safe_dynamic_destination(tmp_path: Path) -> None:
     update = ManualClassificationUpdate(
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="Foo",
+        target_relative_folder="Fournisseurs/Commande/Metal Factory",
+    )
+
+    updated, _signal = apply_manual_classification(
+        make_row(tmp_path),
+        update,
+        projects_root=tmp_path,
+    )
+
+    assert updated.decision.target_path == (
+        tmp_path
+        / "2025"
+        / "2025-4893"
+        / "Fournisseurs"
+        / "Commande"
+        / "Metal Factory"
+    )
+
+
+def test_apply_manual_classification_rejects_unsafe_destination(tmp_path: Path) -> None:
+    update = ManualClassificationUpdate(
+        mail_type=MailType.DEVIS,
+        interlocutor=InterlocutorType.FOURNISSEUR,
+        target_relative_folder="../Foo",
     )
 
     with pytest.raises(ValueError):

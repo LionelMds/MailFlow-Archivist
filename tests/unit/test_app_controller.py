@@ -279,6 +279,43 @@ def test_controller_archive_selection_and_ignore(tmp_path: Path) -> None:
     assert controller.rows_ready_for_archive() == []
 
 
+def test_controller_updates_preview_folder_tree(tmp_path: Path) -> None:
+    row = make_row(tmp_path).model_copy(
+        update={
+            "decision": make_row(tmp_path).decision.model_copy(
+                update={
+                    "target_relative_folder": "Fournisseurs/Demande de prix/METAL-FACTORY",
+                    "target_path": (
+                        tmp_path
+                        / "2025"
+                        / "2025-4893"
+                        / "Fournisseurs"
+                        / "Demande de prix"
+                        / "METAL-FACTORY"
+                    ),
+                }
+            )
+        }
+    )
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+    controller.preview_rows = [row]
+
+    assert controller.folder_tree()[0].name == "Fournisseurs"
+    controller.rename_preview_folder(
+        "Fournisseurs/Demande de prix/METAL-FACTORY",
+        "Metal Factory",
+    )
+
+    assert controller.preview_rows[0].decision.target_relative_folder == (
+        "Fournisseurs/Demande de prix/Metal Factory"
+    )
+
+
 def test_controller_archives_ready_rows_with_stored_outlook_items(tmp_path: Path) -> None:
     create_project_folder(tmp_path)
     mail = make_mail()
@@ -306,6 +343,48 @@ def test_controller_archives_ready_rows_with_stored_outlook_items(tmp_path: Path
     assert result.exported_mail_ids == ["ENTRY-1"]
     assert archive_service.calls == ["ENTRY-1"]
     assert controller.preview_rows[0].action == PreviewAction.ARCHIVED
+
+
+def test_controller_creates_missing_destination_subfolders(tmp_path: Path) -> None:
+    create_project_folder(tmp_path)
+    mail = make_mail()
+    row = make_row(tmp_path).model_copy(
+        update={
+            "decision": make_row(tmp_path).decision.model_copy(
+                update={
+                    "target_relative_folder": "Fournisseurs/Commande/Metal Factory",
+                    "target_path": (
+                        tmp_path
+                        / "2025"
+                        / "2025-4893"
+                        / "Fournisseurs"
+                        / "Commande"
+                        / "Metal Factory"
+                    ),
+                }
+            )
+        }
+    )
+    archive_service = FakeArchiveService()
+    controller = AppController(
+        scan_service=FakeScanService([mail]),
+        preview_pipeline=FakePreviewPipeline([row]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+        archive_executor=ArchiveBatchExecutor(archive_service),
+    )
+    controller.scan_and_preview(
+        PreviewRequest(
+            account_identifier=None,
+            outlook_root_folder="Boite de reception",
+            year="2025",
+        )
+    )
+
+    result = controller.archive_ready()
+
+    assert result.exported_count == 1
+    assert row.decision.target_path.exists()
 
 
 def test_controller_archives_only_selected_ready_rows(tmp_path: Path) -> None:

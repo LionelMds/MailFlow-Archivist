@@ -23,6 +23,8 @@ Cette premiere tranche met en place :
 - scanner et exporteur Outlook mockables ;
 - service de scan Outlook par compte, racine, annee et projet optionnel ;
 - pipeline de previsualisation regles + IA + decision ;
+- hierarchie par entreprise et dossier metier pour les destinations ;
+- previsualisateur d'arborescence avec renommage et fusion avant archivage ;
 - parametrage IA dans l'interface avec cle OpenAI stockee dans `keyring` et test visuel ;
 - export HTML projet centralise dans `Correspondance` avec pieces jointes liees ;
 - surveillance Outlook par scan regulier avec confirmation avant mise a jour HTML ;
@@ -39,17 +41,31 @@ Le bouton `Exporter HTML projet` cree un journal par projet scanne :
 [Projet]\Correspondance\2025-4893 - pieces jointes\
 ```
 
-Le HTML regroupe les mails envoyes et recus, avec recherche, filtres et liens relatifs
-explicites vers les pieces jointes. Les liens s'ouvrent dans un nouvel onglet/fenetre
-pour mieux fonctionner aussi sur macOS. Les pieces jointes deja presentes sont
-reutilisees et ne sont pas ecrasees.
+Le HTML regroupe les mails envoyes et recus dans la meme arborescence que la
+previsualisation MailFlow. Un panneau lateral permet de naviguer par branche de
+dossiers, et les mails sont affiches sous leur dossier cible. La recherche, les filtres
+et les liens relatifs vers les pieces jointes restent disponibles. Les liens s'ouvrent
+dans un nouvel onglet/fenetre pour mieux fonctionner aussi sur macOS. Les pieces jointes
+deja presentes sont reutilisees et ne sont pas ecrasees.
+
+Les destinations proposees sont hierarchisees par dossier metier puis entreprise. Les
+correspondances client vont par defaut dans `Correspondance/Entreprise/Approbation`.
+Les correspondances fournisseur vont dans `Fournisseurs/Demande de prix/Entreprise`
+jusqu'a la derniere offre du cycle, puis dans `Fournisseurs/Commande/Entreprise`, sauf
+nouvelle demande d'offre.
+Le journal HTML permet aussi de filtrer par dossier cible.
+
+Apres le scan, le panneau `Arborescence` affiche les dossiers proposes avec le nombre
+de mails. L'utilisateur peut renommer un dossier ou fusionner deux dossiers detectes
+comme doublons avant toute creation de fichiers.
 
 Les images integrees dans le corps des mails, comme les logos de signature, ne sont pas
 exportees comme pieces jointes. Elles sont affichees directement dans le journal HTML.
 
 La case `Surveillance Outlook` relance un scan toutes les 5 minutes tant que
-l'application reste ouverte. En cas de nouveaux mails, MailFlow demande confirmation
-avant de mettre a jour le journal HTML.
+l'application reste ouverte. En cas de nouveaux mails, MailFlow affiche la
+previsualisation et l'arborescence mises a jour, puis demande confirmation avant de
+mettre a jour le journal HTML.
 
 Quand la surveillance est active, fermer la fenetre masque MailFlow dans la zone de
 notification au lieu de l'arreter. Le menu de l'icone permet de rouvrir l'application,

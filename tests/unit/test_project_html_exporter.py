@@ -145,6 +145,9 @@ def test_project_html_export_writes_single_html_and_shared_attachments(tmp_path:
     html = result.html_path.read_text(encoding="utf-8")
     assert "Prix &lt;special&gt;" in html
     assert 'data-direction="received"' in html
+    assert 'id="folderFilter"' in html
+    assert 'data-folder="Correspondance"' in html
+    assert '<span class="chip">Correspondance</span>' in html
     assert "./2025-4893%20-%20pieces%20jointes/1-R-Offre%20garde-corps%20-%20plan.pdf" in html
     assert 'target="_blank"' in html
     assert not list(result.html_path.parent.glob("*.msg"))
@@ -177,6 +180,43 @@ def test_project_html_export_orders_sent_and_received_chronologically(tmp_path: 
 
     html = result.html_path.read_text(encoding="utf-8")
     assert html.index(">1-R<") < html.index(">2-E<")
+
+
+def test_project_html_export_renders_folder_tree_and_groups_mails(tmp_path: Path) -> None:
+    create_project_folder(tmp_path)
+    request = make_row(tmp_path, entry_id="ENTRY-1").model_copy(
+        update={
+            "decision": make_row(tmp_path).decision.model_copy(
+                update={"target_relative_folder": "Fournisseurs/Demande de prix/Metal Factory"}
+            )
+        }
+    )
+    order = make_row(tmp_path, entry_id="ENTRY-2").model_copy(
+        update={
+            "decision": make_row(tmp_path).decision.model_copy(
+                update={"target_relative_folder": "Fournisseurs/Commande/Metal Factory"}
+            )
+        }
+    )
+
+    result = export_project_correspondence_html(
+        [request, order],
+        {
+            request.mail.entry_id: FakeMailItem([]),
+            order.mail.entry_id: FakeMailItem([]),
+        },
+        tmp_path,
+    )[0]
+
+    html = result.html_path.read_text(encoding="utf-8")
+    assert 'class="folder-panel"' in html
+    assert 'data-folder-filter="Fournisseurs"' in html
+    assert 'data-folder-section="Fournisseurs/Demande de prix/Metal Factory"' in html
+    assert "<h2>Fournisseurs/Commande/Metal Factory</h2>" in html
+    assert html.index("Fournisseurs/Demande de prix/Metal Factory") < html.index(
+        "Fournisseurs/Commande/Metal Factory"
+    )
+    assert "matchesFolder(card.dataset.folder, activeFolder)" in html
 
 
 def test_project_html_export_refuses_existing_html_until_confirmed(tmp_path: Path) -> None:

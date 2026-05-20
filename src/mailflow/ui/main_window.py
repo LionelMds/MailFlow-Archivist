@@ -88,6 +88,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QGroupBox,
         QHBoxLayout,
         QHeaderView,
+        QInputDialog,
         QLabel,
         QLineEdit,
         QMainWindow,
@@ -101,6 +102,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QTableWidgetItem,
         QTextEdit,
         QToolButton,
+        QTreeWidget,
+        QTreeWidgetItem,
         QVBoxLayout,
         QWidget,
     )
@@ -256,6 +259,26 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
     main_splitter.addWidget(make_collapsible_section(UI_TEXT["preview"], table))
 
+    tree_widget = QWidget()
+    tree_layout = QVBoxLayout(tree_widget)
+    tree_layout.setContentsMargins(0, 0, 0, 0)
+    folder_tree = QTreeWidget()
+    folder_tree.setHeaderLabels(["Dossier propose", "Mails"])
+    folder_tree.setMinimumHeight(170)
+    folder_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+    folder_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+    tree_buttons = QWidget()
+    tree_buttons_layout = QHBoxLayout(tree_buttons)
+    tree_buttons_layout.setContentsMargins(0, 0, 0, 0)
+    rename_folder_button = QPushButton("Renommer dossier")
+    merge_folder_button = QPushButton("Fusionner vers...")
+    tree_buttons_layout.addWidget(rename_folder_button)
+    tree_buttons_layout.addWidget(merge_folder_button)
+    tree_buttons_layout.addStretch(1)
+    tree_layout.addWidget(folder_tree)
+    tree_layout.addWidget(tree_buttons)
+    main_splitter.addWidget(make_collapsible_section("Arborescence", tree_widget))
+
     preview = QGroupBox()
     preview_layout = QVBoxLayout(preview)
     mail_preview = QTextEdit()
@@ -292,10 +315,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     main_splitter.setStretchFactor(0, 0)
     main_splitter.setStretchFactor(1, 0)
     main_splitter.setStretchFactor(2, 6)
-    main_splitter.setStretchFactor(3, 3)
-    main_splitter.setStretchFactor(4, 0)
-    main_splitter.setStretchFactor(5, 2)
-    main_splitter.setSizes([210, 125, 430, 190, 95, 150])
+    main_splitter.setStretchFactor(3, 2)
+    main_splitter.setStretchFactor(4, 3)
+    main_splitter.setStretchFactor(5, 0)
+    main_splitter.setStretchFactor(6, 2)
+    main_splitter.setSizes([210, 125, 360, 180, 190, 95, 150])
     window.setCentralWidget(central)
     watch_timer = QTimer(window)
     watch_timer.setInterval(WATCH_INTERVAL_MS)
@@ -407,7 +431,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                     continue
                 combo = QComboBox()
                 combo.addItems(list(options))
+                if value and value not in options:
+                    combo.addItem(value)
                 if value in options:
+                    combo.setCurrentText(value)
+                elif value:
                     combo.setCurrentText(value)
                 if should_highlight_cell(row, column_index):
                     combo.setStyleSheet("QComboBox { background-color: #fff3b0; }")
@@ -418,7 +446,28 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 combo_by_cell[(row_index, column_index)] = combo
         table.resizeColumnsToContents()
         refreshing_table = False
+        refresh_folder_tree()
         update_mail_preview(table.currentRow())
+
+    def refresh_folder_tree() -> None:
+        folder_tree.clear()
+        for node in active_controller.folder_tree():
+            folder_tree.addTopLevelItem(folder_tree_item(node))
+        folder_tree.expandAll()
+
+    def folder_tree_item(node: Any) -> Any:
+        item = QTreeWidgetItem([str(node.name), str(node.mail_count)])
+        item.setData(0, Qt.ItemDataRole.UserRole, str(node.relative_folder))
+        for child in node.children:
+            item.addChild(folder_tree_item(child))
+        return item
+
+    def selected_folder_path() -> str | None:
+        item = folder_tree.currentItem()
+        if item is None:
+            return None
+        value = item.data(0, Qt.ItemDataRole.UserRole)
+        return clean_optional_text(str(value))
 
     def combo_text(row_index: int, column_index: int) -> str:
         combo = combo_by_cell.get((row_index, column_index))
@@ -519,6 +568,57 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             return
         mail_preview.setHtml(preview_row_to_html(active_controller.preview_rows[row_index]))
 
+    def rename_selected_folder() -> None:
+        source = selected_folder_path()
+        if source is None:
+            append_log("Selectionner un dossier dans l'arborescence.")
+            return
+        current_name = source.split("/")[-1]
+        new_name, accepted = QInputDialog.getText(
+            window,
+            "Renommer dossier",
+            "Nouveau nom du dossier selectionne",
+            text=current_name,
+        )
+        if not accepted:
+            return
+        try:
+            active_controller.rename_preview_folder(source, new_name)
+            refresh_table()
+            append_log(f"Dossier renomme: {source} -> {new_name.strip()}.")
+        except Exception as exc:
+            append_log(f"Erreur renommage dossier: {exc}")
+
+    def merge_selected_folder() -> None:
+        source = selected_folder_path()
+        if source is None:
+            append_log("Selectionner un dossier dans l'arborescence.")
+            return
+        options = [
+            summary.relative_folder
+            for summary in active_controller.folder_path_counts()
+            if summary.relative_folder != source
+            and not summary.relative_folder.startswith(f"{source}/")
+        ]
+        if not options:
+            append_log("Aucun dossier cible disponible pour la fusion.")
+            return
+        target, accepted = QInputDialog.getItem(
+            window,
+            "Fusionner dossier",
+            "Fusionner le dossier selectionne vers",
+            options,
+            editable=False,
+        )
+        if not accepted:
+            return
+        try:
+            active_controller.merge_preview_folder(source, target)
+            refresh_table()
+            append_log(f"Dossier fusionne: {source} -> {target}.")
+        except Exception as exc:
+            append_log(f"Erreur fusion dossier: {exc}")
+
     def open_manual_dialog(row_index: int) -> None:
         if refreshing_table:
             return
@@ -571,6 +671,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             INTERLOCUTOR_OPTIONS,
         )
         destination_combo = QComboBox()
+        destination_combo.setEditable(True)
         destination_combo.addItems(list(DESTINATION_OPTIONS))
         set_combo_value(
             destination_combo,
@@ -771,8 +872,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             f"{change.new_count} nouveau(x) mail(s) dans Outlook.",
         )
         show_window_from_tray()
+        append_log("Previsualisation et arborescence mises a jour pour verification.")
         if not confirm_watch_html_update(change.new_count, parent=window):
-            append_log("Mise a jour HTML differee.")
+            append_log(
+                "Mise a jour HTML differee: verifier l'arborescence puis exporter manuellement."
+            )
             return
         try:
             results = active_controller.export_project_html(overwrite_html=True)
@@ -869,6 +973,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     ignore_button.clicked.connect(on_mark_ignored)
     archive_button.clicked.connect(on_archive_selection)
     archive_all_button.clicked.connect(on_archive_all_except_review)
+    rename_folder_button.clicked.connect(rename_selected_folder)
+    merge_folder_button.clicked.connect(merge_selected_folder)
     browse_projects_button.clicked.connect(browse_projects_root)
     account_combo.currentIndexChanged.connect(lambda _index: populate_outlook_root_options())
     open_folder_button.clicked.connect(lambda: append_log(str(settings.local_projects_root)))
@@ -880,6 +986,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     dynamic_window.mailflow_controller = active_controller
     dynamic_window.mailflow_preview_table = table
+    dynamic_window.mailflow_folder_tree = folder_tree
+    dynamic_window.mailflow_rename_folder_button = rename_folder_button
+    dynamic_window.mailflow_merge_folder_button = merge_folder_button
     dynamic_window.mailflow_logs = logs
     dynamic_window.mailflow_mail_preview = mail_preview
     dynamic_window.mailflow_export_html_button = export_html_button
@@ -1043,6 +1152,8 @@ def confirm_watch_html_update(new_count: int, *, parent: Any | None = None) -> b
         "Nouveaux mails detectes",
         (
             f"{new_count} nouveau(x) mail(s) ont ete detectes dans Outlook.\n\n"
+            "La previsualisation et l'arborescence sont affichees dans MailFlow.\n"
+            "Choisir Non pour verifier ou corriger les dossiers avant export.\n\n"
             "Mettre a jour le journal HTML projet maintenant ?"
         ),
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,

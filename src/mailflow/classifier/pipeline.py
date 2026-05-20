@@ -5,6 +5,7 @@ from typing import Protocol
 
 from mailflow.classifier.decision_engine import ArchiveState, decide_archive
 from mailflow.classifier.rules_classifier import classify_mail
+from mailflow.core.correspondence_hierarchy import apply_correspondence_hierarchy
 from mailflow.core.manual_review import (
     LearnedClassificationRule,
     LearnedMisleadingTerm,
@@ -72,7 +73,8 @@ class ClassificationPipeline:
         self.misleading_terms = misleading_terms or []
 
     def preview(self, mails: list[MailMetadata]) -> list[PreviewRow]:
-        return [self.preview_one(mail) for mail in mails]
+        rows = [self.preview_one(mail) for mail in mails]
+        return apply_correspondence_hierarchy(rows, projects_root=self.projects_root)
 
     def preview_one(self, mail: MailMetadata) -> PreviewRow:
         rule = classify_with_learned_terms(mail, self.learned_rules) or classify_mail(

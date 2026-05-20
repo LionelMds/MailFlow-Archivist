@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 
 from mailflow.config import AppSettings
+from mailflow.core.folder_tree import FolderPathSummary, FolderTreeNode
 from mailflow.models import (
     AiMode,
     ArchiveDecision,
@@ -54,6 +55,26 @@ class FakeController:
     def mark_all_ignored(self) -> list[object]:
         self.preview_rows = []
         return []
+
+    def folder_tree(self) -> list[FolderTreeNode]:
+        return []
+
+    def folder_path_counts(self) -> list[FolderPathSummary]:
+        return []
+
+    def rename_preview_folder(
+        self,
+        source_relative_folder: str,
+        new_folder_name: str,
+    ) -> list[object]:
+        return self.preview_rows
+
+    def merge_preview_folder(
+        self,
+        source_relative_folder: str,
+        target_relative_folder: str,
+    ) -> list[object]:
+        return self.preview_rows
 
     def rows_ready_for_archive(self, *, include_review: bool = False) -> list[object]:
         return []
@@ -270,7 +291,11 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_tray_open_action.text() == "Ouvrir MailFlow"
     assert dynamic_window.mailflow_tray_watch_action.isCheckable()
     assert dynamic_window.mailflow_tray_quit_action.text() == "Quitter"
-    assert dynamic_window.mailflow_main_splitter.count() == 6
+    assert dynamic_window.mailflow_folder_tree.headerItem().text(0) == "Dossier propose"
+    assert dynamic_window.mailflow_rename_folder_button.text() == "Renommer dossier"
+    assert dynamic_window.mailflow_merge_folder_button.text() == "Fusionner vers..."
+    assert dynamic_window.mailflow_main_splitter.count() == 7
     assert "Previsualisation" in dynamic_window.mailflow_section_toggles
+    assert "Arborescence" in dynamic_window.mailflow_section_toggles
     window.close()
     app.quit()

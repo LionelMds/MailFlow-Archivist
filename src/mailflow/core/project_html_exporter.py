@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import quote
 
 from mailflow.core.filenames import build_archive_stem, build_attachment_filename
+from mailflow.core.folder_tree import FolderTreeNode, build_folder_tree, folder_sort_key
 from mailflow.core.project_paths import local_project_path
 from mailflow.models import Direction, PreviewRow
 from mailflow.outlook.attachments import (
@@ -179,8 +180,14 @@ def _export_attachment_links(
 
 def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> str:
     mail_types = sorted({entry.row.decision.mail_type.value for entry in entries})
+    mail_folders = sorted(
+        {entry.row.decision.target_relative_folder for entry in entries},
+        key=folder_sort_key,
+    )
     interlocutors = sorted({entry.row.decision.interlocutor.value for entry in entries})
-    cards = "\n".join(_render_mail_card(entry) for entry in entries)
+    folder_tree = build_folder_tree([entry.row for entry in entries])
+    folder_sections = _render_folder_sections(entries)
+    folder_nav = _render_folder_nav(folder_tree, total_count=len(entries))
     return f"""<!doctype html>
 <html lang="fr">
 <head>
@@ -228,7 +235,7 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     }}
     .toolbar {{
       display: grid;
-      grid-template-columns: minmax(220px, 1fr) 150px 220px 180px;
+      grid-template-columns: minmax(220px, 1fr) 150px 220px 220px 180px;
       gap: 10px;
     }}
     input, select {{
@@ -241,7 +248,7 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       font: inherit;
     }}
     main {{
-      max-width: 1180px;
+      max-width: 1440px;
       margin: 0 auto;
       padding: 18px 22px 36px;
     }}
@@ -252,6 +259,83 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       color: var(--muted);
       font-size: 13px;
       margin-bottom: 12px;
+    }}
+    .project-layout {{
+      display: grid;
+      grid-template-columns: 300px minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }}
+    .folder-panel {{
+      position: sticky;
+      top: 104px;
+      max-height: calc(100vh - 124px);
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 12px;
+    }}
+    .folder-panel h2 {{
+      margin: 0 0 10px;
+      font-size: 15px;
+      font-weight: 650;
+    }}
+    .folder-tree {{
+      list-style: none;
+      padding-left: 0;
+      margin: 0;
+    }}
+    .folder-tree ul {{
+      list-style: none;
+      padding-left: 14px;
+      margin: 2px 0 4px;
+      border-left: 1px solid var(--line);
+    }}
+    .folder-button {{
+      width: 100%;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      padding: 6px 8px;
+      text-align: left;
+      font: inherit;
+      cursor: pointer;
+    }}
+    .folder-button:hover, .folder-button.active {{
+      background: #eef4ff;
+      color: #174ea6;
+    }}
+    .folder-name {{
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .folder-count {{
+      color: var(--muted);
+      font-size: 12px;
+    }}
+    .folder-section {{
+      margin-bottom: 18px;
+    }}
+    .folder-heading {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      margin: 0 0 8px;
+      padding: 0 2px;
+    }}
+    .folder-heading h2 {{
+      margin: 0;
+      font-size: 17px;
+      font-weight: 650;
+      line-height: 1.35;
     }}
     .mail-card {{
       background: var(--panel);
@@ -366,6 +450,8 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       .date {{ grid-column: 2; }}
       .chips {{ grid-column: 1 / -1; justify-content: flex-start; }}
       .mail-body {{ padding-left: 16px; }}
+      .project-layout {{ grid-template-columns: 1fr; }}
+      .folder-panel {{ position: static; max-height: none; }}
     }}
   </style>
 </head>
@@ -384,6 +470,10 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
           <option value="all">Tous les types</option>
           {_render_options(mail_types)}
         </select>
+        <select id="folderFilter">
+          <option value="all">Tous les dossiers</option>
+          {_render_options(mail_folders)}
+        </select>
         <select id="interlocutorFilter">
           <option value="all">Tous les interlocuteurs</option>
           {_render_options(interlocutors)}
@@ -395,22 +485,36 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     <div class="summary">
       <span id="visibleCount">{len(entries)}</span> mail(s) affiches sur {len(entries)}
     </div>
-    <section id="mailList">
-      {cards}
-    </section>
+    <div class="project-layout">
+      <aside class="folder-panel" aria-label="Arborescence des echanges">
+        <h2>Arborescence</h2>
+        {folder_nav}
+      </aside>
+      <section id="mailList">
+        {folder_sections}
+      </section>
+    </div>
     <div id="emptyState" class="empty" hidden>Aucun mail ne correspond aux filtres.</div>
   </main>
   <script>
     const cards = Array.from(document.querySelectorAll(".mail-card"));
+    const sections = Array.from(document.querySelectorAll(".folder-section"));
+    const folderButtons = Array.from(document.querySelectorAll("[data-folder-filter]"));
     const search = document.getElementById("search");
     const directionFilter = document.getElementById("directionFilter");
     const typeFilter = document.getElementById("typeFilter");
+    const folderFilter = document.getElementById("folderFilter");
     const interlocutorFilter = document.getElementById("interlocutorFilter");
     const visibleCount = document.getElementById("visibleCount");
     const emptyState = document.getElementById("emptyState");
+    let activeFolder = "all";
 
     function matches(value, filter) {{
       return filter === "all" || value === filter;
+    }}
+
+    function matchesFolder(value, filter) {{
+      return filter === "all" || value === filter || value.startsWith(filter + "/");
     }}
 
     function applyFilters() {{
@@ -420,23 +524,92 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
         const ok =
           matches(card.dataset.direction, directionFilter.value) &&
           matches(card.dataset.type, typeFilter.value) &&
+          matchesFolder(card.dataset.folder, folderFilter.value) &&
+          matchesFolder(card.dataset.folder, activeFolder) &&
           matches(card.dataset.interlocutor, interlocutorFilter.value) &&
           card.dataset.search.includes(query);
         card.hidden = !ok;
         if (ok) visible += 1;
       }}
+      for (const section of sections) {{
+        const sectionCards = Array.from(section.querySelectorAll(".mail-card"));
+        section.hidden = !sectionCards.some((card) => !card.hidden);
+      }}
       visibleCount.textContent = String(visible);
       emptyState.hidden = visible !== 0;
+    }}
+
+    for (const button of folderButtons) {{
+      button.addEventListener("click", () => {{
+        activeFolder = button.dataset.folderFilter;
+        for (const item of folderButtons) item.classList.toggle("active", item === button);
+        applyFilters();
+      }});
     }}
 
     search.addEventListener("input", applyFilters);
     directionFilter.addEventListener("change", applyFilters);
     typeFilter.addEventListener("change", applyFilters);
+    folderFilter.addEventListener("change", applyFilters);
     interlocutorFilter.addEventListener("change", applyFilters);
+    applyFilters();
   </script>
 </body>
 </html>
 """
+
+
+def _render_folder_sections(entries: list[HtmlMailEntry]) -> str:
+    grouped: dict[str, list[HtmlMailEntry]] = {}
+    for entry in entries:
+        grouped.setdefault(entry.row.decision.target_relative_folder, []).append(entry)
+    sections = []
+    for folder, folder_entries in sorted(
+        grouped.items(),
+        key=lambda item: folder_sort_key(item[0]),
+    ):
+        cards = "\n".join(_render_mail_card(entry) for entry in folder_entries)
+        sections.append(
+            f"""
+      <section class="folder-section" data-folder-section="{_e(folder)}">
+        <div class="folder-heading">
+          <h2>{_e(folder)}</h2>
+          <span class="meta">{len(folder_entries)} mail(s)</span>
+        </div>
+        {cards}
+      </section>
+"""
+        )
+    return "\n".join(sections)
+
+
+def _render_folder_nav(nodes: list[FolderTreeNode], *, total_count: int) -> str:
+    root_button = (
+        '<button class="folder-button active" type="button" data-folder-filter="all">'
+        '<span class="folder-name">Tous les dossiers</span>'
+        f'<span class="folder-count">{total_count}</span>'
+        "</button>"
+    )
+    return f'{root_button}<ul class="folder-tree">{_render_folder_nav_nodes(nodes)}</ul>'
+
+
+def _render_folder_nav_nodes(nodes: list[FolderTreeNode] | tuple[FolderTreeNode, ...]) -> str:
+    items = []
+    for node in nodes:
+        child_html = (
+            f"<ul>{_render_folder_nav_nodes(node.children)}</ul>" if node.children else ""
+        )
+        items.append(
+            "<li>"
+            '<button class="folder-button" type="button" '
+            f'data-folder-filter="{_e(node.relative_folder)}">'
+            f'<span class="folder-name">{_e(node.name)}</span>'
+            f'<span class="folder-count">{node.mail_count}</span>'
+            "</button>"
+            f"{child_html}"
+            "</li>"
+        )
+    return "".join(items)
 
 
 def _render_mail_card(entry: HtmlMailEntry) -> str:
@@ -461,6 +634,7 @@ def _render_mail_card(entry: HtmlMailEntry) -> str:
             mail.body_excerpt,
             decision.mail_type.value,
             decision.interlocutor.value,
+            decision.target_relative_folder,
             decision.reason,
             _ai_search_text(row),
         ]
@@ -470,6 +644,7 @@ def _render_mail_card(entry: HtmlMailEntry) -> str:
       <article class="mail-card"
         data-direction="{_e(mail.direction.value)}"
         data-type="{_e(decision.mail_type.value)}"
+        data-folder="{_e(decision.target_relative_folder)}"
         data-interlocutor="{_e(decision.interlocutor.value)}"
         data-search="{_e(search_text)}">
         <div class="mail-head">
@@ -485,6 +660,7 @@ def _render_mail_card(entry: HtmlMailEntry) -> str:
           <div class="chips">
             <span class="chip{review_class}">{_e(decision.mail_type.value)}</span>
             <span class="chip">{_e(decision.interlocutor.value)}</span>
+            <span class="chip">{_e(decision.target_relative_folder)}</span>
             <span class="chip">{decision.confidence:.0%}</span>
           </div>
         </div>

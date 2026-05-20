@@ -5,8 +5,10 @@
 MailFlow Archivist scanne les dossiers Outlook projet, propose une decision d'archivage, puis exporte les mails valides en `.msg` avec leurs pieces jointes.
 
 Le logiciel peut aussi generer un journal HTML projet centralise dans `Correspondance`.
-Ce fichier permet de parcourir les echanges avec recherche, filtres par sens, type et
-interlocuteur. Les pieces jointes sont placees dans un dossier commun a cote du HTML.
+Ce fichier reprend la meme arborescence que la previsualisation MailFlow. Il permet de
+parcourir les echanges par dossier, avec recherche et filtres par sens, type,
+interlocuteur et dossier cible. Les pieces jointes sont placees dans un dossier commun
+a cote du HTML.
 
 Avant tout archivage, l'utilisateur garde la main sur :
 
@@ -15,6 +17,41 @@ Avant tout archivage, l'utilisateur garde la main sur :
 - l'annee et les projets a scanner ;
 - les decisions proposees ;
 - les conflits de fichiers.
+
+## Hierarchie des dossiers
+
+Apres la classification, MailFlow propose une destination par entreprise
+d'interlocuteur :
+
+- client : `Correspondance/Entreprise/Approbation` ;
+- fournisseur avant ou jusqu'a la derniere offre du cycle :
+  `Fournisseurs/Demande de prix/Entreprise` ;
+- fournisseur apres la derniere offre du cycle :
+  `Fournisseurs/Commande/Entreprise`.
+
+Une nouvelle demande d'offre demarre un nouveau cycle fournisseur. Les echanges qui
+suivent cette nouvelle demande restent donc en `Demande de prix` jusqu'a la prochaine
+offre trouvee.
+
+L'entreprise est deduite du nom d'expediteur, du texte entre parentheses quand Outlook
+le fournit, ou du domaine e-mail. La destination reste modifiable manuellement dans la
+previsualisation. Les sous-dossiers de destination sont crees si le dossier projet
+existe deja ; le dossier projet lui-meme n'est jamais cree automatiquement.
+
+## Arborescence proposee
+
+Apres le scan, le panneau `Arborescence` montre les dossiers proposes avec le nombre de
+mails par branche. Cette etape ne cree encore aucun fichier.
+
+Actions possibles :
+
+- `Renommer dossier` corrige le nom du dossier selectionne, par exemple
+  `METAL-FACTORY` vers `Metal Factory` ;
+- `Fusionner vers...` deplace tous les mails du dossier selectionne vers un autre
+  dossier deja propose, utile lorsqu'un doublon accidentel a ete detecte.
+
+Les changements sont appliques a la previsualisation et au futur export/archivage.
+Ils restent modifiables tant que l'utilisateur n'a pas confirme l'archivage ou l'export.
 
 ## Regles de securite
 
@@ -67,10 +104,15 @@ Sortie attendue :
   2-E-Reponse offre - devis.xlsx
 ```
 
-Le fichier HTML est mis a jour uniquement apres confirmation. Les pieces jointes
-existantes sont conservees. Les liens vers les pieces jointes sont relatifs au fichier
-HTML, prefixes par `./` et ouverts dans un nouvel onglet/fenetre pour mieux fonctionner
-sur Windows et macOS.
+Le fichier HTML est mis a jour uniquement apres confirmation. Il affiche un panneau
+`Arborescence` a gauche et les mails groupes sous leurs dossiers cibles a droite. Un
+clic sur une branche, par exemple `Fournisseurs`, affiche aussi les sous-dossiers et
+mails contenus dans cette branche. L'ordre d'affichage reprend l'ordre metier :
+correspondance client, demandes de prix fournisseurs, puis commandes fournisseurs.
+
+Les pieces jointes existantes sont conservees. Les liens vers les pieces jointes sont
+relatifs au fichier HTML, prefixes par `./` et ouverts dans un nouvel onglet/fenetre
+pour mieux fonctionner sur Windows et macOS.
 
 Les images integrees au corps du mail sont ignorees dans la liste des pieces jointes
 et affichees directement dans le HTML. Les vraies images jointes, par exemple une photo
@@ -79,8 +121,10 @@ de chantier ajoutee comme fichier, restent exportees comme pieces jointes.
 ## Surveillance Outlook
 
 La case `Surveillance Outlook` garde l'application active pendant la journee et relance
-un scan toutes les 5 minutes. Lorsqu'un nouvel `EntryID` Outlook apparait, une
-confirmation demande si le journal HTML doit etre mis a jour.
+un scan toutes les 5 minutes. Lorsqu'un nouvel `EntryID` Outlook apparait, MailFlow
+met a jour la previsualisation et le panneau `Arborescence`, puis affiche la fenetre.
+L'utilisateur peut choisir de mettre a jour le journal HTML immediatement, ou refuser
+pour verifier et corriger l'arborescence avant export.
 
 Si Outlook est ferme pendant un scan, l'erreur est affichee dans les logs et la
 surveillance reprendra au scan suivant lorsque Outlook sera de nouveau disponible.

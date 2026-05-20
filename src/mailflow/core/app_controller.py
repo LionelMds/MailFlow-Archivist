@@ -17,6 +17,14 @@ from mailflow.core.archive_batch import (
     ArchiveFailure,
 )
 from mailflow.core.archive_service import ArchiveService
+from mailflow.core.folder_tree import (
+    FolderPathSummary,
+    FolderTreeNode,
+    build_folder_tree,
+    folder_path_counts,
+    merge_folder,
+    rename_folder_leaf,
+)
 from mailflow.core.manual_review import (
     LearnedClassificationRule,
     LearnedMisleadingTerm,
@@ -127,6 +135,38 @@ class AppController:
         self.preview_rows = mark_rows_ignored(self.preview_rows)
         return self.preview_rows
 
+    def folder_tree(self) -> list[FolderTreeNode]:
+        return build_folder_tree(self.preview_rows)
+
+    def folder_path_counts(self) -> list[FolderPathSummary]:
+        return folder_path_counts(self.preview_rows)
+
+    def rename_preview_folder(
+        self,
+        source_relative_folder: str,
+        new_folder_name: str,
+    ) -> list[PreviewRow]:
+        self.preview_rows = rename_folder_leaf(
+            self.preview_rows,
+            source_relative_folder,
+            new_folder_name,
+            projects_root=self.projects_root,
+        )
+        return self.preview_rows
+
+    def merge_preview_folder(
+        self,
+        source_relative_folder: str,
+        target_relative_folder: str,
+    ) -> list[PreviewRow]:
+        self.preview_rows = merge_folder(
+            self.preview_rows,
+            source_relative_folder,
+            target_relative_folder,
+            projects_root=self.projects_root,
+        )
+        return self.preview_rows
+
     def export_report(self, path: Path | None = None) -> Path:
         target = path or self._default_report_path()
         return export_preview_report(self.preview_rows, target)
@@ -215,13 +255,7 @@ class AppController:
                 )
                 continue
             if not row.decision.target_path.exists():
-                preflight_result.failures.append(
-                    ArchiveFailure(
-                        mail_id=row.mail.entry_id,
-                        reason=f"Dossier destination absent: {row.decision.target_path}",
-                    )
-                )
-                continue
+                row.decision.target_path.mkdir(parents=True, exist_ok=True)
             item = self.outlook_items.get(row.mail.entry_id)
             if item is None:
                 preflight_result.skipped.append(row.mail.entry_id)

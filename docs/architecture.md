@@ -4,6 +4,10 @@ Le code separe les zones a risque des fonctions pures :
 
 - `core` : chemins, noms de fichiers, nettoyage de corps.
 - `core.background_watcher` : detection pure des nouveaux mails entre deux scans.
+- `core.correspondence_hierarchy` : extraction de l'entreprise d'interlocuteur et
+  calcul des dossiers client/fournisseur selon la chronologie des offres.
+- `core.folder_tree` : construction de l'arborescence proposee et reecriture
+  non destructive des destinations lors des renommages ou fusions.
 - `core.project_html_exporter` : generation du journal HTML projet et export des
   pieces jointes liees.
 - `classifier` : regles, IA et fusion de decision.

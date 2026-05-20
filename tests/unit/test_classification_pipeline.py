@@ -106,6 +106,17 @@ def test_pipeline_uses_rules_without_ai_for_confident_mail(tmp_path: Path) -> No
     assert row.decision.mail_type == MailType.FACTURE
 
 
+def test_pipeline_preview_applies_company_hierarchy(tmp_path: Path) -> None:
+    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
+    pipeline = ClassificationPipeline(projects_root=tmp_path, ai_mode=AiMode.DISABLED)
+
+    rows = pipeline.preview([sample_mail(subject="Offerte", body="Voici notre offre.")])
+
+    assert rows[0].decision.target_relative_folder == (
+        "Fournisseurs/Demande de prix/Dupont SA"
+    )
+
+
 def test_pipeline_calls_ai_for_ambiguous_mail(tmp_path: Path) -> None:
     (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
     ai = FakeAiClassifier()
