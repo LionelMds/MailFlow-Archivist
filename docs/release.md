@@ -13,6 +13,10 @@ git push origin vX.Y.Z
 Le workflow `Build and Release` lance les tests, construit les archives Windows et macOS,
 puis publie une GitHub Release avec les fichiers ZIP.
 
+Le build installe les dependances runtime et PyInstaller seulement. Il ne collecte pas
+tout PySide6 : les modules Qt lourds non utilises, comme WebEngine, QML, Quick,
+Multimedia, Designer et PDF, sont exclus pour garder des artefacts raisonnables.
+
 ## Artefacts
 
 - `MailFlow-Archivist-windows.zip`

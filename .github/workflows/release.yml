@@ -72,7 +72,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install "pyinstaller>=6.10"
+          python -m pip install .
 
       - name: Build Windows executable
         if: runner.os == 'Windows'
@@ -84,8 +85,17 @@ jobs:
             --windowed `
             --name "MailFlow-Archivist" `
             --paths src `
-            --collect-all PySide6 `
             --collect-submodules keyring.backends `
+            --exclude-module PySide6.Qt3DCore `
+            --exclude-module PySide6.Qt3DRender `
+            --exclude-module PySide6.QtDesigner `
+            --exclude-module PySide6.QtMultimedia `
+            --exclude-module PySide6.QtPdf `
+            --exclude-module PySide6.QtQml `
+            --exclude-module PySide6.QtQuick `
+            --exclude-module PySide6.QtWebEngineCore `
+            --exclude-module PySide6.QtWebEngineQuick `
+            --exclude-module PySide6.QtWebEngineWidgets `
             --hidden-import win32com `
             --hidden-import win32com.client `
             --hidden-import pythoncom `
@@ -102,9 +112,24 @@ jobs:
             --windowed \
             --name "MailFlow-Archivist" \
             --paths src \
-            --collect-all PySide6 \
             --collect-submodules keyring.backends \
+            --exclude-module PySide6.Qt3DCore \
+            --exclude-module PySide6.Qt3DRender \
+            --exclude-module PySide6.QtDesigner \
+            --exclude-module PySide6.QtMultimedia \
+            --exclude-module PySide6.QtPdf \
+            --exclude-module PySide6.QtQml \
+            --exclude-module PySide6.QtQuick \
+            --exclude-module PySide6.QtWebEngineCore \
+            --exclude-module PySide6.QtWebEngineQuick \
+            --exclude-module PySide6.QtWebEngineWidgets \
             src/mailflow/__main__.py
+
+      - name: Show build size
+        shell: bash
+        run: |
+          du -sh dist/*
+          find dist -type f -size +20M -print0 | xargs -0 du -h | sort -hr | head -30 || true
 
       - name: Package Windows artifact
         if: runner.os == 'Windows'
