@@ -20,7 +20,6 @@ from mailflow.models import (
     RuleClassification,
 )
 from mailflow.ui.main_window import (
-    ARCHIVE_UI_DISABLED_MESSAGE,
     UI_TEXT,
     build_archive_confirmation_message,
     build_manual_classification_update,
@@ -34,6 +33,7 @@ class FakeController:
     def __init__(self) -> None:
         self.preview_rows: list[object] = []
         self.report_path = Path("rapport.csv")
+        self.archived_all = False
 
     def scan_and_preview(self, _request: object) -> list[object]:
         self.preview_rows = []
@@ -62,6 +62,7 @@ class FakeController:
         return ["Boite de reception"]
 
     def archive_ready(self, *, include_review: bool = False) -> object:
+        self.archived_all = True
         return type(
             "Result",
             (),
@@ -122,7 +123,7 @@ def test_ui_text_contains_expected_actions() -> None:
     assert UI_TEXT["scan_button"] == "Scanner Outlook"
     assert "Destination proposee" in PREVIEW_COLUMNS
     assert ACTION_LABELS[PreviewAction.REVIEW] == "A verifier"
-    assert "Archivage reel desactive" in ARCHIVE_UI_DISABLED_MESSAGE
+    assert UI_TEXT["archive_all_except_review"] == "Tout archiver sauf a verifier"
 
 
 def test_outlook_account_label_includes_smtp_address() -> None:

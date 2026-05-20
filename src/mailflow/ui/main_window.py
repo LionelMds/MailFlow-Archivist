@@ -35,12 +35,6 @@ UI_TEXT = {
     "export_report": "Exporter rapport",
 }
 
-ARCHIVE_UI_DISABLED_MESSAGE = (
-    "Archivage reel desactive dans cette version de test: "
-    "la selection et la confirmation doivent encore etre finalisees."
-)
-
-
 @dataclass(frozen=True)
 class ArchiveSelectionSummary:
     selected_count: int
@@ -473,10 +467,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         selected = selected_table_row_indexes()
         update_mail_preview(selected[0] if selected else table.currentRow())
 
-    def confirm_archive_selection(summary: ArchiveSelectionSummary) -> bool:
+    def confirm_archive(summary: ArchiveSelectionSummary, *, title: str) -> bool:
         response = QMessageBox.question(
             window,
-            "Confirmer l'archivage",
+            title,
             build_archive_confirmation_message(summary),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -492,7 +486,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         if not summary.can_archive:
             append_log("Aucune ligne selectionnee n'est prete a archiver.")
             return
-        if not confirm_archive_selection(summary):
+        if not confirm_archive(summary, title="Confirmer l'archivage de la selection"):
             append_log("Archivage annule.")
             return
         try:
@@ -505,7 +499,25 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(f"Erreur archivage: {exc}")
 
     def on_archive_all_except_review() -> None:
-        append_log(ARCHIVE_UI_DISABLED_MESSAGE)
+        indexes = list(range(len(active_controller.preview_rows)))
+        summary = summarize_archive_selection(active_controller.preview_rows, indexes)
+        if summary.selected_count == 0:
+            append_log("Aucune ligne en previsualisation.")
+            return
+        if not summary.can_archive:
+            append_log("Aucune ligne n'est prete a archiver.")
+            return
+        if not confirm_archive(summary, title="Confirmer l'archivage global"):
+            append_log("Archivage annule.")
+            return
+        try:
+            result = active_controller.archive_ready(include_review=False)
+            refresh_table()
+            append_log(format_archive_result(result))
+            for failure in result.failures[:5]:
+                append_log(f"Echec {failure.mail_id}: {failure.reason}")
+        except Exception as exc:
+            append_log(f"Erreur archivage global: {exc}")
 
     scan_button.clicked.connect(on_scan)
     report_button.clicked.connect(on_export_report)
