@@ -98,6 +98,19 @@ Options de confidentialite :
 Si le mode IA est actif mais qu'aucune cle n'est disponible, MailFlow continue avec
 les regles locales et affiche un avertissement dans les logs.
 
+## Mises a jour
+
+Dans `Configuration`, le bouton `Rechercher mise a jour` verifie la derniere release
+publiee sur GitHub. Si une version plus recente existe, MailFlow propose de telecharger
+et lancer l'installateur adapte :
+
+- Windows : `MailFlow-Archivist-Setup.exe` ;
+- macOS : `MailFlow-Archivist.dmg`.
+
+Le fichier est telecharge dans le dossier de telechargements utilisateur, dans un
+sous-dossier `MailFlow Archivist Updates`. Fermer MailFlow pendant l'installation si
+l'installateur le demande.
+
 ## Export HTML projet
 
 1. Scanner le dossier Outlook projet.

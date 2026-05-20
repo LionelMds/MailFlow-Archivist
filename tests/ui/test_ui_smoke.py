@@ -299,6 +299,8 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_ai_model_input.text() == "gpt-5.4-nano"
     assert dynamic_window.mailflow_openai_key_input.echoMode() == QLineEdit.EchoMode.Password
     assert dynamic_window.mailflow_test_openai_key_button.text() == "Tester IA"
+    assert dynamic_window.mailflow_check_updates_button.text() == "Rechercher mise a jour"
+    assert "Version" in dynamic_window.mailflow_update_status.text()
     assert dynamic_window.mailflow_ai_include_body_checkbox.isChecked()
     assert dynamic_window.mailflow_watch_checkbox.text() == "Surveillance Outlook"
     assert dynamic_window.mailflow_watch_timer.interval() == 300000

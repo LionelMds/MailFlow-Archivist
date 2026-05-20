@@ -26,6 +26,7 @@ Cette premiere tranche met en place :
 - hierarchie par entreprise et dossier metier pour les destinations ;
 - previsualisateur d'arborescence avec renommage et fusion avant archivage ;
 - parametrage IA dans l'interface avec cle OpenAI stockee dans `keyring` et test visuel ;
+- recherche de mises a jour depuis l'application avec lancement de l'installateur ;
 - export HTML projet centralise dans `Correspondance` avec pieces jointes liees ;
 - surveillance Outlook par scan regulier avec confirmation avant mise a jour HTML ;
 - export CSV de rapport sans corps de mails ;
@@ -105,9 +106,16 @@ python -m mailflow --diagnose-outlook
 
 Sur ce poste, si `python` pointe vers l'alias Microsoft Store, utiliser un Python 3.11+ explicite ou le runtime configure dans Codex.
 
-## Releases
+## Installation et releases
 
-Le workflow GitHub Actions `.github/workflows/release.yml` construit les artefacts Windows et macOS.
+Le workflow GitHub Actions `.github/workflows/release.yml` construit des installateurs
+directement utilisables :
+
+- Windows : `MailFlow-Archivist-Setup.exe` ;
+- macOS : `MailFlow-Archivist.dmg`.
+
+Dans l'application, le bouton `Rechercher mise a jour` interroge la derniere release
+GitHub, telecharge l'installateur adapte a la plateforme et le lance apres confirmation.
 
 Pour publier une release :
 

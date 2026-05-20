@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unicodedata
+import webbrowser
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import TYPE_CHECKING, Any, cast
 from mailflow.core.archive_actions import rows_to_archive
 from mailflow.core.archive_batch import ArchiveBatchResult
 from mailflow.core.background_watcher import WatchState
+from mailflow.core.update_installer import download_update_installer, launch_update_installer
+from mailflow.core.updates import UpdateCheckResult, check_for_updates
 from mailflow.models import (
     AiMode,
     InterlocutorType,
@@ -34,6 +37,7 @@ UI_TEXT = {
     "save_settings": "Enregistrer parametres",
     "save_openai_key": "Enregistrer cle",
     "test_openai_key": "Tester IA",
+    "check_updates": "Rechercher mise a jour",
     "archive_selection": "Archiver selection",
     "archive_all_except_review": "Tout archiver sauf a verifier",
     "mark_ignored": "Ignorer selection",
@@ -111,6 +115,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QWidget,
     )
 
+    from mailflow import __version__
     from mailflow.classifier.ai_classifier import AiClassifier
     from mailflow.config import (
         get_openai_api_key,
@@ -165,7 +170,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     section_widgets: dict[str, Any] = {}
     section_contents: dict[str, Any] = {}
     section_min_heights = {
-        UI_TEXT["configuration"]: 235,
+        UI_TEXT["configuration"]: 270,
         UI_TEXT["scan"]: 150,
         UI_TEXT["preview"]: 320,
         "Arborescence": 230,
@@ -287,8 +292,19 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     privacy_phone_checkbox = QCheckBox("Masquer les numeros de telephone avant IA")
     privacy_phone_checkbox.setChecked(settings.privacy_mask_phone_numbers)
     grid.addWidget(privacy_phone_checkbox, 7, 1)
+    grid.addWidget(QLabel("Mises a jour"), 8, 0)
+    update_widget = QWidget()
+    update_layout = QHBoxLayout(update_widget)
+    update_layout.setContentsMargins(0, 0, 0, 0)
+    check_updates_button = QPushButton(UI_TEXT["check_updates"])
+    update_status = QLabel(f"Version {__version__}")
+    update_status.setStyleSheet("QLabel { color: #334155; }")
+    update_layout.addWidget(check_updates_button)
+    update_layout.addWidget(update_status)
+    update_layout.addStretch(1)
+    grid.addWidget(update_widget, 8, 1)
     save_settings_button = QPushButton(UI_TEXT["save_settings"])
-    grid.addWidget(save_settings_button, 8, 1)
+    grid.addWidget(save_settings_button, 9, 1)
     main_splitter.addWidget(make_collapsible_section(UI_TEXT["configuration"], config))
 
     scan = QGroupBox()
@@ -823,6 +839,60 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         set_openai_key_status(has_key=True, valid=result.ok)
         append_log(f"Test OpenAI: {result.message}")
 
+    def set_update_status(message: str, *, success: bool | None = None) -> None:
+        if success is True:
+            color = "#166534"
+        elif success is False:
+            color = "#9f1239"
+        else:
+            color = "#334155"
+        update_status.setText(message)
+        update_status.setStyleSheet(f"QLabel {{ color: {color}; }}")
+
+    def check_updates_from_ui() -> None:
+        check_updates_button.setEnabled(False)
+        set_update_status("Recherche en cours...")
+        QApplication.processEvents()
+        try:
+            result = check_for_updates(__version__)
+        except Exception as exc:
+            set_update_status("Recherche impossible", success=False)
+            append_log(f"Erreur recherche mise a jour: {exc}")
+            return
+        finally:
+            check_updates_button.setEnabled(True)
+        handle_update_result(result)
+
+    def handle_update_result(result: UpdateCheckResult) -> None:
+        if not result.update_available:
+            set_update_status(f"Version {result.current_version} a jour", success=True)
+            append_log("Aucune mise a jour disponible.")
+            return
+        set_update_status(f"Version {result.latest_version} disponible")
+        if result.installer_asset is None:
+            append_log(
+                "Mise a jour disponible, mais aucun installateur adapte a cette plateforme."
+            )
+            if confirm_open_release_page(result.release_url, parent=window):
+                webbrowser.open(result.release_url)
+            return
+        if not confirm_update_install(result, parent=window):
+            append_log("Mise a jour ignoree pour le moment.")
+            return
+        try:
+            installer_path = download_update_installer(result.installer_asset)
+            command = launch_update_installer(installer_path)
+            set_update_status(f"Installateur lance: {result.latest_version}", success=True)
+            append_log(f"Installateur telecharge: {installer_path}")
+            append_log(f"Commande lancee: {' '.join(command)}")
+            notify_user(
+                "Mise a jour MailFlow",
+                "L'installateur de mise a jour a ete lance.",
+            )
+        except Exception as exc:
+            set_update_status("Installation impossible", success=False)
+            append_log(f"Erreur lancement installateur: {exc}")
+
     def scan_current_preview() -> list[PreviewRow]:
         nonlocal active_controller
         update_projects_root()
@@ -1048,6 +1118,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     export_html_button.clicked.connect(on_export_project_html)
     save_openai_key_button.clicked.connect(save_openai_key_from_input)
     test_openai_key_button.clicked.connect(test_openai_key_from_input)
+    check_updates_button.clicked.connect(check_updates_from_ui)
     save_settings_button.clicked.connect(save_current_settings)
     ignore_button.clicked.connect(on_mark_ignored)
     restore_archivable_button.clicked.connect(on_restore_archivable)
@@ -1081,6 +1152,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_openai_key_status = openai_key_status
     dynamic_window.mailflow_save_openai_key_button = save_openai_key_button
     dynamic_window.mailflow_test_openai_key_button = test_openai_key_button
+    dynamic_window.mailflow_check_updates_button = check_updates_button
+    dynamic_window.mailflow_update_status = update_status
     dynamic_window.mailflow_ai_include_body_checkbox = ai_include_body_checkbox
     dynamic_window.mailflow_privacy_phone_checkbox = privacy_phone_checkbox
     dynamic_window.mailflow_save_settings_button = save_settings_button
@@ -1242,6 +1315,42 @@ def confirm_watch_html_update(new_count: int, *, parent: Any | None = None) -> b
             "La previsualisation et l'arborescence sont affichees dans MailFlow.\n"
             "Choisir Non pour verifier ou corriger les dossiers avant export.\n\n"
             "Mettre a jour le journal HTML projet maintenant ?"
+        ),
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    return response == QMessageBox.StandardButton.Yes
+
+
+def confirm_update_install(result: UpdateCheckResult, *, parent: Any | None = None) -> bool:
+    from PySide6.QtWidgets import QMessageBox
+
+    asset_name = result.installer_asset.name if result.installer_asset is not None else "-"
+    response = QMessageBox.question(
+        parent,
+        "Mise a jour disponible",
+        (
+            f"La version {result.latest_version} est disponible.\n\n"
+            f"Installateur: {asset_name}\n\n"
+            "Telecharger et lancer l'installateur maintenant ?\n"
+            "Fermer MailFlow pendant l'installation si l'installateur le demande."
+        ),
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    return response == QMessageBox.StandardButton.Yes
+
+
+def confirm_open_release_page(release_url: str, *, parent: Any | None = None) -> bool:
+    from PySide6.QtWidgets import QMessageBox
+
+    response = QMessageBox.question(
+        parent,
+        "Mise a jour disponible",
+        (
+            "Une mise a jour est disponible, mais aucun installateur automatique "
+            "n'a ete trouve pour cette plateforme.\n\n"
+            f"Ouvrir la page de release ?\n{release_url}"
         ),
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         QMessageBox.StandardButton.No,
