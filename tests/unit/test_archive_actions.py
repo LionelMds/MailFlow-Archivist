@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from mailflow.core.archive_actions import mark_rows_ignored, rows_to_archive
+from mailflow.core.archive_actions import mark_rows_archivable, mark_rows_ignored, rows_to_archive
 from mailflow.models import (
     ArchiveDecision,
     ClassificationResult,
@@ -92,3 +92,31 @@ def test_mark_rows_ignored_returns_copies(tmp_path: Path) -> None:
 
     assert rows[0].action == PreviewAction.ARCHIVE
     assert ignored[0].action == PreviewAction.IGNORE
+
+
+def test_mark_rows_ignored_can_target_selection(tmp_path: Path) -> None:
+    rows = [
+        make_row(PreviewAction.ARCHIVE, archive=True, tmp_path=tmp_path),
+        make_row(PreviewAction.ARCHIVE, archive=True, tmp_path=tmp_path),
+    ]
+
+    ignored = mark_rows_ignored(rows, [1])
+
+    assert ignored[0].action == PreviewAction.ARCHIVE
+    assert ignored[1].action == PreviewAction.IGNORE
+
+
+def test_mark_rows_archivable_restores_safe_archive_actions(tmp_path: Path) -> None:
+    ignored_archivable = make_row(
+        PreviewAction.IGNORE,
+        archive=True,
+        tmp_path=tmp_path,
+    )
+    review = make_row(PreviewAction.REVIEW, archive=True, tmp_path=tmp_path)
+    already_archived = make_row(PreviewAction.ARCHIVED, archive=True, tmp_path=tmp_path)
+
+    restored = mark_rows_archivable([ignored_archivable, review, already_archived])
+
+    assert restored[0].action == PreviewAction.ARCHIVE
+    assert restored[1].action == PreviewAction.REVIEW
+    assert restored[2].action == PreviewAction.ARCHIVED

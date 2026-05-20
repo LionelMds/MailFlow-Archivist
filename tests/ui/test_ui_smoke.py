@@ -31,6 +31,7 @@ from mailflow.ui.main_window import (
     openai_key_status_style,
     openai_key_status_text,
     should_hide_to_tray,
+    should_pause_watch_scan,
     summarize_archive_selection,
 )
 from mailflow.ui.preview_table import ACTION_LABELS, PREVIEW_COLUMNS
@@ -53,6 +54,14 @@ class FakeController:
         return []
 
     def mark_all_ignored(self) -> list[object]:
+        self.preview_rows = []
+        return []
+
+    def mark_selected_ignored(self, row_indexes: list[int]) -> list[object]:
+        self.preview_rows = []
+        return []
+
+    def mark_all_archivable(self) -> list[object]:
         self.preview_rows = []
         return []
 
@@ -267,6 +276,12 @@ def test_should_hide_to_tray_requires_watch_and_available_tray() -> None:
     )
 
 
+def test_should_pause_watch_scan_only_when_preview_is_open() -> None:
+    assert should_pause_watch_scan(window_visible=True, preview_has_rows=True)
+    assert not should_pause_watch_scan(window_visible=False, preview_has_rows=True)
+    assert not should_pause_watch_scan(window_visible=True, preview_has_rows=False)
+
+
 def test_main_window_instantiates_when_pyside6_is_available() -> None:
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication, QLineEdit
@@ -294,8 +309,14 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_folder_tree.headerItem().text(0) == "Dossier propose"
     assert dynamic_window.mailflow_rename_folder_button.text() == "Renommer dossier"
     assert dynamic_window.mailflow_merge_folder_button.text() == "Fusionner vers..."
+    assert dynamic_window.mailflow_restore_archivable_button.text() == (
+        "Tout remettre a archiver"
+    )
     assert dynamic_window.mailflow_main_splitter.count() == 7
+    assert dynamic_window.mailflow_scroll_area.widget() == dynamic_window.mailflow_main_splitter
+    assert dynamic_window.mailflow_main_splitter.minimumHeight() > 0
     assert "Previsualisation" in dynamic_window.mailflow_section_toggles
     assert "Arborescence" in dynamic_window.mailflow_section_toggles
+    assert "Previsualisation" in dynamic_window.mailflow_section_widgets
     window.close()
     app.quit()

@@ -16,6 +16,7 @@ SUPPLIER_ORDER_FOLDER = "Fournisseurs/Commande"
 UNKNOWN_COMPANY = "Interlocuteur inconnu"
 INTERNAL_DOMAINS = ("balzmetal.ch",)
 LEGAL_SUFFIXES = {"ag", "gmbh", "sa", "sarl", "sagl", "ltd", "llc", "inc", "spa", "srl"}
+GENERIC_CONTACT_WORDS = {"contact", "info", "office", "sales", "vente", "bureau"}
 INVALID_PATH_CHARS = '<>:"/\\|?*'
 
 
@@ -23,6 +24,12 @@ INVALID_PATH_CHARS = '<>:"/\\|?*'
 class HierarchicalFolder:
     company: str
     relative_folder: str
+
+
+@dataclass(frozen=True)
+class CompanyCandidate:
+    name: str
+    priority: int
 
 
 def apply_correspondence_hierarchy(
@@ -61,11 +68,9 @@ def company_from_mail(
     sender_email: str,
     recipients: Sequence[str],
 ) -> str:
-    if direction == Direction.SENT:
-        for recipient in recipients:
-            if not _is_internal_contact(recipient):
-                return _company_from_contact(recipient)
-    return _company_from_contact(sender_name or sender_email)
+    return _select_company_candidate(
+        _company_candidates_from_mail(direction, sender_name, sender_email, recipients)
+    ).name
 
 
 def company_key_from_mail(
@@ -222,6 +227,95 @@ def _company_from_contact(contact: str) -> str:
     return safe_folder_name(without_email or cleaned)
 
 
+def _company_candidates_from_mail(
+    direction: Direction,
+    sender_name: str,
+    sender_email: str,
+    recipients: Sequence[str],
+) -> list[CompanyCandidate]:
+    if direction == Direction.SENT:
+        candidates: list[CompanyCandidate] = []
+        for recipient in recipients:
+            if not _is_internal_contact(recipient):
+                candidates.extend(_company_candidates_from_contact(recipient))
+        return candidates or [CompanyCandidate(UNKNOWN_COMPANY, 99)]
+    return _company_candidates_from_contact(sender_name, sender_email)
+
+
+def _company_candidates_from_contact(
+    contact: str,
+    email: str = "",
+) -> list[CompanyCandidate]:
+    cleaned = contact.strip()
+    email_cleaned = email.strip()
+    if not cleaned and not email_cleaned:
+        return [CompanyCandidate(UNKNOWN_COMPANY, 99)]
+
+    candidates: list[CompanyCandidate] = []
+    parenthesized = re.findall(r"\(([^()]+)\)", cleaned)
+    candidates.extend(
+        CompanyCandidate(safe_folder_name(value), 0)
+        for value in parenthesized
+        if value.strip()
+    )
+
+    domain = _domain_from_contact(email_cleaned or cleaned)
+    domain_company = _company_from_domain(domain) if domain is not None else None
+    display = re.sub(r"<[^>]+>", "", cleaned)
+    display = re.sub(r"[\w.+-]+@[\w.-]+", "", display).strip()
+    if display:
+        display_name = safe_folder_name(display)
+        priority = 1 if _looks_like_company_display(display_name, domain_company) else 4
+        candidates.append(CompanyCandidate(display_name, priority))
+    if domain_company is not None:
+        candidates.append(CompanyCandidate(domain_company, 2))
+
+    return candidates or [CompanyCandidate(UNKNOWN_COMPANY, 99)]
+
+
+def _select_company_candidate(candidates: Sequence[CompanyCandidate]) -> CompanyCandidate:
+    useful = [candidate for candidate in candidates if candidate.name != UNKNOWN_COMPANY]
+    if not useful:
+        return CompanyCandidate(UNKNOWN_COMPANY, 99)
+    counts = {
+        candidate.name: sum(1 for item in useful if item.name == candidate.name)
+        for candidate in useful
+    }
+    return min(
+        useful,
+        key=lambda candidate: (
+            candidate.priority,
+            -counts[candidate.name],
+            -len(candidate.name),
+            candidate.name.casefold(),
+        ),
+    )
+
+
+def _domain_from_contact(contact: str) -> str | None:
+    email_match = re.search(r"[\w.+-]+@([\w.-]+)", contact)
+    if email_match:
+        return email_match.group(1)
+    if "@" not in contact and "." in contact and not re.search(r"\s", contact):
+        return contact
+    return None
+
+
+def _looks_like_company_display(display_name: str, domain_company: str | None) -> bool:
+    lowered_words = {word.casefold() for word in re.split(r"\W+", display_name) if word}
+    if lowered_words & LEGAL_SUFFIXES:
+        return True
+    if domain_company is None:
+        return False
+    display_company_words = lowered_words - LEGAL_SUFFIXES - GENERIC_CONTACT_WORDS
+    domain_words = {
+        word.casefold()
+        for word in re.split(r"\W+", domain_company)
+        if word and word.casefold() not in LEGAL_SUFFIXES
+    }
+    return bool(domain_words and display_company_words == domain_words)
+
+
 def _company_from_domain(domain: str) -> str:
     labels = [label for label in domain.lower().split(".") if label]
     if not labels:
@@ -251,11 +345,17 @@ def _company_key_from_domain(domain: str) -> str:
 
 
 def _best_company_display(rows: Sequence[PreviewRow]) -> str:
-    companies = [company_folder_for_row(row) for row in rows]
-    useful = [company for company in companies if company != UNKNOWN_COMPANY]
-    if not useful:
-        return UNKNOWN_COMPANY
-    return max(useful, key=len)
+    candidates = [
+        candidate
+        for row in rows
+        for candidate in _company_candidates_from_mail(
+            row.mail.direction,
+            row.mail.sender_name,
+            row.mail.sender_email,
+            row.mail.recipients,
+        )
+    ]
+    return _select_company_candidate(candidates).name
 
 
 def _normalize_company_key(value: str) -> str:

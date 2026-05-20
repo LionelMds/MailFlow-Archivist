@@ -212,6 +212,24 @@ def test_supplier_grouping_uses_email_domain_across_sent_and_received(tmp_path: 
     assert by_id["RECEIVED-OFFER"] == "Fournisseurs/Demande de prix/HANS KOHLER AG"
 
 
+def test_supplier_folder_prefers_company_domain_over_contact_person(tmp_path: Path) -> None:
+    row = make_row(
+        tmp_path,
+        entry_id="RECEIVED-OFFER",
+        sent_at=datetime(2026, 5, 2, 8),
+        mail_type=MailType.DEVIS,
+        interlocutor=InterlocutorType.FOURNISSEUR,
+        sender_name="Lorenzo D'Angelo",
+        sender_email="l.dangelo@kohler.ch",
+    )
+
+    updated = apply_correspondence_hierarchy([row], projects_root=tmp_path)[0]
+
+    assert updated.decision.target_relative_folder == (
+        "Fournisseurs/Demande de prix/Kohler"
+    )
+
+
 def test_safe_relative_folder_rejects_unsafe_paths() -> None:
     assert is_safe_relative_folder("Fournisseurs/Commande/Metal Factory")
     assert is_safe_relative_folder("A verifier")

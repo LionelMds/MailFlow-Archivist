@@ -36,7 +36,8 @@ UI_TEXT = {
     "test_openai_key": "Tester IA",
     "archive_selection": "Archiver selection",
     "archive_all_except_review": "Tout archiver sauf a verifier",
-    "mark_ignored": "Marquer comme ignore",
+    "mark_ignored": "Ignorer selection",
+    "restore_archivable": "Tout remettre a archiver",
     "open_project_folder": "Ouvrir dossier projet",
     "export_project_html": "Exporter HTML projet",
     "export_report": "Exporter rapport",
@@ -95,6 +96,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QMenu,
         QMessageBox,
         QPushButton,
+        QScrollArea,
+        QSizePolicy,
         QSplitter,
         QStyle,
         QSystemTrayIcon,
@@ -146,15 +149,64 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     combo_by_cell: dict[tuple[int, int], Any] = {}
     refreshing_table = False
     refreshing_outlook_options = False
+    watch_paused_logged = False
     watch_state = WatchState()
     central = QWidget()
     layout = QVBoxLayout(central)
+    layout.setContentsMargins(0, 0, 0, 0)
+    scroll_area = QScrollArea()
+    scroll_area.setWidgetResizable(True)
+    scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     main_splitter = QSplitter(Qt.Orientation.Vertical)
+    main_splitter.setChildrenCollapsible(False)
+    main_splitter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
     section_toggles: dict[str, Any] = {}
-    layout.addWidget(main_splitter)
+    section_widgets: dict[str, Any] = {}
+    section_contents: dict[str, Any] = {}
+    section_min_heights = {
+        UI_TEXT["configuration"]: 235,
+        UI_TEXT["scan"]: 150,
+        UI_TEXT["preview"]: 320,
+        "Arborescence": 230,
+        "Apercu du mail": 220,
+        UI_TEXT["actions"]: 125,
+        UI_TEXT["logs"]: 190,
+    }
+    collapsed_section_height = 34
+    max_widget_height = 16777215
+    scroll_area.setWidget(main_splitter)
+    layout.addWidget(scroll_area)
+
+    def update_splitter_layout() -> None:
+        sizes = []
+        total_height = 0
+        for index in range(main_splitter.count()):
+            section = main_splitter.widget(index)
+            if section is None:
+                continue
+            title = str(section.property("mailflow_section_title") or "")
+            content = section_contents.get(title)
+            if content is not None and content.isVisible():
+                height = section_min_heights.get(title, section.minimumSizeHint().height())
+                section.setMinimumHeight(height)
+                section.setMaximumHeight(max_widget_height)
+            else:
+                height = collapsed_section_height
+                section.setMinimumHeight(height)
+                section.setMaximumHeight(height)
+            sizes.append(height)
+            total_height += height
+        if sizes:
+            total_height += max(0, len(sizes) - 1) * main_splitter.handleWidth()
+            main_splitter.setMinimumHeight(total_height)
+            main_splitter.setSizes(sizes)
+        main_splitter.updateGeometry()
+        scroll_area.updateGeometry()
 
     def make_collapsible_section(title: str, content: Any) -> Any:
         section = QWidget()
+        section.setProperty("mailflow_section_title", title)
         section_layout = QVBoxLayout(section)
         section_layout.setContentsMargins(0, 0, 0, 0)
         section_layout.setSpacing(2)
@@ -177,9 +229,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             toggle.setArrowType(
                 Qt.ArrowType.DownArrow if content.isVisible() else Qt.ArrowType.RightArrow
             )
+            update_splitter_layout()
 
         toggle.clicked.connect(toggle_content)
         section_toggles[title] = toggle
+        section_widgets[title] = section
+        section_contents[title] = content
         return section
 
     config = QGroupBox()
@@ -292,6 +347,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     archive_button = QPushButton(UI_TEXT["archive_selection"])
     archive_all_button = QPushButton(UI_TEXT["archive_all_except_review"])
     ignore_button = QPushButton(UI_TEXT["mark_ignored"])
+    restore_archivable_button = QPushButton(UI_TEXT["restore_archivable"])
     open_folder_button = QPushButton(UI_TEXT["open_project_folder"])
     export_html_button = QPushButton(UI_TEXT["export_project_html"])
     report_button = QPushButton(UI_TEXT["export_report"])
@@ -300,6 +356,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             archive_button,
             archive_all_button,
             ignore_button,
+            restore_archivable_button,
             open_folder_button,
             export_html_button,
             report_button,
@@ -319,7 +376,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     main_splitter.setStretchFactor(4, 3)
     main_splitter.setStretchFactor(5, 0)
     main_splitter.setStretchFactor(6, 2)
-    main_splitter.setSizes([210, 125, 360, 180, 190, 95, 150])
+    update_splitter_layout()
     window.setCentralWidget(central)
     watch_timer = QTimer(window)
     watch_timer.setInterval(WATCH_INTERVAL_MS)
@@ -821,9 +878,18 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         append_log(format_project_html_export_result(results))
 
     def on_mark_ignored() -> None:
-        active_controller.mark_all_ignored()
+        indexes = selected_table_row_indexes()
+        if not indexes:
+            append_log("Aucune ligne selectionnee a ignorer.")
+            return
+        active_controller.mark_selected_ignored(indexes)
         refresh_table()
-        append_log("Lignes marquees comme ignorees.")
+        append_log(f"{len(indexes)} ligne(s) marquee(s) comme ignoree(s).")
+
+    def on_restore_archivable() -> None:
+        active_controller.mark_all_archivable()
+        refresh_table()
+        append_log("Toutes les lignes archivables sont remises en Archiver.")
 
     def on_watch_toggled(enabled: bool) -> None:
         if not enabled:
@@ -852,6 +918,19 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(f"Impossible d'activer la surveillance Outlook: {exc}")
 
     def run_watch_scan() -> None:
+        nonlocal watch_paused_logged
+        if should_pause_watch_scan(
+            window_visible=window.isVisible(),
+            preview_has_rows=bool(active_controller.preview_rows),
+        ):
+            if not watch_paused_logged:
+                append_log(
+                    "Surveillance Outlook en attente: previsualisation ouverte, "
+                    "aucun scan automatique."
+                )
+            watch_paused_logged = True
+            return
+        watch_paused_logged = False
         try:
             rows = scan_current_preview()
             change = watch_state.update(rows)
@@ -971,6 +1050,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     test_openai_key_button.clicked.connect(test_openai_key_from_input)
     save_settings_button.clicked.connect(save_current_settings)
     ignore_button.clicked.connect(on_mark_ignored)
+    restore_archivable_button.clicked.connect(on_restore_archivable)
     archive_button.clicked.connect(on_archive_selection)
     archive_all_button.clicked.connect(on_archive_all_except_review)
     rename_folder_button.clicked.connect(rename_selected_folder)
@@ -989,6 +1069,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_folder_tree = folder_tree
     dynamic_window.mailflow_rename_folder_button = rename_folder_button
     dynamic_window.mailflow_merge_folder_button = merge_folder_button
+    dynamic_window.mailflow_restore_archivable_button = restore_archivable_button
     dynamic_window.mailflow_logs = logs
     dynamic_window.mailflow_mail_preview = mail_preview
     dynamic_window.mailflow_export_html_button = export_html_button
@@ -1010,8 +1091,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_account_combo = account_combo
     dynamic_window.mailflow_outlook_root_combo = outlook_root_combo
     dynamic_window.mailflow_projects_root_input = projects_root_input
+    dynamic_window.mailflow_scroll_area = scroll_area
     dynamic_window.mailflow_main_splitter = main_splitter
     dynamic_window.mailflow_section_toggles = section_toggles
+    dynamic_window.mailflow_section_widgets = section_widgets
     return window
 
 
@@ -1125,6 +1208,10 @@ def should_hide_to_tray(
     force_quit: bool,
 ) -> bool:
     return watch_enabled and tray_available and not force_quit
+
+
+def should_pause_watch_scan(*, window_visible: bool, preview_has_rows: bool) -> bool:
+    return window_visible and preview_has_rows
 
 
 def confirm_html_overwrite(path: Path, *, parent: Any | None = None) -> bool:

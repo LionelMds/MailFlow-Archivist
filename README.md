@@ -52,7 +52,8 @@ Les destinations proposees sont hierarchisees par dossier metier puis entreprise
 correspondances client vont par defaut dans `Correspondance/Entreprise/Approbation`.
 Les correspondances fournisseur vont dans `Fournisseurs/Demande de prix/Entreprise`
 jusqu'a la derniere offre du cycle, puis dans `Fournisseurs/Commande/Entreprise`, sauf
-nouvelle demande d'offre.
+nouvelle demande d'offre. Pour les fournisseurs, le nom de dossier privilegie le nom
+d'entreprise deduit du domaine e-mail ou du nom societe, pas le nom de l'interlocuteur.
 Le journal HTML permet aussi de filtrer par dossier cible.
 
 Apres le scan, le panneau `Arborescence` affiche les dossiers proposes avec le nombre
@@ -63,7 +64,9 @@ Les images integrees dans le corps des mails, comme les logos de signature, ne s
 exportees comme pieces jointes. Elles sont affichees directement dans le journal HTML.
 
 La case `Surveillance Outlook` relance un scan toutes les 5 minutes tant que
-l'application reste ouverte. En cas de nouveaux mails, MailFlow affiche la
+l'application reste ouverte. Si une previsualisation est deja ouverte dans la fenetre,
+la surveillance se met en attente afin de ne pas ecraser les corrections manuelles.
+En cas de nouveaux mails detectes lors d'un scan autorise, MailFlow affiche la
 previsualisation et l'arborescence mises a jour, puis demande confirmation avant de
 mettre a jour le journal HTML.
 

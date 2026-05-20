@@ -33,15 +33,22 @@ Une nouvelle demande d'offre demarre un nouveau cycle fournisseur. Les echanges 
 suivent cette nouvelle demande restent donc en `Demande de prix` jusqu'a la prochaine
 offre trouvee.
 
-L'entreprise est deduite du nom d'expediteur, du texte entre parentheses quand Outlook
-le fournit, ou du domaine e-mail. La destination reste modifiable manuellement dans la
-previsualisation. Les sous-dossiers de destination sont crees si le dossier projet
-existe deja ; le dossier projet lui-meme n'est jamais cree automatiquement.
+L'entreprise est deduite du texte entre parentheses quand Outlook le fournit, du nom
+d'entreprise explicite, ou du domaine e-mail. Pour les fournisseurs, MailFlow evite de
+nommer le dossier avec le nom d'une personne et privilegie le nom de l'entreprise.
+La destination reste modifiable manuellement dans la previsualisation. Les sous-dossiers
+de destination sont crees si le dossier projet existe deja ; le dossier projet lui-meme
+n'est jamais cree automatiquement.
 
 ## Arborescence proposee
 
 Apres le scan, le panneau `Arborescence` montre les dossiers proposes avec le nombre de
 mails par branche. Cette etape ne cree encore aucun fichier.
+
+L'interface principale est scrollable : les panneaux ouverts gardent une hauteur lisible
+et les panneaux reduits ne prennent que leur en-tete. Les separateurs restent
+deplacables pour ajuster la place donnee a la previsualisation, a l'arborescence, a
+l'apercu du mail et aux logs.
 
 Actions possibles :
 
@@ -49,6 +56,9 @@ Actions possibles :
   `METAL-FACTORY` vers `Metal Factory` ;
 - `Fusionner vers...` deplace tous les mails du dossier selectionne vers un autre
   dossier deja propose, utile lorsqu'un doublon accidentel a ete detecte.
+- `Ignorer selection` marque seulement les lignes selectionnees comme ignorees ;
+- `Tout remettre a archiver` remet les lignes archivables en action `Archiver`, sans
+  toucher aux lignes deja archivees ni aux lignes qui exigent une verification.
 
 Les changements sont appliques a la previsualisation et au futur export/archivage.
 Ils restent modifiables tant que l'utilisateur n'a pas confirme l'archivage ou l'export.
@@ -121,10 +131,12 @@ de chantier ajoutee comme fichier, restent exportees comme pieces jointes.
 ## Surveillance Outlook
 
 La case `Surveillance Outlook` garde l'application active pendant la journee et relance
-un scan toutes les 5 minutes. Lorsqu'un nouvel `EntryID` Outlook apparait, MailFlow
-met a jour la previsualisation et le panneau `Arborescence`, puis affiche la fenetre.
-L'utilisateur peut choisir de mettre a jour le journal HTML immediatement, ou refuser
-pour verifier et corriger l'arborescence avant export.
+un scan toutes les 5 minutes. Si la fenetre MailFlow est ouverte avec une previsualisation
+en cours, la surveillance se met en attente pour ne pas ecraser les corrections manuelles.
+Lorsqu'elle peut scanner et qu'un nouvel `EntryID` Outlook apparait, MailFlow met a jour
+la previsualisation et le panneau `Arborescence`, puis affiche la fenetre. L'utilisateur
+peut choisir de mettre a jour le journal HTML immediatement, ou refuser pour verifier et
+corriger l'arborescence avant export.
 
 Si Outlook est ferme pendant un scan, l'erreur est affichee dans les logs et la
 surveillance reprendra au scan suivant lorsque Outlook sera de nouveau disponible.

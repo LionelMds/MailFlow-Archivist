@@ -9,7 +9,11 @@ from typing import Protocol
 from mailflow.classifier.ai_classifier import AiClassifier
 from mailflow.classifier.pipeline import ClassificationPipeline
 from mailflow.config import AppSettings, get_openai_api_key
-from mailflow.core.archive_actions import mark_rows_ignored, rows_to_archive
+from mailflow.core.archive_actions import (
+    mark_rows_archivable,
+    mark_rows_ignored,
+    rows_to_archive,
+)
 from mailflow.core.archive_batch import (
     ArchiveBatchExecutor,
     ArchiveBatchResult,
@@ -133,6 +137,14 @@ class AppController:
 
     def mark_all_ignored(self) -> list[PreviewRow]:
         self.preview_rows = mark_rows_ignored(self.preview_rows)
+        return self.preview_rows
+
+    def mark_selected_ignored(self, row_indexes: Sequence[int]) -> list[PreviewRow]:
+        self.preview_rows = mark_rows_ignored(self.preview_rows, list(row_indexes))
+        return self.preview_rows
+
+    def mark_all_archivable(self) -> list[PreviewRow]:
+        self.preview_rows = mark_rows_archivable(self.preview_rows)
         return self.preview_rows
 
     def folder_tree(self) -> list[FolderTreeNode]:

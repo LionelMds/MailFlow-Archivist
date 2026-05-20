@@ -264,19 +264,40 @@ def test_controller_exports_project_html_only_selected_rows(tmp_path: Path) -> N
 
 def test_controller_archive_selection_and_ignore(tmp_path: Path) -> None:
     row = make_row(tmp_path)
+    second = make_row(tmp_path, entry_id="ENTRY-2")
     controller = AppController(
         scan_service=FakeScanService([]),
         preview_pipeline=FakePreviewPipeline([]),
         projects_root=tmp_path,
         report_dir=tmp_path,
     )
-    controller.preview_rows = [row]
+    controller.preview_rows = [row, second]
 
-    assert controller.rows_ready_for_archive() == [row]
-    ignored = controller.mark_all_ignored()
+    assert controller.rows_ready_for_archive() == [row, second]
+    ignored = controller.mark_selected_ignored([0])
 
     assert ignored[0].action == PreviewAction.IGNORE
-    assert controller.rows_ready_for_archive() == []
+    assert ignored[1].action == PreviewAction.ARCHIVE
+    assert controller.rows_ready_for_archive() == [second]
+
+
+def test_controller_can_restore_all_archivable_rows(tmp_path: Path) -> None:
+    ignored = make_row(tmp_path, PreviewAction.IGNORE).model_copy(
+        update={"decision": make_row(tmp_path).decision}
+    )
+    review = make_row(tmp_path, PreviewAction.REVIEW, "ENTRY-2")
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+    controller.preview_rows = [ignored, review]
+
+    restored = controller.mark_all_archivable()
+
+    assert restored[0].action == PreviewAction.ARCHIVE
+    assert restored[1].action == PreviewAction.REVIEW
 
 
 def test_controller_updates_preview_folder_tree(tmp_path: Path) -> None:
