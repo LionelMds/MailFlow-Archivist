@@ -25,6 +25,7 @@ from mailflow.ui.main_window import (
     build_manual_classification_update,
     format_outlook_account_label,
     format_project_html_export_result,
+    should_hide_to_tray,
     summarize_archive_selection,
 )
 from mailflow.ui.preview_table import ACTION_LABELS, PREVIEW_COLUMNS
@@ -127,6 +128,8 @@ def test_ui_text_contains_expected_actions() -> None:
     assert UI_TEXT["scan_button"] == "Scanner Outlook"
     assert UI_TEXT["watch_outlook"] == "Surveillance Outlook"
     assert UI_TEXT["export_project_html"] == "Exporter HTML projet"
+    assert UI_TEXT["tray_open"] == "Ouvrir MailFlow"
+    assert UI_TEXT["tray_quit"] == "Quitter"
     assert "Destination proposee" in PREVIEW_COLUMNS
     assert ACTION_LABELS[PreviewAction.REVIEW] == "A verifier"
     assert UI_TEXT["archive_all_except_review"] == "Tout archiver sauf a verifier"
@@ -205,6 +208,29 @@ def test_format_project_html_export_result_lists_paths(tmp_path: Path) -> None:
     assert "Correspondance projet.html" in message
 
 
+def test_should_hide_to_tray_requires_watch_and_available_tray() -> None:
+    assert should_hide_to_tray(
+        watch_enabled=True,
+        tray_available=True,
+        force_quit=False,
+    )
+    assert not should_hide_to_tray(
+        watch_enabled=False,
+        tray_available=True,
+        force_quit=False,
+    )
+    assert not should_hide_to_tray(
+        watch_enabled=True,
+        tray_available=False,
+        force_quit=False,
+    )
+    assert not should_hide_to_tray(
+        watch_enabled=True,
+        tray_available=True,
+        force_quit=True,
+    )
+
+
 def test_main_window_instantiates_when_pyside6_is_available() -> None:
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
@@ -220,5 +246,9 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_mail_preview.isReadOnly()
     assert dynamic_window.mailflow_watch_checkbox.text() == "Surveillance Outlook"
     assert dynamic_window.mailflow_watch_timer.interval() == 300000
+    assert dynamic_window.mailflow_tray_icon.toolTip() == "MailFlow Archivist"
+    assert dynamic_window.mailflow_tray_open_action.text() == "Ouvrir MailFlow"
+    assert dynamic_window.mailflow_tray_watch_action.isCheckable()
+    assert dynamic_window.mailflow_tray_quit_action.text() == "Quitter"
     window.close()
     app.quit()

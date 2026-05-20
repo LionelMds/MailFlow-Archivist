@@ -36,6 +36,10 @@ UI_TEXT = {
     "open_project_folder": "Ouvrir dossier projet",
     "export_project_html": "Exporter HTML projet",
     "export_report": "Exporter rapport",
+    "tray_open": "Ouvrir MailFlow",
+    "tray_enable_watch": "Activer surveillance Outlook",
+    "tray_disable_watch": "Desactiver surveillance Outlook",
+    "tray_quit": "Quitter",
 }
 
 WATCH_INTERVAL_MS = 5 * 60 * 1000
@@ -66,9 +70,10 @@ def run_desktop_app(settings: AppSettings) -> int:
 
 def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     from PySide6.QtCore import QTimer
-    from PySide6.QtGui import QColor
+    from PySide6.QtGui import QAction, QColor
     from PySide6.QtWidgets import (
         QAbstractItemView,
+        QApplication,
         QCheckBox,
         QComboBox,
         QDialog,
@@ -81,8 +86,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QLabel,
         QLineEdit,
         QMainWindow,
+        QMenu,
         QMessageBox,
         QPushButton,
+        QStyle,
+        QSystemTrayIcon,
         QTableWidget,
         QTableWidgetItem,
         QTextEdit,
@@ -105,11 +113,20 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         should_highlight_cell,
     )
 
+    class MailFlowMainWindow(QMainWindow):
+        def closeEvent(self, event: Any) -> None:
+            handler = getattr(self, "mailflow_close_handler", None)
+            if callable(handler):
+                handler(event)
+                return
+            super().closeEvent(event)
+
     controller_was_injected = controller is not None
     active_controller = controller or build_default_controller(settings)
-    window = QMainWindow()
+    window = MailFlowMainWindow()
     dynamic_window = cast(Any, window)
     window.setWindowTitle(UI_TEXT["window_title"])
+    dynamic_window.mailflow_force_quit = False
     combo_by_cell: dict[tuple[int, int], Any] = {}
     refreshing_table = False
     refreshing_outlook_options = False
@@ -196,9 +213,75 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     window.setCentralWidget(central)
     watch_timer = QTimer(window)
     watch_timer.setInterval(WATCH_INTERVAL_MS)
+    app_icon = window.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+    window.setWindowIcon(app_icon)
+    tray_icon = QSystemTrayIcon(app_icon, window)
+    tray_icon.setToolTip(UI_TEXT["window_title"])
+    tray_menu = QMenu(window)
+    tray_open_action = QAction(UI_TEXT["tray_open"], window)
+    tray_watch_action = QAction(UI_TEXT["tray_enable_watch"], window)
+    tray_watch_action.setCheckable(True)
+    tray_quit_action = QAction(UI_TEXT["tray_quit"], window)
+    tray_menu.addAction(tray_open_action)
+    tray_menu.addAction(tray_watch_action)
+    tray_menu.addSeparator()
+    tray_menu.addAction(tray_quit_action)
+    tray_icon.setContextMenu(tray_menu)
+    if QSystemTrayIcon.isSystemTrayAvailable():
+        tray_icon.show()
 
     def append_log(message: str) -> None:
         logs.append(message)
+
+    def show_window_from_tray() -> None:
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def tray_available() -> bool:
+        return bool(tray_icon.isVisible() and QSystemTrayIcon.isSystemTrayAvailable())
+
+    def notify_user(
+        title: str,
+        message: str,
+        icon: Any = QSystemTrayIcon.MessageIcon.Information,
+    ) -> None:
+        if tray_icon.isVisible():
+            tray_icon.showMessage(title, message, icon, 6000)
+
+    def sync_tray_watch_action(enabled: bool) -> None:
+        tray_watch_action.blockSignals(True)
+        tray_watch_action.setChecked(enabled)
+        tray_watch_action.setText(
+            UI_TEXT["tray_disable_watch"] if enabled else UI_TEXT["tray_enable_watch"]
+        )
+        tray_watch_action.blockSignals(False)
+
+    def request_watch_from_tray(enabled: bool) -> None:
+        if watch_checkbox.isChecked() != enabled:
+            watch_checkbox.setChecked(enabled)
+
+    def quit_application() -> None:
+        dynamic_window.mailflow_force_quit = True
+        watch_timer.stop()
+        tray_icon.hide()
+        QApplication.quit()
+
+    def handle_window_close(event: Any) -> None:
+        if should_hide_to_tray(
+            watch_enabled=watch_checkbox.isChecked(),
+            tray_available=tray_available(),
+            force_quit=bool(dynamic_window.mailflow_force_quit),
+        ):
+            event.ignore()
+            window.hide()
+            notify_user(
+                "MailFlow reste actif",
+                "La surveillance Outlook continue en arriere-plan.",
+            )
+            append_log("Fenetre masquee: MailFlow continue dans la zone de notification.")
+            return
+        event.accept()
 
     def refresh_table() -> None:
         nonlocal refreshing_table
@@ -495,6 +578,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     def on_watch_toggled(enabled: bool) -> None:
         if not enabled:
             watch_timer.stop()
+            sync_tray_watch_action(False)
             append_log("Surveillance Outlook desactivee.")
             return
         try:
@@ -504,11 +588,17 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 append_log(f"{len(rows)} mails charges pour initialiser la surveillance.")
             watch_state.reset(active_controller.preview_rows)
             watch_timer.start()
+            sync_tray_watch_action(True)
+            notify_user(
+                "Surveillance activee",
+                "MailFlow surveille Outlook toutes les 5 minutes.",
+            )
             append_log("Surveillance Outlook activee: scan toutes les 5 minutes.")
         except Exception as exc:
             watch_checkbox.blockSignals(True)
             watch_checkbox.setChecked(False)
             watch_checkbox.blockSignals(False)
+            sync_tray_watch_action(False)
             append_log(f"Impossible d'activer la surveillance Outlook: {exc}")
 
     def run_watch_scan() -> None:
@@ -518,10 +608,20 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             refresh_table()
         except Exception as exc:
             append_log(f"Surveillance Outlook en attente: {exc}")
+            notify_user(
+                "Surveillance Outlook en attente",
+                "Outlook n'est pas disponible pour le moment.",
+                QSystemTrayIcon.MessageIcon.Warning,
+            )
             return
         if change.new_count == 0:
             return
         append_log(f"Surveillance Outlook: {change.new_count} nouveau(x) mail(s) detecte(s).")
+        notify_user(
+            "Nouveaux mails detectes",
+            f"{change.new_count} nouveau(x) mail(s) dans Outlook.",
+        )
+        show_window_from_tray()
         if not confirm_watch_html_update(change.new_count, parent=window):
             append_log("Mise a jour HTML differee.")
             return
@@ -530,6 +630,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(format_project_html_export_result(results))
         except Exception as exc:
             append_log(f"Erreur mise a jour HTML automatique: {exc}")
+            notify_user(
+                "Erreur export HTML",
+                "La mise a jour du journal HTML a echoue.",
+                QSystemTrayIcon.MessageIcon.Warning,
+            )
 
     def selected_table_row_indexes() -> list[int]:
         selection_model = table.selectionModel()
@@ -598,6 +703,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     scan_button.clicked.connect(on_scan)
     watch_checkbox.toggled.connect(on_watch_toggled)
+    tray_watch_action.toggled.connect(request_watch_from_tray)
+    tray_open_action.triggered.connect(show_window_from_tray)
+    tray_quit_action.triggered.connect(quit_application)
+    tray_icon.activated.connect(
+        lambda reason: show_window_from_tray()
+        if reason == QSystemTrayIcon.ActivationReason.Trigger
+        else None
+    )
     watch_timer.timeout.connect(run_watch_scan)
     report_button.clicked.connect(on_export_report)
     export_html_button.clicked.connect(on_export_project_html)
@@ -610,6 +723,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     table.cellDoubleClicked.connect(lambda row, _column: open_manual_dialog(row))
     table.currentCellChanged.connect(lambda row, _col, _old_row, _old_col: update_mail_preview(row))
     table.itemSelectionChanged.connect(update_preview_from_selection)
+    dynamic_window.mailflow_close_handler = handle_window_close
     populate_account_options()
 
     dynamic_window.mailflow_controller = active_controller
@@ -619,6 +733,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_export_html_button = export_html_button
     dynamic_window.mailflow_watch_checkbox = watch_checkbox
     dynamic_window.mailflow_watch_timer = watch_timer
+    dynamic_window.mailflow_tray_icon = tray_icon
+    dynamic_window.mailflow_tray_open_action = tray_open_action
+    dynamic_window.mailflow_tray_watch_action = tray_watch_action
+    dynamic_window.mailflow_tray_quit_action = tray_quit_action
     dynamic_window.mailflow_account_combo = account_combo
     dynamic_window.mailflow_outlook_root_combo = outlook_root_combo
     dynamic_window.mailflow_projects_root_input = projects_root_input
@@ -666,6 +784,15 @@ def build_archive_confirmation_message(summary: ArchiveSelectionSummary) -> str:
     if summary.skipped_count:
         lines.insert(1, f"{summary.skipped_count} ligne(s) selectionnee(s) seront ignorees.")
     return "\n".join(lines)
+
+
+def should_hide_to_tray(
+    *,
+    watch_enabled: bool,
+    tray_available: bool,
+    force_quit: bool,
+) -> bool:
+    return watch_enabled and tray_available and not force_quit
 
 
 def confirm_html_overwrite(path: Path, *, parent: Any | None = None) -> bool:

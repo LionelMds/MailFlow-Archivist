@@ -50,3 +50,7 @@ confirmation demande si le journal HTML doit etre mis a jour.
 
 Si Outlook est ferme pendant un scan, l'erreur est affichee dans les logs et la
 surveillance reprendra au scan suivant lorsque Outlook sera de nouveau disponible.
+
+Lorsque la surveillance est active, le bouton de fermeture de la fenetre masque
+l'application dans la zone de notification. Pour arreter MailFlow, utiliser `Quitter`
+depuis le menu de l'icone. Un clic sur l'icone rouvre la fenetre.

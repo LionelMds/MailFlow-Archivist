@@ -46,6 +46,10 @@ La case `Surveillance Outlook` relance un scan toutes les 5 minutes tant que
 l'application reste ouverte. En cas de nouveaux mails, MailFlow demande confirmation
 avant de mettre a jour le journal HTML.
 
+Quand la surveillance est active, fermer la fenetre masque MailFlow dans la zone de
+notification au lieu de l'arreter. Le menu de l'icone permet de rouvrir l'application,
+d'activer ou desactiver la surveillance, ou de quitter completement.
+
 ## Commandes utiles
 
 ```powershell
