@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from mailflow.core.archive_actions import rows_to_archive
 from mailflow.core.archive_batch import ArchiveBatchResult
+from mailflow.core.background_watcher import WatchState
 from mailflow.models import (
     InterlocutorType,
     MailType,
@@ -28,12 +29,16 @@ UI_TEXT = {
     "actions": "Actions",
     "logs": "Logs",
     "scan_button": "Scanner Outlook",
+    "watch_outlook": "Surveillance Outlook",
     "archive_selection": "Archiver selection",
     "archive_all_except_review": "Tout archiver sauf a verifier",
     "mark_ignored": "Marquer comme ignore",
     "open_project_folder": "Ouvrir dossier projet",
+    "export_project_html": "Exporter HTML projet",
     "export_report": "Exporter rapport",
 }
+
+WATCH_INTERVAL_MS = 5 * 60 * 1000
 
 @dataclass(frozen=True)
 class ArchiveSelectionSummary:
@@ -60,6 +65,7 @@ def run_desktop_app(settings: AppSettings) -> int:
 
 
 def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
+    from PySide6.QtCore import QTimer
     from PySide6.QtGui import QColor
     from PySide6.QtWidgets import (
         QAbstractItemView,
@@ -107,6 +113,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     combo_by_cell: dict[tuple[int, int], Any] = {}
     refreshing_table = False
     refreshing_outlook_options = False
+    watch_state = WatchState()
     central = QWidget()
     layout = QVBoxLayout(central)
 
@@ -143,6 +150,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     scan_layout.addWidget(project_input, 1, 1)
     scan_button = QPushButton(UI_TEXT["scan_button"])
     scan_layout.addWidget(scan_button, 2, 0, 1, 2)
+    watch_checkbox = QCheckBox(UI_TEXT["watch_outlook"])
+    scan_layout.addWidget(watch_checkbox, 3, 0, 1, 2)
     layout.addWidget(scan)
 
     table = QTableWidget(0, 10)
@@ -165,6 +174,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     archive_all_button = QPushButton(UI_TEXT["archive_all_except_review"])
     ignore_button = QPushButton(UI_TEXT["mark_ignored"])
     open_folder_button = QPushButton(UI_TEXT["open_project_folder"])
+    export_html_button = QPushButton(UI_TEXT["export_project_html"])
     report_button = QPushButton(UI_TEXT["export_report"])
     for index, button in enumerate(
         [
@@ -172,6 +182,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             archive_all_button,
             ignore_button,
             open_folder_button,
+            export_html_button,
             report_button,
         ]
     ):
@@ -183,6 +194,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     logs.setPlaceholderText(UI_TEXT["logs"])
     layout.addWidget(logs)
     window.setCentralWidget(central)
+    watch_timer = QTimer(window)
+    watch_timer.setInterval(WATCH_INTERVAL_MS)
 
     def append_log(message: str) -> None:
         logs.append(message)
@@ -422,21 +435,25 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         settings.outlook_root_folder = current_outlook_root_folder()
         settings.selected_year = clean_optional_text(year_input.text())
 
-    def on_scan() -> None:
+    def scan_current_preview() -> list[PreviewRow]:
         nonlocal active_controller
-        try:
-            update_projects_root()
-            if not controller_was_injected:
-                active_controller = build_default_controller(settings)
-                dynamic_window.mailflow_controller = active_controller
-            rows = active_controller.scan_and_preview(
-                PreviewRequest(
-                    account_identifier=selected_account_identifier(),
-                    outlook_root_folder=current_outlook_root_folder(),
-                    year=year_input.text(),
-                    project_number=project_input.text(),
-                )
+        update_projects_root()
+        if not controller_was_injected:
+            active_controller = build_default_controller(settings)
+            dynamic_window.mailflow_controller = active_controller
+        return active_controller.scan_and_preview(
+            PreviewRequest(
+                account_identifier=selected_account_identifier(),
+                outlook_root_folder=current_outlook_root_folder(),
+                year=year_input.text(),
+                project_number=project_input.text(),
             )
+        )
+
+    def on_scan() -> None:
+        try:
+            rows = scan_current_preview()
+            watch_state.reset(rows)
             refresh_table()
             append_log(f"{len(rows)} mails charges en previsualisation.")
         except Exception as exc:
@@ -449,10 +466,70 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         except Exception as exc:
             append_log(f"Erreur export rapport: {exc}")
 
+    def on_export_project_html() -> None:
+        if not active_controller.preview_rows:
+            append_log("Aucun mail en previsualisation.")
+            return
+        try:
+            results = active_controller.export_project_html(overwrite_html=False)
+        except FileExistsError as exc:
+            path = Path(str(exc))
+            if not confirm_html_overwrite(path, parent=window):
+                append_log("Export HTML annule.")
+                return
+            try:
+                results = active_controller.export_project_html(overwrite_html=True)
+            except Exception as retry_exc:
+                append_log(f"Erreur export HTML projet: {retry_exc}")
+                return
+        except Exception as exc:
+            append_log(f"Erreur export HTML projet: {exc}")
+            return
+        append_log(format_project_html_export_result(results))
+
     def on_mark_ignored() -> None:
         active_controller.mark_all_ignored()
         refresh_table()
         append_log("Lignes marquees comme ignorees.")
+
+    def on_watch_toggled(enabled: bool) -> None:
+        if not enabled:
+            watch_timer.stop()
+            append_log("Surveillance Outlook desactivee.")
+            return
+        try:
+            if not active_controller.preview_rows:
+                rows = scan_current_preview()
+                refresh_table()
+                append_log(f"{len(rows)} mails charges pour initialiser la surveillance.")
+            watch_state.reset(active_controller.preview_rows)
+            watch_timer.start()
+            append_log("Surveillance Outlook activee: scan toutes les 5 minutes.")
+        except Exception as exc:
+            watch_checkbox.blockSignals(True)
+            watch_checkbox.setChecked(False)
+            watch_checkbox.blockSignals(False)
+            append_log(f"Impossible d'activer la surveillance Outlook: {exc}")
+
+    def run_watch_scan() -> None:
+        try:
+            rows = scan_current_preview()
+            change = watch_state.update(rows)
+            refresh_table()
+        except Exception as exc:
+            append_log(f"Surveillance Outlook en attente: {exc}")
+            return
+        if change.new_count == 0:
+            return
+        append_log(f"Surveillance Outlook: {change.new_count} nouveau(x) mail(s) detecte(s).")
+        if not confirm_watch_html_update(change.new_count, parent=window):
+            append_log("Mise a jour HTML differee.")
+            return
+        try:
+            results = active_controller.export_project_html(overwrite_html=True)
+            append_log(format_project_html_export_result(results))
+        except Exception as exc:
+            append_log(f"Erreur mise a jour HTML automatique: {exc}")
 
     def selected_table_row_indexes() -> list[int]:
         selection_model = table.selectionModel()
@@ -520,7 +597,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(f"Erreur archivage global: {exc}")
 
     scan_button.clicked.connect(on_scan)
+    watch_checkbox.toggled.connect(on_watch_toggled)
+    watch_timer.timeout.connect(run_watch_scan)
     report_button.clicked.connect(on_export_report)
+    export_html_button.clicked.connect(on_export_project_html)
     ignore_button.clicked.connect(on_mark_ignored)
     archive_button.clicked.connect(on_archive_selection)
     archive_all_button.clicked.connect(on_archive_all_except_review)
@@ -536,6 +616,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_preview_table = table
     dynamic_window.mailflow_logs = logs
     dynamic_window.mailflow_mail_preview = mail_preview
+    dynamic_window.mailflow_export_html_button = export_html_button
+    dynamic_window.mailflow_watch_checkbox = watch_checkbox
+    dynamic_window.mailflow_watch_timer = watch_timer
     dynamic_window.mailflow_account_combo = account_combo
     dynamic_window.mailflow_outlook_root_combo = outlook_root_combo
     dynamic_window.mailflow_projects_root_input = projects_root_input
@@ -582,6 +665,51 @@ def build_archive_confirmation_message(summary: ArchiveSelectionSummary) -> str:
     ]
     if summary.skipped_count:
         lines.insert(1, f"{summary.skipped_count} ligne(s) selectionnee(s) seront ignorees.")
+    return "\n".join(lines)
+
+
+def confirm_html_overwrite(path: Path, *, parent: Any | None = None) -> bool:
+    from PySide6.QtWidgets import QMessageBox
+
+    response = QMessageBox.question(
+        parent,
+        "Mettre a jour le journal HTML",
+        (
+            "Le fichier HTML existe deja:\n"
+            f"{path}\n\n"
+            "Le mettre a jour avec la previsualisation actuelle ?"
+        ),
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    return response == QMessageBox.StandardButton.Yes
+
+
+def confirm_watch_html_update(new_count: int, *, parent: Any | None = None) -> bool:
+    from PySide6.QtWidgets import QMessageBox
+
+    response = QMessageBox.question(
+        parent,
+        "Nouveaux mails detectes",
+        (
+            f"{new_count} nouveau(x) mail(s) ont ete detectes dans Outlook.\n\n"
+            "Mettre a jour le journal HTML projet maintenant ?"
+        ),
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    return response == QMessageBox.StandardButton.Yes
+
+
+def format_project_html_export_result(results: Sequence[object]) -> str:
+    if not results:
+        return "Aucun journal HTML exporte."
+    lines = ["Export HTML termine:"]
+    for result in results:
+        path = getattr(result, "html_path", "")
+        count = getattr(result, "mail_count", 0)
+        attachment_count = len(getattr(result, "attachment_paths", []))
+        lines.append(f"- {count} mail(s), {attachment_count} piece(s) jointe(s): {path}")
     return "\n".join(lines)
 
 

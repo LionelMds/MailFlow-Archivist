@@ -5,9 +5,9 @@ Les releases sont construites par GitHub Actions depuis un tag `v*`.
 ## Publier une release
 
 ```powershell
-git tag v0.1.0
+git tag vX.Y.Z
 git push origin main
-git push origin v0.1.0
+git push origin vX.Y.Z
 ```
 
 Le workflow `Build and Release` lance les tests, construit les archives Windows et macOS,

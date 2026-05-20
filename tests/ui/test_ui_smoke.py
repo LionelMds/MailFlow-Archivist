@@ -24,6 +24,7 @@ from mailflow.ui.main_window import (
     build_archive_confirmation_message,
     build_manual_classification_update,
     format_outlook_account_label,
+    format_project_html_export_result,
     summarize_archive_selection,
 )
 from mailflow.ui.preview_table import ACTION_LABELS, PREVIEW_COLUMNS
@@ -41,6 +42,9 @@ class FakeController:
 
     def export_report(self) -> Path:
         return self.report_path
+
+    def export_project_html(self, *, overwrite_html: bool = False) -> list[object]:
+        return []
 
     def mark_all_ignored(self) -> list[object]:
         self.preview_rows = []
@@ -121,6 +125,8 @@ def make_preview_row(tmp_path: Path, action: PreviewAction) -> PreviewRow:
 
 def test_ui_text_contains_expected_actions() -> None:
     assert UI_TEXT["scan_button"] == "Scanner Outlook"
+    assert UI_TEXT["watch_outlook"] == "Surveillance Outlook"
+    assert UI_TEXT["export_project_html"] == "Exporter HTML projet"
     assert "Destination proposee" in PREVIEW_COLUMNS
     assert ACTION_LABELS[PreviewAction.REVIEW] == "A verifier"
     assert UI_TEXT["archive_all_except_review"] == "Tout archiver sauf a verifier"
@@ -181,6 +187,24 @@ def test_build_manual_classification_update_can_mark_manual_required() -> None:
     assert update.manual_required
 
 
+def test_format_project_html_export_result_lists_paths(tmp_path: Path) -> None:
+    result = type(
+        "ProjectHtmlResult",
+        (),
+        {
+            "mail_count": 2,
+            "attachment_paths": [tmp_path / "plan.pdf"],
+            "html_path": tmp_path / "2025-4893 - Correspondance projet.html",
+        },
+    )()
+
+    message = format_project_html_export_result([result])
+
+    assert "2 mail(s)" in message
+    assert "1 piece(s) jointe(s)" in message
+    assert "Correspondance projet.html" in message
+
+
 def test_main_window_instantiates_when_pyside6_is_available() -> None:
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
@@ -194,5 +218,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert window.windowTitle() == "MailFlow Archivist"
     assert dynamic_window.mailflow_outlook_root_combo.currentText() == "Boite de reception"
     assert dynamic_window.mailflow_mail_preview.isReadOnly()
+    assert dynamic_window.mailflow_watch_checkbox.text() == "Surveillance Outlook"
+    assert dynamic_window.mailflow_watch_timer.interval() == 300000
     window.close()
     app.quit()

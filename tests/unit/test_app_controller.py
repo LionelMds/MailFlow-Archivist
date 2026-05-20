@@ -53,6 +53,24 @@ class FakeArchiveService:
         return ExportResult(msg_path=decision.target_path / "mail.msg", attachment_paths=[])
 
 
+class FakeAttachment:
+    FileName = "plan.pdf"
+
+    def SaveAsFile(self, path: str) -> None:
+        Path(path).write_text("pdf", encoding="utf-8")
+
+
+class FakeAttachmentCollection:
+    Count = 1
+
+    def Item(self, _index: int) -> object:
+        return FakeAttachment()
+
+
+class FakeMailItem:
+    Attachments = FakeAttachmentCollection()
+
+
 class FakeLearningStore:
     def __init__(self) -> None:
         self.signals: list[ManualLearningSignal] = []
@@ -196,6 +214,52 @@ def test_controller_exports_current_preview_report(tmp_path: Path) -> None:
 
     assert path.exists()
     assert "2025-4893" in path.read_text(encoding="utf-8-sig")
+
+
+def test_controller_exports_project_html_from_current_preview(tmp_path: Path) -> None:
+    create_project_folder(tmp_path)
+    row = make_row(tmp_path)
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+    controller.preview_rows = [row]
+    controller.outlook_items = {row.mail.entry_id: FakeMailItem()}
+
+    results = controller.export_project_html()
+
+    assert len(results) == 1
+    assert results[0].mail_count == 1
+    assert results[0].html_path.exists()
+    assert results[0].attachment_paths[0].name == "1-R-Offre - plan.pdf"
+
+
+def test_controller_exports_project_html_only_selected_rows(tmp_path: Path) -> None:
+    create_project_folder(tmp_path)
+    first = make_row(tmp_path, entry_id="ENTRY-1").model_copy(
+        update={"mail": make_mail("ENTRY-1").model_copy(update={"subject": "Premier"})}
+    )
+    second = make_row(tmp_path, entry_id="ENTRY-2")
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+    controller.preview_rows = [first, second]
+    controller.outlook_items = {
+        first.mail.entry_id: FakeMailItem(),
+        second.mail.entry_id: FakeMailItem(),
+    }
+
+    results = controller.export_project_html([1])
+
+    html = results[0].html_path.read_text(encoding="utf-8")
+    assert results[0].mail_count == 1
+    assert "Premier" not in html
+    assert "Offre" in html
 
 
 def test_controller_archive_selection_and_ignore(tmp_path: Path) -> None:

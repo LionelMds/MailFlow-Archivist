@@ -23,9 +23,28 @@ Cette premiere tranche met en place :
 - scanner et exporteur Outlook mockables ;
 - service de scan Outlook par compte, racine, annee et projet optionnel ;
 - pipeline de previsualisation regles + IA + decision ;
+- export HTML projet centralise dans `Correspondance` avec pieces jointes liees ;
+- surveillance Outlook par scan regulier avec confirmation avant mise a jour HTML ;
 - export CSV de rapport sans corps de mails ;
 - squelette UI PySide6 ;
 - tests unitaires et smoke tests.
+
+## Export HTML projet
+
+Le bouton `Exporter HTML projet` cree un journal par projet scanne :
+
+```text
+[Projet]\Correspondance\2025-4893 - Correspondance projet.html
+[Projet]\Correspondance\2025-4893 - pieces jointes\
+```
+
+Le HTML regroupe les mails envoyes et recus, avec recherche, filtres et liens relatifs
+vers les pieces jointes. Les pieces jointes deja presentes sont reutilisees et ne sont
+pas ecrasees.
+
+La case `Surveillance Outlook` relance un scan toutes les 5 minutes tant que
+l'application reste ouverte. En cas de nouveaux mails, MailFlow demande confirmation
+avant de mettre a jour le journal HTML.
 
 ## Commandes utiles
 
@@ -46,9 +65,9 @@ Le workflow GitHub Actions `.github/workflows/release.yml` construit les artefac
 Pour publier une release :
 
 ```powershell
-git tag v0.1.0
+git tag vX.Y.Z
 git push origin main
-git push origin v0.1.0
+git push origin vX.Y.Z
 ```
 
 Voir `docs/release.md` pour les details.

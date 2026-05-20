@@ -22,6 +22,10 @@ from mailflow.core.manual_review import (
     LearnedMisleadingTerm,
     apply_manual_classification,
 )
+from mailflow.core.project_html_exporter import (
+    ProjectHtmlExportResult,
+    export_project_correspondence_html,
+)
 from mailflow.core.project_paths import local_project_path
 from mailflow.core.reporting import export_preview_report
 from mailflow.core.scan_service import OutlookScanService, ScanRequest
@@ -126,6 +130,24 @@ class AppController:
     def export_report(self, path: Path | None = None) -> Path:
         target = path or self._default_report_path()
         return export_preview_report(self.preview_rows, target)
+
+    def export_project_html(
+        self,
+        row_indexes: Sequence[int] | None = None,
+        *,
+        overwrite_html: bool = False,
+    ) -> list[ProjectHtmlExportResult]:
+        rows = (
+            selected_rows(self.preview_rows, row_indexes)
+            if row_indexes is not None
+            else self.preview_rows
+        )
+        return export_project_correspondence_html(
+            rows,
+            self.outlook_items,
+            self.projects_root,
+            overwrite_html=overwrite_html,
+        )
 
     def apply_manual_update(
         self,
