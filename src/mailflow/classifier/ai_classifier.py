@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 
 from mailflow.classifier.prompt import SYSTEM_PROMPT, build_ai_payload
-from mailflow.models import AiMailClassification, MailMetadata
+from mailflow.models import AiMailClassification, Direction, MailMetadata
 
 
 class ResponsesClient(Protocol):
@@ -14,6 +16,13 @@ class ResponsesClient(Protocol):
 
 class OpenAiClient(Protocol):
     responses: ResponsesClient
+
+
+@dataclass(frozen=True)
+class AiConnectionCheck:
+    ok: bool
+    message: str
+    classification: AiMailClassification | None = None
 
 
 class AiClassifier:
@@ -59,6 +68,23 @@ class AiClassifier:
             raise TypeError(msg)
         return parsed
 
+    def check_connection(self) -> AiConnectionCheck:
+        try:
+            classification = self.classify(_connection_test_mail(), include_body=False)
+        except Exception as exc:
+            return AiConnectionCheck(
+                ok=False,
+                message=_safe_error_message(exc, secret=self._api_key),
+            )
+        return AiConnectionCheck(
+            ok=True,
+            message=(
+                "Connexion OpenAI OK "
+                f"({classification.mail_type}, {classification.confidence:.0%})."
+            ),
+            classification=classification,
+        )
+
     def _client_or_create(self) -> Any:
         if self._client is not None:
             return self._client
@@ -69,3 +95,28 @@ class AiClassifier:
             raise RuntimeError(msg) from exc
         self._client = OpenAI(api_key=self._api_key)
         return self._client
+
+
+def _connection_test_mail() -> MailMetadata:
+    return MailMetadata(
+        entry_id="MAILFLOW-OPENAI-CONNECTION-TEST",
+        project_number="2026-0000",
+        outlook_folder="Test MailFlow",
+        direction=Direction.RECEIVED,
+        subject="Test MailFlow Archivist - demande de prix",
+        sender_name="MailFlow",
+        sender_email="test@example.invalid",
+        recipients=["mailflow@example.invalid"],
+        sent_at=datetime(2026, 1, 1, 12, 0),
+        attachment_names=["test-offre.pdf"],
+        body_excerpt="",
+    )
+
+
+def _safe_error_message(exc: Exception, *, secret: str) -> str:
+    message = str(exc).strip() or exc.__class__.__name__
+    if secret:
+        message = message.replace(secret, "[cle masquee]")
+    if len(message) > 220:
+        message = f"{message[:217]}..."
+    return f"Echec OpenAI: {message}"

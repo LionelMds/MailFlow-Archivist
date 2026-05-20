@@ -23,7 +23,7 @@ Cette premiere tranche met en place :
 - scanner et exporteur Outlook mockables ;
 - service de scan Outlook par compte, racine, annee et projet optionnel ;
 - pipeline de previsualisation regles + IA + decision ;
-- parametrage IA dans l'interface avec cle OpenAI stockee dans `keyring` ;
+- parametrage IA dans l'interface avec cle OpenAI stockee dans `keyring` et test visuel ;
 - export HTML projet centralise dans `Correspondance` avec pieces jointes liees ;
 - surveillance Outlook par scan regulier avec confirmation avant mise a jour HTML ;
 - export CSV de rapport sans corps de mails ;
@@ -40,8 +40,9 @@ Le bouton `Exporter HTML projet` cree un journal par projet scanne :
 ```
 
 Le HTML regroupe les mails envoyes et recus, avec recherche, filtres et liens relatifs
-vers les pieces jointes. Les pieces jointes deja presentes sont reutilisees et ne sont
-pas ecrasees.
+explicites vers les pieces jointes. Les liens s'ouvrent dans un nouvel onglet/fenetre
+pour mieux fonctionner aussi sur macOS. Les pieces jointes deja presentes sont
+reutilisees et ne sont pas ecrasees.
 
 Les images integrees dans le corps des mails, comme les logos de signature, ne sont pas
 exportees comme pieces jointes. Elles sont affichees directement dans le journal HTML.
@@ -65,9 +66,13 @@ Le mode IA se configure dans le bloc `Configuration` :
 Le modele par defaut est `gpt-5.4-nano`, choisi pour un usage de classification
 rapide et economique. Il peut etre remplace dans le champ `Modele IA`.
 
-La cle OpenAI est enregistree dans le coffre Windows via `keyring`, jamais dans le
-fichier JSON ni dans les logs. L'option d'envoi du corps peut etre desactivee pour
-n'envoyer que sujet, metadonnees et noms des pieces jointes.
+La cle OpenAI est enregistree dans le coffre du systeme via `keyring`, jamais dans le
+fichier JSON ni dans les logs. Le bouton `Tester IA` lance un mini appel structure sur
+un mail fictif et affiche un statut colore. L'option d'envoi du corps peut etre
+desactivee pour n'envoyer que sujet, metadonnees et noms des pieces jointes.
+
+Quand l'IA intervient, l'apercu du mail affiche la decision IA, son resume court et
+l'explication en quelques mots.
 
 ## Commandes utiles
 

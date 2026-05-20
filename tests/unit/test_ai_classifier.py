@@ -4,7 +4,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from mailflow.classifier.ai_classifier import AiClassifier
+from mailflow.classifier.ai_classifier import AiClassifier, _safe_error_message
 from mailflow.models import AiMailClassification, Direction, MailMetadata
 
 
@@ -56,3 +56,35 @@ def test_ai_classifier_uses_structured_output_and_metadata_only() -> None:
     assert '"project_number": "2025-4893"' in user_payload
     assert "offre.xlsx" in user_payload
     assert "+41 22" not in user_payload
+
+
+def test_ai_classifier_connection_check_uses_synthetic_structured_request() -> None:
+    parsed = AiMailClassification(
+        archive=True,
+        usefulness="normal",
+        mail_type="demande_de_prix",
+        interlocutor="fournisseur",
+        target_folder="Fournisseurs/Demande de prix",
+        confidence=0.91,
+        short_summary="Test OK.",
+        reason="Le test retourne une classification structuree.",
+    )
+    responses = FakeResponses(parsed)
+    classifier = AiClassifier(api_key="sk-test-secret", client=SimpleNamespace(responses=responses))
+
+    check = classifier.check_connection()
+
+    assert check.ok
+    assert check.classification == parsed
+    assert "Connexion OpenAI OK" in check.message
+    assert responses.kwargs is not None
+    user_payload = responses.kwargs["input"][1]["content"]
+    assert "MAILFLOW-OPENAI-CONNECTION-TEST" not in user_payload
+    assert "demande de prix" in user_payload
+
+
+def test_ai_error_message_redacts_api_key() -> None:
+    message = _safe_error_message(RuntimeError("bad sk-test-secret"), secret="sk-test-secret")
+
+    assert "sk-test-secret" not in message
+    assert "[cle masquee]" in message

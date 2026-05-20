@@ -20,10 +20,12 @@ def preview_row_to_html(row: PreviewRow) -> str:
     terms = classification_highlight_terms(row)
     highlighted = highlight_terms_as_html(text, terms)
     reason = html.escape(row.decision.reason)
+    ai_details = ai_decision_html(row)
     return (
         "<div style='font-family: Segoe UI, Arial, sans-serif; font-size: 10pt;'>"
         f"{highlighted}"
         f"<p><b>Raison:</b> {reason}</p>"
+        f"{ai_details}"
         "</div>"
     )
 
@@ -49,10 +51,32 @@ def preview_row_to_text(row: PreviewRow) -> str:
 
 
 def classification_highlight_terms(row: PreviewRow) -> list[str]:
-    terms = list(row.classification.rule.matched_terms)
-    if row.classification.ai is not None:
-        terms.extend([row.classification.ai.mail_type, row.classification.ai.interlocutor])
-    return _dedupe_terms(terms)
+    return _dedupe_terms(list(row.classification.rule.matched_terms))
+
+
+def ai_decision_html(row: PreviewRow) -> str:
+    ai = row.classification.ai
+    if ai is None:
+        return (
+            "<p style='color:#5f6b7a;'>"
+            "<b>Decision IA:</b> IA non appelee pour cette ligne."
+            "</p>"
+        )
+    action = "archiver" if ai.archive else "ne pas archiver"
+    summary = html.escape(
+        f"{action} | {ai.mail_type} | {ai.interlocutor} | "
+        f"{ai.target_folder} | {ai.confidence:.0%}"
+    )
+    short_summary = html.escape(ai.short_summary)
+    reason = html.escape(ai.reason)
+    return (
+        "<div style='border-left:3px solid #1f6feb; "
+        "padding:6px 10px; margin:8px 0; background:#f6f8ff;'>"
+        f"<p style='margin:0 0 4px;'><b>Decision IA:</b> {summary}</p>"
+        f"<p style='margin:0 0 4px;'><b>Resume IA:</b> {short_summary}</p>"
+        f"<p style='margin:0;'><b>Pourquoi:</b> {reason}</p>"
+        "</div>"
+    )
 
 
 def highlight_terms_as_html(text: str, terms: list[str]) -> str:

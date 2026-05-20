@@ -33,6 +33,7 @@ UI_TEXT = {
     "watch_outlook": "Surveillance Outlook",
     "save_settings": "Enregistrer parametres",
     "save_openai_key": "Enregistrer cle",
+    "test_openai_key": "Tester IA",
     "archive_selection": "Archiver selection",
     "archive_all_except_review": "Tout archiver sauf a verifier",
     "mark_ignored": "Marquer comme ignore",
@@ -72,7 +73,7 @@ def run_desktop_app(settings: AppSettings) -> int:
 
 
 def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
-    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import Qt, QTimer
     from PySide6.QtGui import QAction, QColor
     from PySide6.QtWidgets import (
         QAbstractItemView,
@@ -86,21 +87,25 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QGridLayout,
         QGroupBox,
         QHBoxLayout,
+        QHeaderView,
         QLabel,
         QLineEdit,
         QMainWindow,
         QMenu,
         QMessageBox,
         QPushButton,
+        QSplitter,
         QStyle,
         QSystemTrayIcon,
         QTableWidget,
         QTableWidgetItem,
         QTextEdit,
+        QToolButton,
         QVBoxLayout,
         QWidget,
     )
 
+    from mailflow.classifier.ai_classifier import AiClassifier
     from mailflow.config import (
         get_openai_api_key,
         save_settings,
@@ -141,8 +146,40 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     watch_state = WatchState()
     central = QWidget()
     layout = QVBoxLayout(central)
+    main_splitter = QSplitter(Qt.Orientation.Vertical)
+    section_toggles: dict[str, Any] = {}
+    layout.addWidget(main_splitter)
 
-    config = QGroupBox(UI_TEXT["configuration"])
+    def make_collapsible_section(title: str, content: Any) -> Any:
+        section = QWidget()
+        section_layout = QVBoxLayout(section)
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setSpacing(2)
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(4, 2, 4, 2)
+        toggle = QToolButton()
+        toggle.setAutoRaise(True)
+        toggle.setArrowType(Qt.ArrowType.DownArrow)
+        title_label = QLabel(title)
+        title_label.setStyleSheet("font-weight: 600;")
+        header_layout.addWidget(toggle)
+        header_layout.addWidget(title_label)
+        header_layout.addStretch(1)
+        section_layout.addWidget(header)
+        section_layout.addWidget(content)
+
+        def toggle_content() -> None:
+            content.setVisible(not content.isVisible())
+            toggle.setArrowType(
+                Qt.ArrowType.DownArrow if content.isVisible() else Qt.ArrowType.RightArrow
+            )
+
+        toggle.clicked.connect(toggle_content)
+        section_toggles[title] = toggle
+        return section
+
+    config = QGroupBox()
     grid = QGridLayout(config)
     grid.addWidget(QLabel("Racine projets locale"), 0, 0)
     projects_root_input = QLineEdit(str(settings.local_projects_root))
@@ -178,9 +215,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     openai_key_input.setEchoMode(QLineEdit.EchoMode.Password)
     openai_key_input.setPlaceholderText("Coller une nouvelle cle puis enregistrer")
     save_openai_key_button = QPushButton(UI_TEXT["save_openai_key"])
+    test_openai_key_button = QPushButton(UI_TEXT["test_openai_key"])
     openai_key_status = QLabel(openai_key_status_text(get_openai_api_key() is not None))
+    openai_key_status.setStyleSheet(openai_key_status_style(get_openai_api_key() is not None))
     openai_key_layout.addWidget(openai_key_input)
     openai_key_layout.addWidget(save_openai_key_button)
+    openai_key_layout.addWidget(test_openai_key_button)
     openai_key_layout.addWidget(openai_key_status)
     grid.addWidget(openai_key_widget, 5, 1)
     ai_include_body_checkbox = QCheckBox("Envoyer l'extrait nettoye du corps a l'IA")
@@ -191,9 +231,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     grid.addWidget(privacy_phone_checkbox, 7, 1)
     save_settings_button = QPushButton(UI_TEXT["save_settings"])
     grid.addWidget(save_settings_button, 8, 1)
-    layout.addWidget(config)
+    main_splitter.addWidget(make_collapsible_section(UI_TEXT["configuration"], config))
 
-    scan = QGroupBox(UI_TEXT["scan"])
+    scan = QGroupBox()
     scan_layout = QGridLayout(scan)
     scan_layout.addWidget(QLabel("Annee"), 0, 0)
     year_input = QLineEdit(settings.selected_year or "")
@@ -205,23 +245,26 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     scan_layout.addWidget(scan_button, 2, 0, 1, 2)
     watch_checkbox = QCheckBox(UI_TEXT["watch_outlook"])
     scan_layout.addWidget(watch_checkbox, 3, 0, 1, 2)
-    layout.addWidget(scan)
+    main_splitter.addWidget(make_collapsible_section(UI_TEXT["scan"], scan))
 
-    table = QTableWidget(0, 10)
+    table = QTableWidget(0, len(PREVIEW_COLUMNS))
     table.setHorizontalHeaderLabels(list(PREVIEW_COLUMNS))
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-    layout.addWidget(table)
+    table.setMinimumHeight(260)
+    table.horizontalHeader().setSectionsMovable(True)
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    main_splitter.addWidget(make_collapsible_section(UI_TEXT["preview"], table))
 
-    preview = QGroupBox("Apercu du mail")
+    preview = QGroupBox()
     preview_layout = QVBoxLayout(preview)
     mail_preview = QTextEdit()
     mail_preview.setReadOnly(True)
     mail_preview.setMinimumHeight(150)
     preview_layout.addWidget(mail_preview)
-    layout.addWidget(preview)
+    main_splitter.addWidget(make_collapsible_section("Apercu du mail", preview))
 
-    actions = QGroupBox(UI_TEXT["actions"])
+    actions = QGroupBox()
     actions_layout = QGridLayout(actions)
     archive_button = QPushButton(UI_TEXT["archive_selection"])
     archive_all_button = QPushButton(UI_TEXT["archive_all_except_review"])
@@ -240,12 +283,19 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         ]
     ):
         actions_layout.addWidget(button, index // 3, index % 3)
-    layout.addWidget(actions)
+    main_splitter.addWidget(make_collapsible_section(UI_TEXT["actions"], actions))
 
     logs = QTextEdit()
     logs.setReadOnly(True)
     logs.setPlaceholderText(UI_TEXT["logs"])
-    layout.addWidget(logs)
+    main_splitter.addWidget(make_collapsible_section(UI_TEXT["logs"], logs))
+    main_splitter.setStretchFactor(0, 0)
+    main_splitter.setStretchFactor(1, 0)
+    main_splitter.setStretchFactor(2, 6)
+    main_splitter.setStretchFactor(3, 3)
+    main_splitter.setStretchFactor(4, 0)
+    main_splitter.setStretchFactor(5, 2)
+    main_splitter.setSizes([210, 125, 430, 190, 95, 150])
     window.setCentralWidget(central)
     watch_timer = QTimer(window)
     watch_timer.setInterval(WATCH_INTERVAL_MS)
@@ -272,8 +322,21 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     def has_openai_api_key() -> bool:
         return get_openai_api_key() is not None
 
-    def update_openai_key_status() -> None:
-        openai_key_status.setText(openai_key_status_text(has_openai_api_key()))
+    def set_openai_key_status(
+        *,
+        has_key: bool,
+        valid: bool | None = None,
+        testing: bool = False,
+    ) -> None:
+        openai_key_status.setText(
+            openai_key_status_text(has_key=has_key, valid=valid, testing=testing)
+        )
+        openai_key_status.setStyleSheet(
+            openai_key_status_style(has_key=has_key, valid=valid, testing=testing)
+        )
+
+    def update_openai_key_status(*, valid: bool | None = None) -> None:
+        set_openai_key_status(has_key=has_openai_api_key(), valid=valid)
 
     def show_window_from_tray() -> None:
         window.show()
@@ -580,10 +643,27 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         try:
             set_openai_api_key(api_key)
             openai_key_input.clear()
-            update_openai_key_status()
-            append_log("Cle OpenAI enregistree dans le coffre Windows.")
+            update_openai_key_status(valid=None)
+            append_log("Cle OpenAI enregistree dans le coffre du systeme.")
         except Exception as exc:
             append_log(f"Erreur enregistrement cle OpenAI: {exc}")
+
+    def test_openai_key_from_input() -> None:
+        api_key = clean_optional_text(openai_key_input.text()) or get_openai_api_key()
+        if api_key is None:
+            set_openai_key_status(has_key=False, valid=False)
+            append_log("Aucune cle OpenAI a tester.")
+            return
+        model = clean_optional_text(ai_model_input.text()) or "gpt-5.4-nano"
+        set_openai_key_status(has_key=True, testing=True)
+        test_openai_key_button.setEnabled(False)
+        QApplication.processEvents()
+        try:
+            result = AiClassifier(api_key=api_key, model=model).check_connection()
+        finally:
+            test_openai_key_button.setEnabled(True)
+        set_openai_key_status(has_key=True, valid=result.ok)
+        append_log(f"Test OpenAI: {result.message}")
 
     def scan_current_preview() -> list[PreviewRow]:
         nonlocal active_controller
@@ -784,6 +864,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     report_button.clicked.connect(on_export_report)
     export_html_button.clicked.connect(on_export_project_html)
     save_openai_key_button.clicked.connect(save_openai_key_from_input)
+    test_openai_key_button.clicked.connect(test_openai_key_from_input)
     save_settings_button.clicked.connect(save_current_settings)
     ignore_button.clicked.connect(on_mark_ignored)
     archive_button.clicked.connect(on_archive_selection)
@@ -809,6 +890,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_openai_key_input = openai_key_input
     dynamic_window.mailflow_openai_key_status = openai_key_status
     dynamic_window.mailflow_save_openai_key_button = save_openai_key_button
+    dynamic_window.mailflow_test_openai_key_button = test_openai_key_button
     dynamic_window.mailflow_ai_include_body_checkbox = ai_include_body_checkbox
     dynamic_window.mailflow_privacy_phone_checkbox = privacy_phone_checkbox
     dynamic_window.mailflow_save_settings_button = save_settings_button
@@ -819,6 +901,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_account_combo = account_combo
     dynamic_window.mailflow_outlook_root_combo = outlook_root_combo
     dynamic_window.mailflow_projects_root_input = projects_root_input
+    dynamic_window.mailflow_main_splitter = main_splitter
+    dynamic_window.mailflow_section_toggles = section_toggles
     return window
 
 
@@ -846,8 +930,46 @@ def ai_mode_label(mode: AiMode) -> str:
     return labels[mode]
 
 
-def openai_key_status_text(has_key: bool) -> str:
-    return "Cle enregistree" if has_key else "Aucune cle"
+def openai_key_status_text(
+    has_key: bool,
+    *,
+    valid: bool | None = None,
+    testing: bool = False,
+) -> str:
+    if testing:
+        return "Test IA en cours..."
+    if not has_key:
+        return "Aucune cle"
+    if valid is True:
+        return "Cle valide - IA OK"
+    if valid is False:
+        return "Cle invalide ou indisponible"
+    return "Cle enregistree (non testee)"
+
+
+def openai_key_status_style(
+    has_key: bool,
+    *,
+    valid: bool | None = None,
+    testing: bool = False,
+) -> str:
+    if testing:
+        color = "#8a5a00"
+        background = "#fff8e6"
+    elif not has_key or valid is False:
+        color = "#9f1239"
+        background = "#fff1f2"
+    elif valid is True:
+        color = "#166534"
+        background = "#ecfdf3"
+    else:
+        color = "#334155"
+        background = "#f1f5f9"
+    return (
+        f"QLabel {{ color: {color}; background: {background}; "
+        "border: 1px solid rgba(15, 23, 42, 0.12); border-radius: 4px; "
+        "padding: 3px 6px; }}"
+    )
 
 
 def set_combo_value_by_data(combo: Any, value: str) -> None:

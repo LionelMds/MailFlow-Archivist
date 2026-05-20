@@ -32,8 +32,16 @@ Dans `Configuration`, choisir le mode IA :
 - `tout classifier` pour demander une classification IA sur tous les mails.
 
 Coller la cle OpenAI dans `Cle API OpenAI`, puis cliquer sur `Enregistrer cle`.
-La cle est stockee dans le coffre Windows et n'est pas sauvegardee dans le JSON.
+La cle est stockee dans le coffre du systeme et n'est pas sauvegardee dans le JSON.
 Le modele par defaut est `gpt-5.4-nano`; il peut etre remplace dans `Modele IA`.
+
+Le bouton `Tester IA` verifie la cle et le modele avec un mail fictif. Le statut
+s'affiche directement a cote du champ : non testee, test en cours, valide ou invalide.
+Ce test ne lit aucun mail Outlook.
+
+Dans l'apercu du mail selectionne, MailFlow affiche aussi la decision IA lorsqu'elle a
+ete appelee : action proposee, type, interlocuteur, dossier cible, confiance, resume et
+raison courte.
 
 Options de confidentialite :
 
@@ -60,7 +68,9 @@ Sortie attendue :
 ```
 
 Le fichier HTML est mis a jour uniquement apres confirmation. Les pieces jointes
-existantes sont conservees.
+existantes sont conservees. Les liens vers les pieces jointes sont relatifs au fichier
+HTML, prefixes par `./` et ouverts dans un nouvel onglet/fenetre pour mieux fonctionner
+sur Windows et macOS.
 
 Les images integrees au corps du mail sont ignorees dans la liste des pieces jointes
 et affichees directement dans le HTML. Les vraies images jointes, par exemple une photo

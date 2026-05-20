@@ -290,6 +290,12 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       font-size: 13px;
       line-height: 1.45;
     }}
+    .ai-meta {{
+      border-left: 3px solid var(--accent);
+      padding: 6px 10px;
+      background: #f6f8ff;
+      color: #334155;
+    }}
     .chips {{
       display: flex;
       flex-wrap: wrap;
@@ -444,6 +450,7 @@ def _render_mail_card(entry: HtmlMailEntry) -> str:
     recipients = ", ".join(mail.recipients) if mail.recipients else "-"
     attachments = _render_attachments(entry.attachments)
     inline_images = _render_inline_images(entry.inline_images)
+    ai_meta = _render_ai_meta(row)
     search_text = " ".join(
         [
             mail.project_number,
@@ -455,6 +462,7 @@ def _render_mail_card(entry: HtmlMailEntry) -> str:
             decision.mail_type.value,
             decision.interlocutor.value,
             decision.reason,
+            _ai_search_text(row),
         ]
     ).lower()
     review_class = " review" if row.action.value == "review" or decision.requires_review else ""
@@ -484,6 +492,7 @@ def _render_mail_card(entry: HtmlMailEntry) -> str:
           <p class="excerpt">{_e(mail.body_excerpt or "(Aucun extrait disponible)")}</p>
           {inline_images}
           <div class="meta">Raison: {_e(decision.reason)}</div>
+          {ai_meta}
           {attachments}
         </div>
       </article>
@@ -509,8 +518,41 @@ def _render_attachments(attachments: list[HtmlAttachmentLink]) -> str:
         if attachment.href is None:
             links.append(f'<span class="attachment-missing">{label} (non exportee)</span>')
         else:
-            links.append(f'<a href="{_e(attachment.href)}">{label}</a>')
+            links.append(
+                f'<a href="{_e(attachment.href)}" target="_blank" '
+                f'rel="noopener">{label}</a>'
+            )
     return f'<div class="attachments">{"".join(links)}</div>'
+
+
+def _render_ai_meta(row: PreviewRow) -> str:
+    ai = row.classification.ai
+    if ai is None:
+        return ""
+    action = "archiver" if ai.archive else "ne pas archiver"
+    return (
+        '<div class="meta ai-meta">'
+        f"<b>Decision IA:</b> {_e(action)} - {_e(ai.mail_type)} - "
+        f"{_e(ai.interlocutor)} - {_e(ai.target_folder)} - {ai.confidence:.0%}<br>"
+        f"<b>Resume IA:</b> {_e(ai.short_summary)}<br>"
+        f"<b>Pourquoi:</b> {_e(ai.reason)}"
+        "</div>"
+    )
+
+
+def _ai_search_text(row: PreviewRow) -> str:
+    ai = row.classification.ai
+    if ai is None:
+        return ""
+    return " ".join(
+        [
+            ai.mail_type,
+            ai.interlocutor,
+            ai.target_folder,
+            ai.short_summary,
+            ai.reason,
+        ]
+    )
 
 
 def _render_options(values: list[str]) -> str:
@@ -533,7 +575,9 @@ def _project_html_path(projects_root: Path, project_number: str) -> Path:
 
 
 def _relative_attachment_href(attachment_dir: Path, attachment_path: Path) -> str:
-    return "/".join([quote(attachment_dir.name), quote(attachment_path.name)])
+    return "./" + "/".join(
+        [quote(attachment_dir.name, safe=""), quote(attachment_path.name, safe="")]
+    )
 
 
 def _inline_image_from_attachment(

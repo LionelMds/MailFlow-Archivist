@@ -27,6 +27,7 @@ from mailflow.ui.main_window import (
     build_manual_classification_update,
     format_outlook_account_label,
     format_project_html_export_result,
+    openai_key_status_style,
     openai_key_status_text,
     should_hide_to_tray,
     summarize_archive_selection,
@@ -148,8 +149,11 @@ def test_ai_settings_labels_are_french() -> None:
     assert ai_mode_label(AiMode.DISABLED) == "desactivee"
     assert ai_mode_label(AiMode.AMBIGUOUS_ONLY) == "ambigu seulement"
     assert ai_mode_label(AiMode.ALL) == "tout classifier"
-    assert openai_key_status_text(True) == "Cle enregistree"
+    assert openai_key_status_text(True) == "Cle enregistree (non testee)"
+    assert openai_key_status_text(True, valid=True) == "Cle valide - IA OK"
+    assert openai_key_status_text(True, valid=False) == "Cle invalide ou indisponible"
     assert openai_key_status_text(False) == "Aucune cle"
+    assert "#166534" in openai_key_status_style(True, valid=True)
 
 
 def test_summarize_archive_selection_counts_ready_and_skipped_rows(tmp_path: Path) -> None:
@@ -258,6 +262,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_ai_mode_combo.currentData() == AiMode.AMBIGUOUS_ONLY.value
     assert dynamic_window.mailflow_ai_model_input.text() == "gpt-5.4-nano"
     assert dynamic_window.mailflow_openai_key_input.echoMode() == QLineEdit.EchoMode.Password
+    assert dynamic_window.mailflow_test_openai_key_button.text() == "Tester IA"
     assert dynamic_window.mailflow_ai_include_body_checkbox.isChecked()
     assert dynamic_window.mailflow_watch_checkbox.text() == "Surveillance Outlook"
     assert dynamic_window.mailflow_watch_timer.interval() == 300000
@@ -265,5 +270,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_tray_open_action.text() == "Ouvrir MailFlow"
     assert dynamic_window.mailflow_tray_watch_action.isCheckable()
     assert dynamic_window.mailflow_tray_quit_action.text() == "Quitter"
+    assert dynamic_window.mailflow_main_splitter.count() == 6
+    assert "Previsualisation" in dynamic_window.mailflow_section_toggles
     window.close()
     app.quit()

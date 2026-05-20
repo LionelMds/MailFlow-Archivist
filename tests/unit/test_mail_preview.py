@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from mailflow.models import (
+    AiMailClassification,
     ArchiveDecision,
     ClassificationResult,
     Direction,
@@ -14,7 +15,11 @@ from mailflow.models import (
     PreviewRow,
     RuleClassification,
 )
-from mailflow.ui.mail_preview import classification_highlight_terms, preview_row_to_html
+from mailflow.ui.mail_preview import (
+    ai_decision_html,
+    classification_highlight_terms,
+    preview_row_to_html,
+)
 
 
 def make_row(tmp_path: Path) -> PreviewRow:
@@ -82,3 +87,30 @@ def test_classification_highlight_terms_deduplicates_terms(tmp_path: Path) -> No
     )
 
     assert classification_highlight_terms(row) == ["offre", "offerte"]
+
+
+def test_preview_row_to_html_shows_ai_decision_when_available(tmp_path: Path) -> None:
+    row = make_row(tmp_path)
+    ai = AiMailClassification(
+        archive=True,
+        usefulness="normal",
+        mail_type="devis",
+        interlocutor="fournisseur",
+        target_folder="Fournisseurs/Demande de prix",
+        confidence=0.88,
+        short_summary="Offre fournisseur.",
+        reason="Le sujet indique une offre.",
+    )
+    row = row.model_copy(
+        update={"classification": row.classification.model_copy(update={"ai": ai})}
+    )
+
+    rendered = preview_row_to_html(row)
+
+    assert "Decision IA:" in rendered
+    assert "Offre fournisseur." in rendered
+    assert "Le sujet indique une offre." in rendered
+
+
+def test_ai_decision_html_says_when_ai_was_not_called(tmp_path: Path) -> None:
+    assert "IA non appelee" in ai_decision_html(make_row(tmp_path))
