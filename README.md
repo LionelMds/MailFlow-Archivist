@@ -43,6 +43,9 @@ Le HTML regroupe les mails envoyes et recus, avec recherche, filtres et liens re
 vers les pieces jointes. Les pieces jointes deja presentes sont reutilisees et ne sont
 pas ecrasees.
 
+Les images integrees dans le corps des mails, comme les logos de signature, ne sont pas
+exportees comme pieces jointes. Elles sont affichees directement dans le journal HTML.
+
 La case `Surveillance Outlook` relance un scan toutes les 5 minutes tant que
 l'application reste ouverte. En cas de nouveaux mails, MailFlow demande confirmation
 avant de mettre a jour le journal HTML.

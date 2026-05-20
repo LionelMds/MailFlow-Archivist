@@ -12,13 +12,31 @@ from mailflow.models import (
     MailMetadata,
     MailType,
 )
+from mailflow.outlook.attachments import PR_ATTACH_CONTENT_ID
 from mailflow.outlook.exporter import AttachmentConflictPolicy, OutlookExporter
 
 
+class FakePropertyAccessor:
+    def __init__(self, values: dict[str, object] | None = None) -> None:
+        self.values = values or {}
+
+    def GetProperty(self, schema: str) -> object:
+        if schema not in self.values:
+            raise RuntimeError("missing property")
+        return self.values[schema]
+
+
 class FakeAttachment:
-    def __init__(self, filename: str, content: str) -> None:
+    def __init__(
+        self,
+        filename: str,
+        content: str,
+        *,
+        properties: dict[str, object] | None = None,
+    ) -> None:
         self.FileName = filename
         self.content = content
+        self.PropertyAccessor = FakePropertyAccessor(properties)
 
     def SaveAsFile(self, path: str) -> None:
         Path(path).write_text(self.content, encoding="utf-8")
@@ -34,8 +52,8 @@ class FakeCollection:
 
 
 class FakeMailItem:
-    def __init__(self) -> None:
-        self.Attachments = FakeCollection([FakeAttachment("plan.pdf", "pdf")])
+    def __init__(self, attachments: list[object] | None = None) -> None:
+        self.Attachments = FakeCollection(attachments or [FakeAttachment("plan.pdf", "pdf")])
         self.saved_as: Path | None = None
 
     def SaveAs(self, path: str, _format: int) -> None:
@@ -126,3 +144,19 @@ def test_export_attachment_creates_suffixed_copy_on_conflict(tmp_path: Path) -> 
     )
 
     assert result.attachment_paths[0].name == "2-R-Offre garde-corps - plan.pdf"
+
+
+def test_export_mail_skips_inline_images_as_separate_attachments(tmp_path: Path) -> None:
+    item = FakeMailItem(
+        [
+            FakeAttachment("logo.png", "image", properties={PR_ATTACH_CONTENT_ID: "cid-logo"}),
+            FakeAttachment("plan.pdf", "pdf"),
+        ]
+    )
+
+    result = OutlookExporter().export_mail(item, metadata(), decision(tmp_path))
+
+    assert [path.name for path in result.attachment_paths] == [
+        "1-R-Offre garde-corps - plan.pdf"
+    ]
+    assert not list(tmp_path.glob("*logo*"))

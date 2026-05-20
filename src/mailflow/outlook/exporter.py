@@ -9,6 +9,10 @@ from pydantic import BaseModel, ConfigDict
 from mailflow.core.filenames import build_attachment_filename, suffix_copy_name
 from mailflow.core.mail_file_plan import planned_msg_path
 from mailflow.models import ArchiveDecision, MailMetadata
+from mailflow.outlook.attachments import (
+    attachment_display_name,
+    is_inline_image_attachment,
+)
 from mailflow.outlook.scanner import iter_com_collection
 
 OL_MSG = 3
@@ -65,11 +69,9 @@ class OutlookExporter:
             return []
         saved: list[Path] = []
         for attachment in attachments:
-            original_name = str(
-                getattr(attachment, "FileName", None)
-                or getattr(attachment, "DisplayName", None)
-                or "piece_jointe"
-            )
+            if is_inline_image_attachment(attachment):
+                continue
+            original_name = attachment_display_name(attachment)
             target = msg_path.parent / build_attachment_filename(msg_path.stem, original_name)
             resolved_target = _resolve_attachment_conflict(target, attachment_policy)
             if resolved_target is None:

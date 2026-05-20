@@ -62,6 +62,10 @@ Sortie attendue :
 Le fichier HTML est mis a jour uniquement apres confirmation. Les pieces jointes
 existantes sont conservees.
 
+Les images integrees au corps du mail sont ignorees dans la liste des pieces jointes
+et affichees directement dans le HTML. Les vraies images jointes, par exemple une photo
+de chantier ajoutee comme fichier, restent exportees comme pieces jointes.
+
 ## Surveillance Outlook
 
 La case `Surveillance Outlook` garde l'application active pendant la journee et relance

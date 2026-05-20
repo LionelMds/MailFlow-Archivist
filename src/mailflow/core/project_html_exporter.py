@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import base64
 import html
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 from mailflow.core.filenames import build_archive_stem, build_attachment_filename
 from mailflow.core.project_paths import local_project_path
 from mailflow.models import Direction, PreviewRow
+from mailflow.outlook.attachments import (
+    attachment_display_name,
+    attachment_mime_type,
+    is_inline_image_attachment,
+)
 from mailflow.outlook.scanner import iter_com_collection
 
 
@@ -17,6 +25,12 @@ class HtmlAttachmentLink:
     name: str
     href: str | None
     path: Path | None
+
+
+@dataclass(frozen=True)
+class HtmlInlineImage:
+    name: str
+    data_uri: str
 
 
 @dataclass(frozen=True)
@@ -33,6 +47,7 @@ class HtmlMailEntry:
     order: int
     row: PreviewRow
     attachments: list[HtmlAttachmentLink]
+    inline_images: list[HtmlInlineImage]
 
 
 def export_project_correspondence_html(
@@ -87,14 +102,21 @@ def _export_one_project(
     for order, row in enumerate(ordered_rows, start=1):
         item = outlook_items.get(row.mail.entry_id)
         mail_stem = build_archive_stem(order, row.mail.direction, row.mail.subject, max_length=120)
-        links = _export_attachment_links(
+        links, inline_images = _export_attachment_links(
             row=row,
             item=item,
             attachment_dir=attachment_dir,
             mail_stem=mail_stem,
         )
         attachment_paths.extend([link.path for link in links if link.path is not None])
-        entries.append(HtmlMailEntry(order=order, row=row, attachments=links))
+        entries.append(
+            HtmlMailEntry(
+                order=order,
+                row=row,
+                attachments=links,
+                inline_images=inline_images,
+            )
+        )
 
     html_path.write_text(_render_project_html(project_number, entries), encoding="utf-8")
     return ProjectHtmlExportResult(
@@ -112,28 +134,36 @@ def _export_attachment_links(
     item: object | None,
     attachment_dir: Path,
     mail_stem: str,
-) -> list[HtmlAttachmentLink]:
+) -> tuple[list[HtmlAttachmentLink], list[HtmlInlineImage]]:
     if item is None:
-        return [
-            HtmlAttachmentLink(name=name, href=None, path=None)
-            for name in row.mail.attachment_names
-        ]
+        return (
+            [
+                HtmlAttachmentLink(name=name, href=None, path=None)
+                for name in row.mail.attachment_names
+            ],
+            [],
+        )
 
     attachments = iter_com_collection(getattr(item, "Attachments", []))
     if not attachments:
-        return [
-            HtmlAttachmentLink(name=name, href=None, path=None)
-            for name in row.mail.attachment_names
-        ]
-
-    attachment_dir.mkdir(parents=True, exist_ok=True)
-    links: list[HtmlAttachmentLink] = []
-    for attachment in attachments:
-        original_name = str(
-            getattr(attachment, "FileName", None)
-            or getattr(attachment, "DisplayName", None)
-            or "piece_jointe"
+        return (
+            [
+                HtmlAttachmentLink(name=name, href=None, path=None)
+                for name in row.mail.attachment_names
+            ],
+            [],
         )
+
+    links: list[HtmlAttachmentLink] = []
+    inline_images: list[HtmlInlineImage] = []
+    for attachment in attachments:
+        original_name = attachment_display_name(attachment)
+        if is_inline_image_attachment(attachment):
+            inline_image = _inline_image_from_attachment(attachment, original_name)
+            if inline_image is not None:
+                inline_images.append(inline_image)
+            continue
+        attachment_dir.mkdir(parents=True, exist_ok=True)
         target = attachment_dir / build_attachment_filename(mail_stem, original_name)
         if not target.exists():
             attachment.SaveAsFile(str(target))
@@ -144,7 +174,7 @@ def _export_attachment_links(
                 path=target,
             )
         )
-    return links
+    return links, inline_images
 
 
 def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> str:
@@ -286,6 +316,20 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       margin: 0 0 12px;
       color: #253142;
     }}
+    .inline-images {{
+      display: grid;
+      gap: 10px;
+      margin: 12px 0;
+    }}
+    .inline-mail-image {{
+      display: block;
+      max-width: min(100%, 760px);
+      max-height: 520px;
+      object-fit: contain;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+    }}
     .attachments {{
       display: flex;
       flex-wrap: wrap;
@@ -399,6 +443,7 @@ def _render_mail_card(entry: HtmlMailEntry) -> str:
     sender = mail.sender_name or mail.sender_email or "-"
     recipients = ", ".join(mail.recipients) if mail.recipients else "-"
     attachments = _render_attachments(entry.attachments)
+    inline_images = _render_inline_images(entry.inline_images)
     search_text = " ".join(
         [
             mail.project_number,
@@ -437,11 +482,22 @@ def _render_mail_card(entry: HtmlMailEntry) -> str:
         </div>
         <div class="mail-body">
           <p class="excerpt">{_e(mail.body_excerpt or "(Aucun extrait disponible)")}</p>
+          {inline_images}
           <div class="meta">Raison: {_e(decision.reason)}</div>
           {attachments}
         </div>
       </article>
 """
+
+
+def _render_inline_images(inline_images: list[HtmlInlineImage]) -> str:
+    if not inline_images:
+        return ""
+    images = "".join(
+        f'<img class="inline-mail-image" src="{_e(image.data_uri)}" alt="{_e(image.name)}">'
+        for image in inline_images
+    )
+    return f'<div class="inline-images">{images}</div>'
 
 
 def _render_attachments(attachments: list[HtmlAttachmentLink]) -> str:
@@ -478,6 +534,26 @@ def _project_html_path(projects_root: Path, project_number: str) -> Path:
 
 def _relative_attachment_href(attachment_dir: Path, attachment_path: Path) -> str:
     return "/".join([quote(attachment_dir.name), quote(attachment_path.name)])
+
+
+def _inline_image_from_attachment(
+    attachment: Any,
+    original_name: str,
+) -> HtmlInlineImage | None:
+    try:
+        with tempfile.TemporaryDirectory(prefix="mailflow-inline-") as temp_dir:
+            temp_path = Path(temp_dir) / original_name
+            attachment.SaveAsFile(str(temp_path))
+            data = temp_path.read_bytes()
+    except Exception:
+        return None
+    if not data:
+        return None
+    encoded = base64.b64encode(data).decode("ascii")
+    return HtmlInlineImage(
+        name=original_name,
+        data_uri=f"data:{attachment_mime_type(attachment)};base64,{encoded}",
+    )
 
 
 def _e(value: object) -> str:

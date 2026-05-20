@@ -4,7 +4,26 @@ from datetime import datetime
 from types import SimpleNamespace
 
 from mailflow.models import Direction
+from mailflow.outlook.attachments import PR_ATTACH_CONTENT_ID
 from mailflow.outlook.scanner import OutlookScanner
+
+
+class FakePropertyAccessor:
+    def __init__(self, values: dict[str, object] | None = None) -> None:
+        self.values = values or {}
+
+    def GetProperty(self, schema: str) -> object:
+        if schema not in self.values:
+            raise RuntimeError("missing property")
+        return self.values[schema]
+
+
+def attachment(filename: str, *, properties: dict[str, object] | None = None) -> object:
+    return SimpleNamespace(
+        FileName=filename,
+        DisplayName=filename,
+        PropertyAccessor=FakePropertyAccessor(properties),
+    )
 
 
 class FakeCollection:
@@ -78,7 +97,12 @@ def test_mail_item_to_metadata_maps_received_mail() -> None:
         SenderEmailAddress="sales@dupont.test",
         Recipients=FakeCollection([SimpleNamespace(Address="lionel@balzmetal.test")]),
         SentOn=datetime(2026, 5, 6, 10, 30),
-        Attachments=FakeCollection([SimpleNamespace(FileName="offre.xlsx")]),
+        Attachments=FakeCollection(
+            [
+                attachment("logo.png", properties={PR_ATTACH_CONTENT_ID: "cid-logo"}),
+                attachment("offre.xlsx"),
+            ]
+        ),
         Body="Bonjour\n\nCordialement,\nSignature",
         Categories="Important; Project",
     )

@@ -11,6 +11,10 @@ from mailflow.core.project_paths import (
     is_project_folder_name,
 )
 from mailflow.models import Direction, MailMetadata
+from mailflow.outlook.attachments import (
+    attachment_display_name,
+    is_inline_image_attachment,
+)
 from mailflow.outlook.categories import split_categories
 
 INTERNET_MESSAGE_ID_SCHEMA = "http://schemas.microsoft.com/mapi/proptag/0x1035001F"
@@ -165,7 +169,9 @@ def _recipient_names(recipients: Any) -> list[str]:
 def _attachment_names(attachments: Any) -> list[str]:
     names = []
     for attachment in iter_com_collection(attachments):
-        names.append(_text_attr(attachment, "FileName") or _text_attr(attachment, "DisplayName"))
+        if is_inline_image_attachment(attachment):
+            continue
+        names.append(attachment_display_name(attachment))
     return [name for name in names if name]
 
 

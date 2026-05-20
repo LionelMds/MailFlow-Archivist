@@ -17,12 +17,30 @@ from mailflow.models import (
     PreviewRow,
     RuleClassification,
 )
+from mailflow.outlook.attachments import PR_ATTACH_CONTENT_ID, PR_ATTACH_MIME_TAG
+
+
+class FakePropertyAccessor:
+    def __init__(self, values: dict[str, object] | None = None) -> None:
+        self.values = values or {}
+
+    def GetProperty(self, schema: str) -> object:
+        if schema not in self.values:
+            raise RuntimeError("missing property")
+        return self.values[schema]
 
 
 class FakeAttachment:
-    def __init__(self, filename: str, content: str) -> None:
+    def __init__(
+        self,
+        filename: str,
+        content: str,
+        *,
+        properties: dict[str, object] | None = None,
+    ) -> None:
         self.FileName = filename
         self.content = content
+        self.PropertyAccessor = FakePropertyAccessor(properties)
 
     def SaveAsFile(self, path: str) -> None:
         Path(path).write_text(self.content, encoding="utf-8")
@@ -210,3 +228,59 @@ def test_project_html_export_keeps_unavailable_attachments_visible(tmp_path: Pat
     html = result.html_path.read_text(encoding="utf-8")
     assert "plan.pdf (non exportee)" in html
     assert result.attachment_paths == []
+
+
+def test_project_html_export_embeds_inline_images_without_listing_them_as_attachments(
+    tmp_path: Path,
+) -> None:
+    create_project_folder(tmp_path)
+    row = make_row(tmp_path)
+    inline_image = FakeAttachment(
+        "logo.png",
+        "image",
+        properties={
+            PR_ATTACH_CONTENT_ID: "cid-logo",
+            PR_ATTACH_MIME_TAG: "image/png",
+        },
+    )
+    regular_attachment = FakeAttachment("plan.pdf", "pdf")
+
+    result = export_project_correspondence_html(
+        [row],
+        {row.mail.entry_id: FakeMailItem([inline_image, regular_attachment])},
+        tmp_path,
+    )[0]
+
+    html = result.html_path.read_text(encoding="utf-8")
+    assert 'class="inline-mail-image"' in html
+    assert "data:image/png;base64,aW1hZ2U=" in html
+    assert ">logo.png<" not in html
+    assert [path.name for path in result.attachment_paths] == [
+        "1-R-Offre garde-corps - plan.pdf"
+    ]
+    assert not list(result.attachment_dir.glob("*logo*"))
+
+
+def test_project_html_export_does_not_create_attachment_folder_for_inline_images_only(
+    tmp_path: Path,
+) -> None:
+    create_project_folder(tmp_path)
+    row = make_row(tmp_path)
+    inline_image = FakeAttachment(
+        "logo.png",
+        "image",
+        properties={
+            PR_ATTACH_CONTENT_ID: "cid-logo",
+            PR_ATTACH_MIME_TAG: "image/png",
+        },
+    )
+
+    result = export_project_correspondence_html(
+        [row],
+        {row.mail.entry_id: FakeMailItem([inline_image])},
+        tmp_path,
+    )[0]
+
+    assert "inline-mail-image" in result.html_path.read_text(encoding="utf-8")
+    assert result.attachment_paths == []
+    assert not result.attachment_dir.exists()
