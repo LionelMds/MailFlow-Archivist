@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+from datetime import datetime
+from types import SimpleNamespace
+
+from mailflow.models import Direction
+from mailflow.outlook.scanner import OutlookScanner
+
+
+class FakeCollection:
+    def __init__(self, items: list[object]) -> None:
+        self._items = items
+        self.Count = len(items)
+
+    def Item(self, index: int) -> object:
+        return self._items[index - 1]
+
+
+def test_iter_project_folders_filters_names() -> None:
+    folders = FakeCollection(
+        [
+            SimpleNamespace(Name="2025-4893"),
+            SimpleNamespace(Name="Archive"),
+            SimpleNamespace(Name="2025-4893-2"),
+            SimpleNamespace(Name="2026-4995"),
+        ]
+    )
+    year_folder = SimpleNamespace(Folders=folders)
+
+    names = [folder.Name for folder in OutlookScanner().iter_project_folders(year_folder)]
+
+    assert names == ["2025-4893", "2026-4995"]
+
+
+def test_scan_year_folder_scans_only_project_folders() -> None:
+    valid_project = SimpleNamespace(
+        Name="2025-4893",
+        Items=FakeCollection(
+            [
+                SimpleNamespace(
+                    EntryID="ENTRY-1",
+                    MessageClass="IPM.Note",
+                    Subject="Offre",
+                    SenderName="Dupont",
+                    SenderEmailAddress="sales@dupont.test",
+                    Recipients=[],
+                    SentOn=datetime(2026, 5, 6, 10, 30),
+                    Attachments=[],
+                    Body="Bonjour",
+                    Categories="",
+                )
+            ]
+        ),
+    )
+    ignored_folder = SimpleNamespace(Name="Archive", Items=FakeCollection([]))
+    year_folder = SimpleNamespace(
+        Name="2025",
+        Folders=FakeCollection([valid_project, ignored_folder]),
+    )
+
+    mails = OutlookScanner().scan_year_folder(
+        year_folder,
+        outlook_root_path="Boite de reception",
+    )
+
+    assert len(mails) == 1
+    assert mails[0].project_number == "2025-4893"
+    assert mails[0].outlook_folder == "Boite de reception/2025/2025-4893"
+
+
+def test_mail_item_to_metadata_maps_received_mail() -> None:
+    item = SimpleNamespace(
+        EntryID="ENTRY-1",
+        ConversationID="CONV-1",
+        MessageClass="IPM.Note",
+        Subject="Offre",
+        SenderName="Dupont SA",
+        SenderEmailAddress="sales@dupont.test",
+        Recipients=FakeCollection([SimpleNamespace(Address="lionel@balzmetal.test")]),
+        SentOn=datetime(2026, 5, 6, 10, 30),
+        Attachments=FakeCollection([SimpleNamespace(FileName="offre.xlsx")]),
+        Body="Bonjour\n\nCordialement,\nSignature",
+        Categories="Important; Project",
+    )
+
+    metadata = OutlookScanner(account_email="lionel@balzmetal.test").mail_item_to_metadata(
+        item,
+        project_number="2025-4893",
+        outlook_folder="Boite de reception/2025/2025-4893",
+    )
+
+    assert metadata.direction == Direction.RECEIVED
+    assert metadata.attachment_names == ["offre.xlsx"]
+    assert metadata.recipients == ["lionel@balzmetal.test"]
+    assert "Signature" not in metadata.body_excerpt
+
+
+def test_mail_item_to_metadata_maps_sent_mail() -> None:
+    item = SimpleNamespace(
+        EntryID="ENTRY-2",
+        MessageClass="IPM.Note",
+        Subject="Commande",
+        SenderName="Lionel",
+        SenderEmailAddress="lionel@balzmetal.test",
+        Recipients=[],
+        SentOn=datetime(2026, 5, 6, 10, 30),
+        Attachments=[],
+        Body="Bonjour",
+        Categories="",
+    )
+
+    metadata = OutlookScanner(account_email="lionel@balzmetal.test").mail_item_to_metadata(
+        item,
+        project_number="2025-4893",
+        outlook_folder="Boite de reception/2025/2025-4893",
+    )
+
+    assert metadata.direction == Direction.SENT

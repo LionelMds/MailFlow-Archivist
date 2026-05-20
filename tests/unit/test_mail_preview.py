@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
+from mailflow.models import (
+    ArchiveDecision,
+    ClassificationResult,
+    Direction,
+    InterlocutorType,
+    MailMetadata,
+    MailType,
+    PreviewAction,
+    PreviewRow,
+    RuleClassification,
+)
+from mailflow.ui.mail_preview import classification_highlight_terms, preview_row_to_html
+
+
+def make_row(tmp_path: Path) -> PreviewRow:
+    mail = MailMetadata(
+        entry_id="ENTRY-1",
+        project_number="2025-4893",
+        outlook_folder="Boite de reception/2025/2025-4893",
+        direction=Direction.RECEIVED,
+        subject="Offre garde-corps",
+        sender_name="Dupont",
+        sent_at=datetime(2026, 5, 6, 10, 30),
+        attachment_names=["Offerte.pdf"],
+        body_excerpt="Bonjour, voici notre offre pour le projet.",
+    )
+    decision = ArchiveDecision(
+        mail_id=mail.entry_id,
+        project_number=mail.project_number,
+        archive=True,
+        requires_review=False,
+        mail_type=MailType.DEVIS,
+        interlocutor=InterlocutorType.FOURNISSEUR,
+        target_relative_folder="Fournisseurs/Demande de prix",
+        target_path=tmp_path,
+        confidence=0.9,
+        duplicate_status="none",
+        reason="Decision issue des regles locales.",
+    )
+    return PreviewRow(
+        mail=mail,
+        classification=ClassificationResult(
+            rule=RuleClassification(
+                suggested_type=MailType.DEVIS,
+                suggested_interlocutor=InterlocutorType.FOURNISSEUR,
+                likely_archive=True,
+                confidence=0.9,
+                matched_rules=["devis"],
+                matched_terms=["offre"],
+            )
+        ),
+        decision=decision,
+        action=PreviewAction.ARCHIVE,
+    )
+
+
+def test_preview_row_to_html_highlights_classification_terms(tmp_path: Path) -> None:
+    html = preview_row_to_html(make_row(tmp_path))
+
+    assert "background-color" in html
+    assert "Offre" in html
+    assert "Raison:" in html
+
+
+def test_classification_highlight_terms_deduplicates_terms(tmp_path: Path) -> None:
+    row = make_row(tmp_path)
+    row = row.model_copy(
+        update={
+            "classification": row.classification.model_copy(
+                update={
+                    "rule": row.classification.rule.model_copy(
+                        update={"matched_terms": ["offre", "Offre", "offerte"]}
+                    )
+                }
+            )
+        }
+    )
+
+    assert classification_highlight_terms(row) == ["offre", "offerte"]

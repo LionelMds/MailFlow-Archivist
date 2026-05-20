@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mailflow-archivist"
+version = "0.1.0"
+description = "Archivage desktop Outlook vers dossiers projet Balz Metal Sa."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Balz Metal Sa" }]
+dependencies = [
+    "pydantic>=2.7",
+    "platformdirs>=4.2",
+    "structlog>=24.1",
+    "keyring>=25.0",
+    "openai>=1.59",
+    "pywin32>=306; platform_system == 'Windows'",
+    "PySide6>=6.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-qt>=4.4",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pyinstaller>=6.10",
+]
+
+[project.scripts]
+mailflow-archivist = "mailflow.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+ignore = ["RUF012"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+ignore_missing_imports = true
+warn_unused_ignores = true
+

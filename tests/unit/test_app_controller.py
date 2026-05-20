@@ -1,0 +1,340 @@
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+
+from mailflow.core.app_controller import AppController, PreviewRequest, selected_rows
+from mailflow.core.archive_batch import ArchiveBatchExecutor
+from mailflow.core.manual_review import LearnedClassificationRule, LearnedMisleadingTerm
+from mailflow.core.scan_service import ScanRequest
+from mailflow.models import (
+    ArchiveDecision,
+    ClassificationResult,
+    Direction,
+    InterlocutorType,
+    MailMetadata,
+    MailType,
+    ManualClassificationUpdate,
+    ManualLearningSignal,
+    PreviewAction,
+    PreviewRow,
+    RuleClassification,
+)
+from mailflow.outlook.exporter import ExportResult
+from mailflow.outlook.scanner import ScannedMail
+
+
+class FakeScanService:
+    def __init__(self, mails: list[MailMetadata]) -> None:
+        self.mails = mails
+        self.requests: list[ScanRequest] = []
+
+    def scan(self, request: ScanRequest) -> list[MailMetadata]:
+        return [scanned.metadata for scanned in self.scan_with_items(request)]
+
+    def scan_with_items(self, request: ScanRequest) -> list[ScannedMail]:
+        self.requests.append(request)
+        return [ScannedMail(item=object(), metadata=mail) for mail in self.mails]
+
+
+class FakeArchiveService:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def archive(
+        self,
+        item: object,
+        metadata: MailMetadata,
+        decision: ArchiveDecision,
+    ) -> ExportResult:
+        self.calls.append(metadata.entry_id)
+        return ExportResult(msg_path=decision.target_path / "mail.msg", attachment_paths=[])
+
+
+class FakeLearningStore:
+    def __init__(self) -> None:
+        self.signals: list[ManualLearningSignal] = []
+
+    def record(self, signal: ManualLearningSignal) -> None:
+        self.signals.append(signal)
+
+    def learned_rules(self) -> list[LearnedClassificationRule]:
+        return []
+
+    def misleading_terms(self) -> list[LearnedMisleadingTerm]:
+        return []
+
+
+class FakePreviewPipeline:
+    def __init__(self, rows: list[PreviewRow]) -> None:
+        self.rows = rows
+        self.mails: list[MailMetadata] = []
+
+    def preview(self, mails: list[MailMetadata]) -> list[PreviewRow]:
+        self.mails = mails
+        return self.rows
+
+
+def make_mail(entry_id: str = "ENTRY-1") -> MailMetadata:
+    return MailMetadata(
+        entry_id=entry_id,
+        project_number="2025-4893",
+        outlook_folder="Boite de reception/2025/2025-4893",
+        direction=Direction.RECEIVED,
+        subject="Offre",
+        sender_name="Dupont",
+        sent_at=datetime(2026, 5, 6, 10, 30),
+    )
+
+
+def create_project_folder(projects_root: Path) -> Path:
+    path = projects_root / "2025" / "2025-4893"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def make_row(
+    tmp_path: Path,
+    action: PreviewAction = PreviewAction.ARCHIVE,
+    entry_id: str = "ENTRY-1",
+) -> PreviewRow:
+    mail = make_mail(entry_id)
+    decision = ArchiveDecision(
+        mail_id=mail.entry_id,
+        project_number=mail.project_number,
+        archive=action == PreviewAction.ARCHIVE,
+        requires_review=action == PreviewAction.REVIEW,
+        mail_type=MailType.DEVIS,
+        interlocutor=InterlocutorType.FOURNISSEUR,
+        target_relative_folder="Fournisseurs/Demande de prix",
+        target_path=tmp_path,
+        confidence=0.9,
+        duplicate_status="none",
+        reason="ok",
+    )
+    return PreviewRow(
+        mail=mail,
+        classification=ClassificationResult(
+            rule=RuleClassification(
+                suggested_type=MailType.DEVIS,
+                suggested_interlocutor=InterlocutorType.FOURNISSEUR,
+                likely_archive=True,
+                confidence=0.9,
+                matched_rules=["devis"],
+            )
+        ),
+        decision=decision,
+        action=action,
+    )
+
+
+def test_controller_scans_and_builds_preview_rows(tmp_path: Path) -> None:
+    mail = make_mail()
+    row = make_row(tmp_path)
+    scanner = FakeScanService([mail])
+    pipeline = FakePreviewPipeline([row])
+    controller = AppController(
+        scan_service=scanner,
+        preview_pipeline=pipeline,
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+
+    rows = controller.scan_and_preview(
+        PreviewRequest(
+            account_identifier=" Balz ",
+            outlook_root_folder=" Boite de reception ",
+            year=" 2025 ",
+            project_number=" 2025-4893 ",
+        )
+    )
+
+    assert rows == [row]
+    assert controller.preview_rows == [row]
+    assert pipeline.mails == [mail]
+    assert scanner.requests == [
+        ScanRequest(
+            account_identifier="Balz",
+            outlook_root_folder="Boite de reception",
+            year="2025",
+            project_number="2025-4893",
+        )
+    ]
+
+
+def test_controller_rejects_missing_year(tmp_path: Path) -> None:
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+
+    with pytest.raises(ValueError):
+        controller.scan_and_preview(
+            PreviewRequest(
+                account_identifier=None,
+                outlook_root_folder="Boite de reception",
+                year=" ",
+            )
+        )
+
+
+def test_controller_exports_current_preview_report(tmp_path: Path) -> None:
+    row = make_row(tmp_path)
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([row]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+    controller.preview_rows = [row]
+
+    path = controller.export_report(tmp_path / "rapport.csv")
+
+    assert path.exists()
+    assert "2025-4893" in path.read_text(encoding="utf-8-sig")
+
+
+def test_controller_archive_selection_and_ignore(tmp_path: Path) -> None:
+    row = make_row(tmp_path)
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+    controller.preview_rows = [row]
+
+    assert controller.rows_ready_for_archive() == [row]
+    ignored = controller.mark_all_ignored()
+
+    assert ignored[0].action == PreviewAction.IGNORE
+    assert controller.rows_ready_for_archive() == []
+
+
+def test_controller_archives_ready_rows_with_stored_outlook_items(tmp_path: Path) -> None:
+    create_project_folder(tmp_path)
+    mail = make_mail()
+    row = make_row(tmp_path)
+    scanner = FakeScanService([mail])
+    archive_service = FakeArchiveService()
+    controller = AppController(
+        scan_service=scanner,
+        preview_pipeline=FakePreviewPipeline([row]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+        archive_executor=ArchiveBatchExecutor(archive_service),
+    )
+    controller.scan_and_preview(
+        PreviewRequest(
+            account_identifier=None,
+            outlook_root_folder="Boite de reception",
+            year="2025",
+        )
+    )
+
+    result = controller.archive_ready()
+
+    assert result.exported_count == 1
+    assert result.exported_mail_ids == ["ENTRY-1"]
+    assert archive_service.calls == ["ENTRY-1"]
+    assert controller.preview_rows[0].action == PreviewAction.ARCHIVED
+
+
+def test_controller_archives_only_selected_ready_rows(tmp_path: Path) -> None:
+    create_project_folder(tmp_path)
+    first_mail = make_mail("ENTRY-1")
+    second_mail = make_mail("ENTRY-2")
+    rows = [
+        make_row(tmp_path, PreviewAction.ARCHIVE, "ENTRY-1"),
+        make_row(tmp_path, PreviewAction.IGNORE, "ENTRY-2"),
+    ]
+    scanner = FakeScanService([first_mail, second_mail])
+    archive_service = FakeArchiveService()
+    controller = AppController(
+        scan_service=scanner,
+        preview_pipeline=FakePreviewPipeline(rows),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+        archive_executor=ArchiveBatchExecutor(archive_service),
+    )
+    controller.scan_and_preview(
+        PreviewRequest(
+            account_identifier=None,
+            outlook_root_folder="Boite de reception",
+            year="2025",
+        )
+    )
+
+    result = controller.archive_selected([0, 1])
+
+    assert archive_service.calls == ["ENTRY-1"]
+    assert result.exported_mail_ids == ["ENTRY-1"]
+    assert result.skipped == ["ENTRY-2"]
+    assert controller.preview_rows[0].action == PreviewAction.ARCHIVED
+    assert controller.preview_rows[1].action == PreviewAction.IGNORE
+
+
+def test_controller_refuses_archive_when_project_folder_is_missing(tmp_path: Path) -> None:
+    projects_root = tmp_path / "missing-root"
+    mail = make_mail()
+    row = make_row(projects_root)
+    scanner = FakeScanService([mail])
+    archive_service = FakeArchiveService()
+    controller = AppController(
+        scan_service=scanner,
+        preview_pipeline=FakePreviewPipeline([row]),
+        projects_root=projects_root,
+        report_dir=tmp_path,
+        archive_executor=ArchiveBatchExecutor(archive_service),
+    )
+    controller.scan_and_preview(
+        PreviewRequest(
+            account_identifier=None,
+            outlook_root_folder="Boite de reception",
+            year="2025",
+        )
+    )
+
+    result = controller.archive_selected([0])
+
+    assert archive_service.calls == []
+    assert result.exported_count == 0
+    assert result.failure_count == 1
+    assert "Dossier projet local absent" in result.failures[0].reason
+
+
+def test_controller_applies_manual_update_and_records_learning(tmp_path: Path) -> None:
+    row = make_row(tmp_path, PreviewAction.REVIEW)
+    learning_store = FakeLearningStore()
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+        learning_store=learning_store,
+    )
+    controller.preview_rows = [row]
+
+    updated = controller.apply_manual_update(
+        0,
+        ManualClassificationUpdate(
+            mail_type=MailType.DEVIS,
+            interlocutor=InterlocutorType.FOURNISSEUR,
+            target_relative_folder="Fournisseurs/Demande de prix",
+            learning_term="Offerte",
+        ),
+    )
+
+    assert updated.action == PreviewAction.ARCHIVE
+    assert controller.preview_rows[0].decision.mail_type == MailType.DEVIS
+    assert learning_store.signals[0].learning_term == "Offerte"
+
+
+def test_selected_rows_ignores_invalid_indexes(tmp_path: Path) -> None:
+    rows = [make_row(tmp_path), make_row(tmp_path, PreviewAction.IGNORE)]
+
+    assert selected_rows(rows, [-1, 0, 99]) == [rows[0]]
