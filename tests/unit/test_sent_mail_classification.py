@@ -28,7 +28,7 @@ def test_sent_demande_offre_to_external_recipient_is_supplier_rfq() -> None:
     assert result.suggested_type == MailType.DEMANDE_DE_PRIX
     assert result.suggested_interlocutor == InterlocutorType.FOURNISSEUR
     assert destination_for(result.suggested_type, result.suggested_interlocutor) == (
-        "DEMANDE DE PRIX"
+        "Fournisseurs/Demande de prix"
     )
 
 
@@ -38,7 +38,7 @@ def test_sent_commande_typo_to_external_recipient_is_supplier_order() -> None:
     assert result.suggested_type == MailType.COMMANDE
     assert result.suggested_interlocutor == InterlocutorType.FOURNISSEUR
     assert destination_for(result.suggested_type, result.suggested_interlocutor) == (
-        "COMMANDE"
+        "Fournisseurs/Commande"
     )
 
 
@@ -59,7 +59,7 @@ def test_sent_demande_etude_to_external_recipient_is_technical_external() -> Non
 
     assert result.suggested_type == MailType.TECHNIQUE
     assert result.suggested_interlocutor == InterlocutorType.INTERVENANT_EXTERNE
-    assert destination_for(result.suggested_type, result.suggested_interlocutor) == "CORRESPONDANCE"
+    assert destination_for(result.suggested_type, result.suggested_interlocutor) == "Correspondance"
 
 
 def test_sent_mail_to_internal_recipient_stays_internal() -> None:

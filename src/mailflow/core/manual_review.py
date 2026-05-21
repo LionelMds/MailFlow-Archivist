@@ -5,7 +5,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from mailflow.core.correspondence_hierarchy import is_safe_relative_folder
+from mailflow.core.correspondence_hierarchy import (
+    CORRESPONDENCE_FOLDER,
+    SUPPLIER_ORDER_FOLDER,
+    SUPPLIER_REQUEST_FOLDER,
+    is_safe_relative_folder,
+)
 from mailflow.core.project_paths import local_project_path
 from mailflow.models import (
     ArchiveDecision,
@@ -20,9 +25,9 @@ from mailflow.models import (
 )
 
 MANUAL_DESTINATIONS = (
-    "CORRESPONDANCE",
-    "DEMANDE DE PRIX",
-    "COMMANDE",
+    CORRESPONDENCE_FOLDER,
+    SUPPLIER_REQUEST_FOLDER,
+    SUPPLIER_ORDER_FOLDER,
     "A verifier",
     "Ne pas archiver",
 )

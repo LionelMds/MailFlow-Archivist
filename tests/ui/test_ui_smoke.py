@@ -154,7 +154,7 @@ def make_preview_row(tmp_path: Path, action: PreviewAction) -> PreviewRow:
         requires_review=action == PreviewAction.REVIEW,
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="DEMANDE DE PRIX",
+        target_relative_folder="Fournisseurs/Demande de prix",
         target_path=tmp_path,
         confidence=0.9,
         duplicate_status="none",
@@ -182,6 +182,8 @@ def test_ui_text_contains_expected_actions() -> None:
     assert UI_TEXT["watch_outlook"] == "Surveillance Outlook"
     assert UI_TEXT["export_project_html"] == "Exporter HTML projet"
     assert UI_TEXT["import_directory"] == "Importer annuaire Outlook"
+    assert UI_TEXT["archive"] == "Archiver"
+    assert UI_TEXT["more_actions"] == "Plus"
     assert UI_TEXT["tray_open"] == "Ouvrir MailFlow"
     assert UI_TEXT["tray_quit"] == "Quitter"
     assert "Destination proposee" in PREVIEW_COLUMNS
@@ -226,7 +228,7 @@ def test_build_manual_classification_update_from_dialog_values() -> None:
     update = build_manual_classification_update(
         mail_type_value="devis",
         interlocutor_value="fournisseur",
-        destination_value="DEMANDE DE PRIX",
+        destination_value="Fournisseurs/Demande de prix",
         learning_term="Offerte",
         misleading_term="newsletter",
         manual_required=False,
@@ -234,7 +236,7 @@ def test_build_manual_classification_update_from_dialog_values() -> None:
 
     assert update.mail_type == MailType.DEVIS
     assert update.interlocutor == InterlocutorType.FOURNISSEUR
-    assert update.target_relative_folder == "DEMANDE DE PRIX"
+    assert update.target_relative_folder == "Fournisseurs/Demande de prix"
     assert update.learning_term == "Offerte"
     assert update.misleading_term == "newsletter"
     assert not update.manual_required
@@ -333,15 +335,24 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_folder_tree.headerItem().text(0) == "Dossier propose"
     assert dynamic_window.mailflow_rename_folder_button.text() == "Renommer dossier"
     assert dynamic_window.mailflow_merge_folder_button.text() == "Fusionner vers..."
-    assert dynamic_window.mailflow_restore_archivable_button.text() == (
+    assert dynamic_window.mailflow_archive_button.text() == "Archiver"
+    assert dynamic_window.mailflow_archive_selection_action.text() == "Archiver selection"
+    assert dynamic_window.mailflow_archive_all_action.text() == "Tout archiver sauf a verifier"
+    assert dynamic_window.mailflow_more_actions_button.text() == "Plus"
+    assert dynamic_window.mailflow_more_actions_menu.actions()[0].text() == "Ignorer selection"
+    assert dynamic_window.mailflow_restore_archivable_action.text() == (
         "Tout remettre a archiver"
     )
     assert dynamic_window.mailflow_import_directory_button.text() == "Importer annuaire Outlook"
-    assert dynamic_window.mailflow_main_splitter.count() == 7
-    assert dynamic_window.mailflow_scroll_area.widget() == dynamic_window.mailflow_main_splitter
-    assert dynamic_window.mailflow_main_splitter.minimumHeight() > 0
-    assert "Previsualisation" in dynamic_window.mailflow_section_toggles
-    assert "Arborescence" in dynamic_window.mailflow_section_toggles
-    assert "Previsualisation" in dynamic_window.mailflow_section_widgets
+    assert dynamic_window.mailflow_navigation.count() == 4
+    assert dynamic_window.mailflow_navigation.item(0).text() == "Mails"
+    assert dynamic_window.mailflow_navigation.item(1).text() == "Arborescence"
+    assert dynamic_window.mailflow_navigation.item(2).text() == "Annuaire"
+    assert dynamic_window.mailflow_navigation.item(3).text() == "Reglages"
+    assert dynamic_window.mailflow_pages.count() == 4
+    assert dynamic_window.mailflow_content_splitter.count() == 2
+    assert dynamic_window.mailflow_workspace_splitter.count() == 2
+    assert dynamic_window.mailflow_settings_scroll_area.widgetResizable()
+    assert not dynamic_window.mailflow_logs.isVisible()
     window.close()
     app.quit()

@@ -35,7 +35,7 @@ class FakeAiClassifier:
             usefulness="normal",
             mail_type="correspondance_generale",
             interlocutor="client",
-            target_folder="CORRESPONDANCE",
+            target_folder="Correspondance",
             confidence=0.85,
             short_summary="Question projet.",
             reason="Mail utile mais ambigu, classe par IA.",
@@ -112,7 +112,7 @@ def test_pipeline_preview_applies_company_hierarchy(tmp_path: Path) -> None:
 
     rows = pipeline.preview([sample_mail(subject="Offerte", body="Voici notre offre.")])
 
-    assert rows[0].decision.target_relative_folder == "DEMANDE DE PRIX/Dupont SA"
+    assert rows[0].decision.target_relative_folder == "Fournisseurs/Demande de prix/Dupont SA"
 
 
 def test_pipeline_calls_ai_for_ambiguous_mail(tmp_path: Path) -> None:
@@ -124,7 +124,7 @@ def test_pipeline_calls_ai_for_ambiguous_mail(tmp_path: Path) -> None:
 
     assert len(ai.calls) == 1
     assert row.classification.ai is not None
-    assert row.decision.target_relative_folder == "CORRESPONDANCE"
+    assert row.decision.target_relative_folder == "Correspondance"
     assert row.action == PreviewAction.ARCHIVE
 
 
@@ -161,7 +161,7 @@ def test_pipeline_uses_learned_terms_before_regular_rules(tmp_path: Path) -> Non
                 term="mot appris",
                 mail_type=MailType.ADMINISTRATIF,
                 interlocutor=InterlocutorType.CLIENT,
-                target_relative_folder="CORRESPONDANCE",
+                target_relative_folder="Correspondance",
             )
         ],
     )

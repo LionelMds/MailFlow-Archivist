@@ -39,6 +39,7 @@ UI_TEXT = {
     "test_openai_key": "Tester IA",
     "check_updates": "Rechercher mise a jour",
     "archive_selection": "Archiver selection",
+    "archive": "Archiver",
     "archive_all_except_review": "Tout archiver sauf a verifier",
     "mark_ignored": "Ignorer selection",
     "restore_archivable": "Tout remettre a archiver",
@@ -46,6 +47,7 @@ UI_TEXT = {
     "export_project_html": "Exporter HTML projet",
     "export_report": "Exporter rapport",
     "import_directory": "Importer annuaire Outlook",
+    "more_actions": "Plus",
     "tray_open": "Ouvrir MailFlow",
     "tray_enable_watch": "Activer surveillance Outlook",
     "tray_disable_watch": "Desactiver surveillance Outlook",
@@ -97,13 +99,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QInputDialog,
         QLabel,
         QLineEdit,
+        QListWidget,
         QMainWindow,
         QMenu,
         QMessageBox,
         QPushButton,
         QScrollArea,
-        QSizePolicy,
         QSplitter,
+        QStackedWidget,
         QSystemTrayIcon,
         QTableWidget,
         QTableWidgetItem,
@@ -159,91 +162,142 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     watch_state = WatchState()
     central = QWidget()
     layout = QVBoxLayout(central)
-    layout.setContentsMargins(0, 0, 0, 0)
-    scroll_area = QScrollArea()
-    scroll_area.setWidgetResizable(True)
-    scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-    scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-    main_splitter = QSplitter(Qt.Orientation.Vertical)
-    main_splitter.setChildrenCollapsible(False)
-    main_splitter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-    section_toggles: dict[str, Any] = {}
-    section_widgets: dict[str, Any] = {}
-    section_contents: dict[str, Any] = {}
-    section_min_heights = {
-        UI_TEXT["configuration"]: 270,
-        UI_TEXT["scan"]: 150,
-        UI_TEXT["preview"]: 320,
-        "Arborescence": 230,
-        "Apercu du mail": 220,
-        UI_TEXT["actions"]: 125,
-        UI_TEXT["logs"]: 190,
-    }
-    collapsed_section_height = 34
-    max_widget_height = 16777215
-    scroll_area.setWidget(main_splitter)
-    layout.addWidget(scroll_area)
+    layout.setContentsMargins(8, 8, 8, 8)
+    layout.setSpacing(6)
+    window.resize(1440, 900)
+    window.setMinimumSize(1100, 720)
 
-    def update_splitter_layout() -> None:
-        sizes = []
-        total_height = 0
-        for index in range(main_splitter.count()):
-            section = main_splitter.widget(index)
-            if section is None:
-                continue
-            title = str(section.property("mailflow_section_title") or "")
-            content = section_contents.get(title)
-            if content is not None and content.isVisible():
-                height = section_min_heights.get(title, section.minimumSizeHint().height())
-                section.setMinimumHeight(height)
-                section.setMaximumHeight(max_widget_height)
-            else:
-                height = collapsed_section_height
-                section.setMinimumHeight(height)
-                section.setMaximumHeight(height)
-            sizes.append(height)
-            total_height += height
-        if sizes:
-            total_height += max(0, len(sizes) - 1) * main_splitter.handleWidth()
-            main_splitter.setMinimumHeight(total_height)
-            main_splitter.setSizes(sizes)
-        main_splitter.updateGeometry()
-        scroll_area.updateGeometry()
+    top_bar = QWidget()
+    top_layout = QHBoxLayout(top_bar)
+    top_layout.setContentsMargins(0, 0, 0, 0)
+    top_layout.setSpacing(8)
+    app_title = QLabel("MailFlow")
+    app_title.setStyleSheet("font-size: 18px; font-weight: 700; color: #0f172a;")
+    account_combo = QComboBox()
+    account_combo.setEditable(True)
+    account_combo.setMinimumWidth(230)
+    outlook_root_combo = QComboBox()
+    outlook_root_combo.setEditable(True)
+    outlook_root_combo.setMinimumWidth(180)
+    year_input = QLineEdit(settings.selected_year or "")
+    year_input.setPlaceholderText("Annee")
+    year_input.setFixedWidth(82)
+    project_input = QLineEdit("")
+    project_input.setPlaceholderText("Projet")
+    project_input.setFixedWidth(120)
+    scan_button = QPushButton(UI_TEXT["scan_button"])
+    watch_checkbox = QCheckBox(UI_TEXT["watch_outlook"])
+    top_layout.addWidget(app_title)
+    top_layout.addSpacing(8)
+    top_layout.addWidget(QLabel("Compte"))
+    top_layout.addWidget(account_combo, 2)
+    top_layout.addWidget(QLabel("Racine Outlook"))
+    top_layout.addWidget(outlook_root_combo, 2)
+    top_layout.addWidget(QLabel("Annee"))
+    top_layout.addWidget(year_input)
+    top_layout.addWidget(QLabel("Projet"))
+    top_layout.addWidget(project_input)
+    top_layout.addWidget(scan_button)
+    top_layout.addWidget(watch_checkbox)
+    layout.addWidget(top_bar)
 
-    def make_collapsible_section(title: str, content: Any) -> Any:
-        section = QWidget()
-        section.setProperty("mailflow_section_title", title)
-        section_layout = QVBoxLayout(section)
-        section_layout.setContentsMargins(0, 0, 0, 0)
-        section_layout.setSpacing(2)
-        header = QWidget()
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(4, 2, 4, 2)
-        toggle = QToolButton()
-        toggle.setAutoRaise(True)
-        toggle.setArrowType(Qt.ArrowType.DownArrow)
-        title_label = QLabel(title)
-        title_label.setStyleSheet("font-weight: 600;")
-        header_layout.addWidget(toggle)
-        header_layout.addWidget(title_label)
-        header_layout.addStretch(1)
-        section_layout.addWidget(header)
-        section_layout.addWidget(content)
+    content_splitter = QSplitter(Qt.Orientation.Horizontal)
+    content_splitter.setChildrenCollapsible(False)
+    navigation = QListWidget()
+    navigation.addItems(["Mails", "Arborescence", "Annuaire", "Reglages"])
+    navigation.setFixedWidth(150)
+    navigation.setCurrentRow(0)
+    content_splitter.addWidget(navigation)
 
-        def toggle_content() -> None:
-            content.setVisible(not content.isVisible())
-            toggle.setArrowType(
-                Qt.ArrowType.DownArrow if content.isVisible() else Qt.ArrowType.RightArrow
-            )
-            update_splitter_layout()
+    workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
+    workspace_splitter.setChildrenCollapsible(False)
+    pages = QStackedWidget()
 
-        toggle.clicked.connect(toggle_content)
-        section_toggles[title] = toggle
-        section_widgets[title] = section
-        section_contents[title] = content
-        return section
+    mail_page = QWidget()
+    mail_layout = QVBoxLayout(mail_page)
+    mail_layout.setContentsMargins(0, 0, 0, 0)
+    mail_layout.setSpacing(6)
+    actions = QWidget()
+    actions_layout = QHBoxLayout(actions)
+    actions_layout.setContentsMargins(0, 0, 0, 0)
+    archive_button = QToolButton()
+    archive_button.setText(UI_TEXT["archive"])
+    archive_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+    archive_menu = QMenu(archive_button)
+    archive_selection_action = QAction(UI_TEXT["archive_selection"], window)
+    archive_all_action = QAction(UI_TEXT["archive_all_except_review"], window)
+    archive_menu.addAction(archive_selection_action)
+    archive_menu.addAction(archive_all_action)
+    archive_button.setMenu(archive_menu)
+    export_html_button = QPushButton(UI_TEXT["export_project_html"])
+    more_actions_button = QToolButton()
+    more_actions_button.setText(UI_TEXT["more_actions"])
+    more_actions_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+    more_actions_menu = QMenu(more_actions_button)
+    ignore_action = QAction(UI_TEXT["mark_ignored"], window)
+    restore_archivable_action = QAction(UI_TEXT["restore_archivable"], window)
+    open_folder_action = QAction(UI_TEXT["open_project_folder"], window)
+    report_action = QAction(UI_TEXT["export_report"], window)
+    more_actions_menu.addAction(ignore_action)
+    more_actions_menu.addAction(restore_archivable_action)
+    more_actions_menu.addSeparator()
+    more_actions_menu.addAction(open_folder_action)
+    more_actions_menu.addAction(report_action)
+    more_actions_button.setMenu(more_actions_menu)
+    actions_layout.addWidget(archive_button)
+    actions_layout.addWidget(export_html_button)
+    actions_layout.addWidget(more_actions_button)
+    actions_layout.addStretch(1)
+    table = QTableWidget(0, len(PREVIEW_COLUMNS))
+    table.setHorizontalHeaderLabels(list(PREVIEW_COLUMNS))
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+    table.setMinimumHeight(320)
+    table.horizontalHeader().setSectionsMovable(True)
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    mail_layout.addWidget(actions)
+    mail_layout.addWidget(table, 1)
+    pages.addWidget(mail_page)
 
-    config = QGroupBox()
+    tree_widget = QWidget()
+    tree_layout = QVBoxLayout(tree_widget)
+    tree_layout.setContentsMargins(0, 0, 0, 0)
+    tree_layout.setSpacing(6)
+    folder_tree = QTreeWidget()
+    folder_tree.setHeaderLabels(["Dossier propose", "Mails"])
+    folder_tree.setMinimumHeight(320)
+    folder_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+    folder_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+    tree_buttons = QWidget()
+    tree_buttons_layout = QHBoxLayout(tree_buttons)
+    tree_buttons_layout.setContentsMargins(0, 0, 0, 0)
+    rename_folder_button = QPushButton("Renommer dossier")
+    merge_folder_button = QPushButton("Fusionner vers...")
+    tree_buttons_layout.addWidget(rename_folder_button)
+    tree_buttons_layout.addWidget(merge_folder_button)
+    tree_buttons_layout.addStretch(1)
+    tree_layout.addWidget(tree_buttons)
+    tree_layout.addWidget(folder_tree, 1)
+    pages.addWidget(tree_widget)
+
+    directory_page = QWidget()
+    directory_layout = QVBoxLayout(directory_page)
+    directory_layout.setContentsMargins(0, 0, 0, 0)
+    directory_layout.setSpacing(8)
+    import_directory_button = QPushButton(UI_TEXT["import_directory"])
+    directory_status_label = QLabel("Annuaire local")
+    directory_status_label.setWordWrap(True)
+    directory_status_label.setStyleSheet("QLabel { color: #334155; }")
+    directory_layout.addWidget(import_directory_button)
+    directory_layout.addWidget(directory_status_label)
+    directory_layout.addStretch(1)
+    pages.addWidget(directory_page)
+
+    settings_page = QWidget()
+    settings_layout = QVBoxLayout(settings_page)
+    settings_layout.setContentsMargins(0, 0, 0, 0)
+    settings_layout.setSpacing(8)
+    config = QGroupBox("Reglages")
     grid = QGridLayout(config)
     grid.addWidget(QLabel("Racine projets locale"), 0, 0)
     projects_root_input = QLineEdit(str(settings.local_projects_root))
@@ -254,24 +308,16 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     browse_projects_button = QPushButton("Parcourir")
     projects_root_layout.addWidget(browse_projects_button)
     grid.addWidget(projects_root_picker, 0, 1)
-    grid.addWidget(QLabel("Compte Outlook"), 1, 0)
-    account_combo = QComboBox()
-    account_combo.setEditable(True)
-    grid.addWidget(account_combo, 1, 1)
-    grid.addWidget(QLabel("Dossier Outlook racine"), 2, 0)
-    outlook_root_combo = QComboBox()
-    outlook_root_combo.setEditable(True)
-    grid.addWidget(outlook_root_combo, 2, 1)
-    grid.addWidget(QLabel("Mode IA"), 3, 0)
+    grid.addWidget(QLabel("Mode IA"), 1, 0)
     ai_mode_combo = QComboBox()
     for mode in AiMode:
         ai_mode_combo.addItem(ai_mode_label(mode), mode.value)
     set_combo_value_by_data(ai_mode_combo, settings.ai_mode.value)
-    grid.addWidget(ai_mode_combo, 3, 1)
-    grid.addWidget(QLabel("Modele IA"), 4, 0)
+    grid.addWidget(ai_mode_combo, 1, 1)
+    grid.addWidget(QLabel("Modele IA"), 2, 0)
     ai_model_input = QLineEdit(settings.ai_model)
-    grid.addWidget(ai_model_input, 4, 1)
-    grid.addWidget(QLabel("Cle API OpenAI"), 5, 0)
+    grid.addWidget(ai_model_input, 2, 1)
+    grid.addWidget(QLabel("Cle API OpenAI"), 3, 0)
     openai_key_widget = QWidget()
     openai_key_layout = QHBoxLayout(openai_key_widget)
     openai_key_layout.setContentsMargins(0, 0, 0, 0)
@@ -286,14 +332,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     openai_key_layout.addWidget(save_openai_key_button)
     openai_key_layout.addWidget(test_openai_key_button)
     openai_key_layout.addWidget(openai_key_status)
-    grid.addWidget(openai_key_widget, 5, 1)
+    grid.addWidget(openai_key_widget, 3, 1)
     ai_include_body_checkbox = QCheckBox("Envoyer l'extrait nettoye du corps a l'IA")
     ai_include_body_checkbox.setChecked(settings.ai_include_body_excerpt)
-    grid.addWidget(ai_include_body_checkbox, 6, 1)
+    grid.addWidget(ai_include_body_checkbox, 4, 1)
     privacy_phone_checkbox = QCheckBox("Masquer les numeros de telephone avant IA")
     privacy_phone_checkbox.setChecked(settings.privacy_mask_phone_numbers)
-    grid.addWidget(privacy_phone_checkbox, 7, 1)
-    grid.addWidget(QLabel("Mises a jour"), 8, 0)
+    grid.addWidget(privacy_phone_checkbox, 5, 1)
+    grid.addWidget(QLabel("Mises a jour"), 6, 0)
     update_widget = QWidget()
     update_layout = QHBoxLayout(update_widget)
     update_layout.setContentsMargins(0, 0, 0, 0)
@@ -303,99 +349,67 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     update_layout.addWidget(check_updates_button)
     update_layout.addWidget(update_status)
     update_layout.addStretch(1)
-    grid.addWidget(update_widget, 8, 1)
+    grid.addWidget(update_widget, 6, 1)
     save_settings_button = QPushButton(UI_TEXT["save_settings"])
-    grid.addWidget(save_settings_button, 9, 1)
-    main_splitter.addWidget(make_collapsible_section(UI_TEXT["configuration"], config))
+    grid.addWidget(save_settings_button, 7, 1)
+    settings_layout.addWidget(config)
+    settings_layout.addStretch(1)
+    settings_scroll_area = QScrollArea()
+    settings_scroll_area.setWidgetResizable(True)
+    settings_scroll_area.setWidget(settings_page)
+    pages.addWidget(settings_scroll_area)
 
-    scan = QGroupBox()
-    scan_layout = QGridLayout(scan)
-    scan_layout.addWidget(QLabel("Annee"), 0, 0)
-    year_input = QLineEdit(settings.selected_year or "")
-    scan_layout.addWidget(year_input, 0, 1)
-    scan_layout.addWidget(QLabel("Projet specifique"), 1, 0)
-    project_input = QLineEdit("")
-    scan_layout.addWidget(project_input, 1, 1)
-    scan_button = QPushButton(UI_TEXT["scan_button"])
-    scan_layout.addWidget(scan_button, 2, 0, 1, 2)
-    watch_checkbox = QCheckBox(UI_TEXT["watch_outlook"])
-    scan_layout.addWidget(watch_checkbox, 3, 0, 1, 2)
-    main_splitter.addWidget(make_collapsible_section(UI_TEXT["scan"], scan))
-
-    table = QTableWidget(0, len(PREVIEW_COLUMNS))
-    table.setHorizontalHeaderLabels(list(PREVIEW_COLUMNS))
-    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-    table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-    table.setMinimumHeight(260)
-    table.horizontalHeader().setSectionsMovable(True)
-    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-    main_splitter.addWidget(make_collapsible_section(UI_TEXT["preview"], table))
-
-    tree_widget = QWidget()
-    tree_layout = QVBoxLayout(tree_widget)
-    tree_layout.setContentsMargins(0, 0, 0, 0)
-    folder_tree = QTreeWidget()
-    folder_tree.setHeaderLabels(["Dossier propose", "Mails"])
-    folder_tree.setMinimumHeight(170)
-    folder_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-    folder_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-    tree_buttons = QWidget()
-    tree_buttons_layout = QHBoxLayout(tree_buttons)
-    tree_buttons_layout.setContentsMargins(0, 0, 0, 0)
-    rename_folder_button = QPushButton("Renommer dossier")
-    merge_folder_button = QPushButton("Fusionner vers...")
-    tree_buttons_layout.addWidget(rename_folder_button)
-    tree_buttons_layout.addWidget(merge_folder_button)
-    tree_buttons_layout.addStretch(1)
-    tree_layout.addWidget(folder_tree)
-    tree_layout.addWidget(tree_buttons)
-    main_splitter.addWidget(make_collapsible_section("Arborescence", tree_widget))
-
-    preview = QGroupBox()
+    preview = QGroupBox("Inspecteur")
     preview_layout = QVBoxLayout(preview)
     mail_preview = QTextEdit()
     mail_preview.setReadOnly(True)
-    mail_preview.setMinimumHeight(150)
+    mail_preview.setMinimumWidth(300)
     preview_layout.addWidget(mail_preview)
-    main_splitter.addWidget(make_collapsible_section("Apercu du mail", preview))
-
-    actions = QGroupBox()
-    actions_layout = QGridLayout(actions)
-    archive_button = QPushButton(UI_TEXT["archive_selection"])
-    archive_all_button = QPushButton(UI_TEXT["archive_all_except_review"])
-    ignore_button = QPushButton(UI_TEXT["mark_ignored"])
-    restore_archivable_button = QPushButton(UI_TEXT["restore_archivable"])
-    open_folder_button = QPushButton(UI_TEXT["open_project_folder"])
-    export_html_button = QPushButton(UI_TEXT["export_project_html"])
-    report_button = QPushButton(UI_TEXT["export_report"])
-    import_directory_button = QPushButton(UI_TEXT["import_directory"])
-    for index, button in enumerate(
-        [
-            archive_button,
-            archive_all_button,
-            ignore_button,
-            restore_archivable_button,
-            open_folder_button,
-            export_html_button,
-            report_button,
-            import_directory_button,
-        ]
-    ):
-        actions_layout.addWidget(button, index // 3, index % 3)
-    main_splitter.addWidget(make_collapsible_section(UI_TEXT["actions"], actions))
 
     logs = QTextEdit()
     logs.setReadOnly(True)
     logs.setPlaceholderText(UI_TEXT["logs"])
-    main_splitter.addWidget(make_collapsible_section(UI_TEXT["logs"], logs))
-    main_splitter.setStretchFactor(0, 0)
-    main_splitter.setStretchFactor(1, 0)
-    main_splitter.setStretchFactor(2, 6)
-    main_splitter.setStretchFactor(3, 2)
-    main_splitter.setStretchFactor(4, 3)
-    main_splitter.setStretchFactor(5, 0)
-    main_splitter.setStretchFactor(6, 2)
-    update_splitter_layout()
+    logs.setVisible(False)
+    logs_panel = QWidget()
+    logs_layout = QVBoxLayout(logs_panel)
+    logs_layout.setContentsMargins(0, 0, 0, 0)
+    logs_layout.setSpacing(2)
+    logs_header = QWidget()
+    logs_header_layout = QHBoxLayout(logs_header)
+    logs_header_layout.setContentsMargins(0, 0, 0, 0)
+    logs_toggle = QToolButton()
+    logs_toggle.setAutoRaise(True)
+    logs_toggle.setArrowType(Qt.ArrowType.RightArrow)
+    logs_label = QLabel(UI_TEXT["logs"])
+    logs_label.setStyleSheet("font-weight: 600;")
+    logs_header_layout.addWidget(logs_toggle)
+    logs_header_layout.addWidget(logs_label)
+    logs_header_layout.addStretch(1)
+    logs_layout.addWidget(logs_header)
+    logs_layout.addWidget(logs)
+    logs_panel.setMaximumHeight(32)
+
+    def toggle_logs() -> None:
+        logs.setVisible(not logs.isVisible())
+        logs_toggle.setArrowType(
+            Qt.ArrowType.DownArrow if logs.isVisible() else Qt.ArrowType.RightArrow
+        )
+        logs_panel.setMaximumHeight(190 if logs.isVisible() else 32)
+
+    logs_toggle.clicked.connect(toggle_logs)
+
+    workspace_splitter.addWidget(pages)
+    workspace_splitter.addWidget(preview)
+    workspace_splitter.setStretchFactor(0, 5)
+    workspace_splitter.setStretchFactor(1, 2)
+    workspace_splitter.setSizes([900, 360])
+    content_splitter.addWidget(workspace_splitter)
+    content_splitter.setStretchFactor(0, 0)
+    content_splitter.setStretchFactor(1, 1)
+    content_splitter.setSizes([150, 1250])
+    layout.addWidget(content_splitter, 1)
+    layout.addWidget(logs_panel)
+    navigation.currentRowChanged.connect(pages.setCurrentIndex)
     window.setCentralWidget(central)
     watch_timer = QTimer(window)
     watch_timer.setInterval(WATCH_INTERVAL_MS)
@@ -918,6 +932,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             rows = scan_current_preview()
             watch_state.reset(rows)
             refresh_table()
+            navigation.setCurrentRow(0)
             append_log(f"{len(rows)} mails charges en previsualisation.")
         except Exception as exc:
             append_log(f"Erreur scan: {exc}")
@@ -956,7 +971,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 account_identifier=selected_account_identifier(),
                 outlook_root_folder=current_outlook_root_folder(),
             )
-            append_log(format_directory_import_result(result))
+            message = format_directory_import_result(result)
+            directory_status_label.setText(message)
+            append_log(message)
         except Exception as exc:
             append_log(f"Erreur import annuaire: {exc}")
 
@@ -1129,22 +1146,25 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         else None
     )
     watch_timer.timeout.connect(run_watch_scan)
-    report_button.clicked.connect(on_export_report)
     export_html_button.clicked.connect(on_export_project_html)
+    archive_button.clicked.connect(on_archive_selection)
+    archive_selection_action.triggered.connect(lambda _checked=False: on_archive_selection())
+    archive_all_action.triggered.connect(lambda _checked=False: on_archive_all_except_review())
+    ignore_action.triggered.connect(lambda _checked=False: on_mark_ignored())
+    restore_archivable_action.triggered.connect(lambda _checked=False: on_restore_archivable())
+    open_folder_action.triggered.connect(
+        lambda _checked=False: append_log(str(settings.local_projects_root))
+    )
+    report_action.triggered.connect(lambda _checked=False: on_export_report())
     import_directory_button.clicked.connect(on_import_directory)
     save_openai_key_button.clicked.connect(save_openai_key_from_input)
     test_openai_key_button.clicked.connect(test_openai_key_from_input)
     check_updates_button.clicked.connect(check_updates_from_ui)
     save_settings_button.clicked.connect(save_current_settings)
-    ignore_button.clicked.connect(on_mark_ignored)
-    restore_archivable_button.clicked.connect(on_restore_archivable)
-    archive_button.clicked.connect(on_archive_selection)
-    archive_all_button.clicked.connect(on_archive_all_except_review)
     rename_folder_button.clicked.connect(rename_selected_folder)
     merge_folder_button.clicked.connect(merge_selected_folder)
     browse_projects_button.clicked.connect(browse_projects_root)
     account_combo.currentIndexChanged.connect(lambda _index: populate_outlook_root_options())
-    open_folder_button.clicked.connect(lambda: append_log(str(settings.local_projects_root)))
     table.cellDoubleClicked.connect(lambda row, _column: open_manual_dialog(row))
     table.currentCellChanged.connect(lambda row, _col, _old_row, _old_col: update_mail_preview(row))
     table.itemSelectionChanged.connect(update_preview_from_selection)
@@ -1156,11 +1176,21 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_folder_tree = folder_tree
     dynamic_window.mailflow_rename_folder_button = rename_folder_button
     dynamic_window.mailflow_merge_folder_button = merge_folder_button
-    dynamic_window.mailflow_restore_archivable_button = restore_archivable_button
+    dynamic_window.mailflow_archive_button = archive_button
+    dynamic_window.mailflow_archive_menu = archive_menu
+    dynamic_window.mailflow_archive_selection_action = archive_selection_action
+    dynamic_window.mailflow_archive_all_action = archive_all_action
+    dynamic_window.mailflow_more_actions_button = more_actions_button
+    dynamic_window.mailflow_more_actions_menu = more_actions_menu
+    dynamic_window.mailflow_ignore_action = ignore_action
+    dynamic_window.mailflow_restore_archivable_action = restore_archivable_action
+    dynamic_window.mailflow_open_folder_action = open_folder_action
+    dynamic_window.mailflow_report_action = report_action
+    dynamic_window.mailflow_import_directory_button = import_directory_button
+    dynamic_window.mailflow_directory_status_label = directory_status_label
     dynamic_window.mailflow_logs = logs
     dynamic_window.mailflow_mail_preview = mail_preview
     dynamic_window.mailflow_export_html_button = export_html_button
-    dynamic_window.mailflow_import_directory_button = import_directory_button
     dynamic_window.mailflow_watch_checkbox = watch_checkbox
     dynamic_window.mailflow_watch_timer = watch_timer
     dynamic_window.mailflow_ai_mode_combo = ai_mode_combo
@@ -1181,10 +1211,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_account_combo = account_combo
     dynamic_window.mailflow_outlook_root_combo = outlook_root_combo
     dynamic_window.mailflow_projects_root_input = projects_root_input
-    dynamic_window.mailflow_scroll_area = scroll_area
-    dynamic_window.mailflow_main_splitter = main_splitter
-    dynamic_window.mailflow_section_toggles = section_toggles
-    dynamic_window.mailflow_section_widgets = section_widgets
+    dynamic_window.mailflow_navigation = navigation
+    dynamic_window.mailflow_pages = pages
+    dynamic_window.mailflow_content_splitter = content_splitter
+    dynamic_window.mailflow_workspace_splitter = workspace_splitter
+    dynamic_window.mailflow_settings_scroll_area = settings_scroll_area
+    dynamic_window.mailflow_logs_toggle = logs_toggle
     return window
 
 

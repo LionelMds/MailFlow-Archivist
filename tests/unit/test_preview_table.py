@@ -66,7 +66,7 @@ def make_row(tmp_path: Path) -> PreviewRow:
         requires_review=False,
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="DEMANDE DE PRIX",
+        target_relative_folder="Fournisseurs/Demande de prix",
         target_path=tmp_path,
         confidence=0.9,
         duplicate_status="none",
@@ -113,7 +113,7 @@ def test_preview_rows_to_matrix_formats_cells(tmp_path: Path) -> None:
         "Offre",
         "devis",
         "fournisseur",
-        "DEMANDE DE PRIX",
+        "Fournisseurs/Demande de prix",
         "90%",
         "Archiver",
     ]
@@ -133,7 +133,7 @@ def test_render_preview_rows_sets_headers_and_items(tmp_path: Path) -> None:
 def test_editable_options_for_manual_columns() -> None:
     assert "devis" in MAIL_TYPE_OPTIONS
     assert "fournisseur" in INTERLOCUTOR_OPTIONS
-    assert "DEMANDE DE PRIX" in DESTINATION_OPTIONS
+    assert "Fournisseurs/Demande de prix" in DESTINATION_OPTIONS
     assert editable_options_for_column(TYPE_COLUMN) == MAIL_TYPE_OPTIONS
     assert editable_options_for_column(INTERLOCUTOR_COLUMN) == INTERLOCUTOR_OPTIONS
     assert editable_options_for_column(DESTINATION_COLUMN) == DESTINATION_OPTIONS

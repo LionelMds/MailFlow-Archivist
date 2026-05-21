@@ -87,7 +87,7 @@ def make_row(
         requires_review=False,
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="CORRESPONDANCE",
+        target_relative_folder="Correspondance",
         target_path=tmp_path,
         confidence=0.91,
         duplicate_status="none",
@@ -133,7 +133,7 @@ def test_project_html_export_writes_single_html_and_shared_attachments(tmp_path:
         tmp_path
         / "2025"
         / "2025-4893"
-        / "CORRESPONDANCE"
+        / "Correspondance"
         / "2025-4893 - Correspondance projet.html"
     )
     assert result.html_path.exists()
@@ -146,8 +146,8 @@ def test_project_html_export_writes_single_html_and_shared_attachments(tmp_path:
     assert "Prix &lt;special&gt;" in html
     assert 'data-direction="received"' in html
     assert 'id="folderFilter"' in html
-    assert 'data-folder="CORRESPONDANCE"' in html
-    assert '<span class="chip">CORRESPONDANCE</span>' in html
+    assert 'data-folder="Correspondance"' in html
+    assert '<span class="chip">Correspondance</span>' in html
     assert "./2025-4893%20-%20pieces%20jointes/1-R-Offre%20garde-corps%20-%20plan.pdf" in html
     assert 'data-attachment-link' in html
     assert 'data-local-href="file:///' in html
@@ -189,14 +189,14 @@ def test_project_html_export_renders_folder_tree_and_groups_mails(tmp_path: Path
     request = make_row(tmp_path, entry_id="ENTRY-1").model_copy(
         update={
             "decision": make_row(tmp_path).decision.model_copy(
-                update={"target_relative_folder": "DEMANDE DE PRIX/Metal Factory"}
+                update={"target_relative_folder": "Fournisseurs/Demande de prix/Metal Factory"}
             )
         }
     )
     order = make_row(tmp_path, entry_id="ENTRY-2").model_copy(
         update={
             "decision": make_row(tmp_path).decision.model_copy(
-                update={"target_relative_folder": "COMMANDE/Metal Factory"}
+                update={"target_relative_folder": "Fournisseurs/Commande/Metal Factory"}
             )
         }
     )
@@ -212,11 +212,11 @@ def test_project_html_export_renders_folder_tree_and_groups_mails(tmp_path: Path
 
     html = result.html_path.read_text(encoding="utf-8")
     assert 'class="folder-panel"' in html
-    assert 'data-folder-filter="DEMANDE DE PRIX"' in html
-    assert 'data-folder-section="DEMANDE DE PRIX/Metal Factory"' in html
-    assert "<h2>COMMANDE/Metal Factory</h2>" in html
-    assert html.index("DEMANDE DE PRIX/Metal Factory") < html.index(
-        "COMMANDE/Metal Factory"
+    assert 'data-folder-filter="Fournisseurs/Demande de prix"' in html
+    assert 'data-folder-section="Fournisseurs/Demande de prix/Metal Factory"' in html
+    assert "<h2>Fournisseurs/Commande/Metal Factory</h2>" in html
+    assert html.index("Fournisseurs/Demande de prix/Metal Factory") < html.index(
+        "Fournisseurs/Commande/Metal Factory"
     )
     assert "matchesFolder(card.dataset.folder, activeFolder)" in html
 

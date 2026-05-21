@@ -25,14 +25,14 @@ Cette premiere tranche met en place :
 - scanner et exporteur Outlook mockables ;
 - service de scan Outlook par compte, racine, annee et projet optionnel ;
 - pipeline de previsualisation regles + IA + decision ;
-- hierarchie limitee a `CORRESPONDANCE`, `DEMANDE DE PRIX`, `COMMANDE`,
+- hierarchie limitee a `Correspondance`, `Fournisseurs/Demande de prix`, `Fournisseurs/Commande`,
   puis entreprise ;
 - annuaire SQLite evolutif alimente par les domaines et contacts Outlook ;
 - previsualisateur d'arborescence avec renommage et fusion avant archivage ;
 - parametrage IA dans l'interface avec cle OpenAI stockee dans `keyring` et test visuel ;
 - recherche de mises a jour depuis l'application avec lancement de l'installateur ;
 - logo officiel MailFlow utilise dans l'application, l'icone Windows et l'app macOS ;
-- export HTML projet centralise dans `CORRESPONDANCE` avec pieces jointes liees ;
+- export HTML projet centralise dans `Correspondance` avec pieces jointes liees ;
 - surveillance Outlook par scan regulier avec confirmation avant mise a jour HTML ;
 - export CSV de rapport sans corps de mails ;
 - squelette UI PySide6 ;
@@ -43,8 +43,8 @@ Cette premiere tranche met en place :
 Le bouton `Exporter HTML projet` cree un journal par projet scanne :
 
 ```text
-[Projet]\CORRESPONDANCE\2025-4893 - Correspondance projet.html
-[Projet]\CORRESPONDANCE\2025-4893 - pieces jointes\
+[Projet]\Correspondance\2025-4893 - Correspondance projet.html
+[Projet]\Correspondance\2025-4893 - pieces jointes\
 ```
 
 Le HTML regroupe les mails envoyes et recus dans la meme arborescence que la
@@ -57,7 +57,8 @@ jointes disponibles localement quand elles sont dans un dossier OneDrive. Les pi
 jointes deja presentes sont reutilisees et ne sont pas ecrasees.
 
 Les destinations proposees sont limitees a trois dossiers metier :
-`CORRESPONDANCE/Entreprise`, `DEMANDE DE PRIX/Entreprise` et `COMMANDE/Entreprise`.
+`Correspondance/Entreprise`, `Fournisseurs/Demande de prix/Entreprise` et
+`Fournisseurs/Commande/Entreprise`.
 L'annuaire local peut etre alimente depuis tout l'historique Outlook projet :
 une adresse ou un domaine connu, par exemple `@gva.ch`, prend le pas sur les
 heuristiques de nom et permet de classer directement sous l'entreprise officielle.

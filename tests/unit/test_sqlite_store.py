@@ -17,7 +17,7 @@ def record(tmp_path: Path) -> ArchivedMailRecord:
         sender="dupont@example.com",
         sent_at=datetime(2026, 5, 6, 10, 30),
         msg_path=tmp_path / "mail.msg",
-        target_folder="CORRESPONDANCE",
+        target_folder="Correspondance",
         classification=MailType.DEVIS,
         confidence=0.9,
         archived_at=datetime(2026, 5, 6, 11, 0),

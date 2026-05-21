@@ -149,7 +149,7 @@ def make_row(
         requires_review=action == PreviewAction.REVIEW,
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="DEMANDE DE PRIX",
+        target_relative_folder="Fournisseurs/Demande de prix",
         target_path=tmp_path,
         confidence=0.9,
         duplicate_status="none",
@@ -351,12 +351,12 @@ def test_controller_updates_preview_folder_tree(tmp_path: Path) -> None:
         update={
             "decision": make_row(tmp_path).decision.model_copy(
                 update={
-                    "target_relative_folder": "DEMANDE DE PRIX/METAL-FACTORY",
+                    "target_relative_folder": "Fournisseurs/Demande de prix/METAL-FACTORY",
                     "target_path": (
                         tmp_path
                         / "2025"
                         / "2025-4893"
-                        / "DEMANDE DE PRIX"
+                        / "Fournisseurs/Demande de prix"
                         / "METAL-FACTORY"
                     ),
                 }
@@ -371,14 +371,17 @@ def test_controller_updates_preview_folder_tree(tmp_path: Path) -> None:
     )
     controller.preview_rows = [row]
 
-    assert controller.folder_tree()[0].name == "DEMANDE DE PRIX"
+    tree = controller.folder_tree()
+    assert tree[0].name == "Fournisseurs"
+    assert tree[0].children[0].name == "Demande de prix"
+    assert tree[0].children[0].children[0].name == "METAL-FACTORY"
     controller.rename_preview_folder(
-        "DEMANDE DE PRIX/METAL-FACTORY",
+        "Fournisseurs/Demande de prix/METAL-FACTORY",
         "Metal Factory",
     )
 
     assert controller.preview_rows[0].decision.target_relative_folder == (
-        "DEMANDE DE PRIX/Metal Factory"
+        "Fournisseurs/Demande de prix/Metal Factory"
     )
 
 
@@ -451,12 +454,12 @@ def test_controller_creates_missing_destination_subfolders(tmp_path: Path) -> No
         update={
             "decision": make_row(tmp_path).decision.model_copy(
                 update={
-                    "target_relative_folder": "COMMANDE/Metal Factory",
+                    "target_relative_folder": "Fournisseurs/Commande/Metal Factory",
                     "target_path": (
                         tmp_path
                         / "2025"
                         / "2025-4893"
-                        / "COMMANDE"
+                        / "Fournisseurs/Commande"
                         / "Metal Factory"
                     ),
                 }
@@ -565,7 +568,7 @@ def test_controller_applies_manual_update_and_records_learning(tmp_path: Path) -
         ManualClassificationUpdate(
             mail_type=MailType.DEVIS,
             interlocutor=InterlocutorType.FOURNISSEUR,
-            target_relative_folder="DEMANDE DE PRIX",
+            target_relative_folder="Fournisseurs/Demande de prix",
             learning_term="Offerte",
         ),
     )

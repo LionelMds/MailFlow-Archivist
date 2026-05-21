@@ -4,7 +4,7 @@
 
 MailFlow Archivist scanne les dossiers Outlook projet, propose une decision d'archivage, puis exporte les mails valides en `.msg` avec leurs pieces jointes.
 
-Le logiciel peut aussi generer un journal HTML projet centralise dans `CORRESPONDANCE`.
+Le logiciel peut aussi generer un journal HTML projet centralise dans `Correspondance`.
 Ce fichier reprend la meme arborescence que la previsualisation MailFlow. Il permet de
 parcourir les echanges par dossier, avec recherche et filtres par sens, type,
 interlocuteur et dossier cible. Les pieces jointes sont placees dans un dossier commun
@@ -23,11 +23,11 @@ Avant tout archivage, l'utilisateur garde la main sur :
 Apres la classification, MailFlow propose une destination par entreprise
 d'interlocuteur, limitee a trois dossiers metier :
 
-- correspondance client, interne ou generale : `CORRESPONDANCE/Entreprise` ;
+- correspondance client, interne ou generale : `Correspondance/Entreprise` ;
 - fournisseur avant ou jusqu'a la derniere offre du cycle :
-  `DEMANDE DE PRIX/Entreprise` ;
+  `Fournisseurs/Demande de prix/Entreprise` ;
 - fournisseur apres la derniere offre du cycle :
-  `COMMANDE/Entreprise`.
+  `Fournisseurs/Commande/Entreprise`.
 
 Une nouvelle demande d'offre demarre un nouveau cycle fournisseur. Les echanges qui
 suivent cette nouvelle demande restent donc en `Demande de prix` jusqu'a la prochaine
@@ -140,15 +140,15 @@ l'installateur le demande.
 Sortie attendue :
 
 ```text
-[Projet]\CORRESPONDANCE\2025-4893 - Correspondance projet.html
-[Projet]\CORRESPONDANCE\2025-4893 - pieces jointes\
+[Projet]\Correspondance\2025-4893 - Correspondance projet.html
+[Projet]\Correspondance\2025-4893 - pieces jointes\
   1-R-Offre garde-corps - plan.pdf
   2-E-Reponse offre - devis.xlsx
 ```
 
 Le fichier HTML est mis a jour uniquement apres confirmation. Il affiche un panneau
 `Arborescence` a gauche et les mails groupes sous leurs dossiers cibles a droite. Un
-clic sur une branche, par exemple `DEMANDE DE PRIX`, affiche aussi les sous-dossiers et
+clic sur une branche, par exemple `Fournisseurs/Demande de prix`, affiche aussi les sous-dossiers et
 mails contenus dans cette branche. L'ordre d'affichage reprend l'ordre metier :
 correspondance client, demandes de prix fournisseurs, puis commandes fournisseurs.
 

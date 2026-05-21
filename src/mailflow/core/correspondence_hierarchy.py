@@ -11,9 +11,12 @@ from typing import Protocol
 from mailflow.core.project_paths import local_project_path
 from mailflow.models import Direction, InterlocutorType, MailType, PreviewRow
 
-CORRESPONDENCE_FOLDER = "CORRESPONDANCE"
-SUPPLIER_REQUEST_FOLDER = "DEMANDE DE PRIX"
-SUPPLIER_ORDER_FOLDER = "COMMANDE"
+CORRESPONDENCE_FOLDER = "Correspondance"
+SUPPLIER_ROOT_FOLDER = "Fournisseurs"
+SUPPLIER_REQUEST_LABEL = "Demande de prix"
+SUPPLIER_ORDER_LABEL = "Commande"
+SUPPLIER_REQUEST_FOLDER = f"{SUPPLIER_ROOT_FOLDER}/{SUPPLIER_REQUEST_LABEL}"
+SUPPLIER_ORDER_FOLDER = f"{SUPPLIER_ROOT_FOLDER}/{SUPPLIER_ORDER_LABEL}"
 UNKNOWN_COMPANY = "Interlocuteur inconnu"
 INTERNAL_DOMAINS = ("balzmetal.ch",)
 LEGAL_SUFFIXES = {"ag", "gmbh", "sa", "sarl", "sagl", "ltd", "llc", "inc", "spa", "srl"}

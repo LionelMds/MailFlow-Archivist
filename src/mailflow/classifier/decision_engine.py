@@ -3,6 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
+from mailflow.core.correspondence_hierarchy import (
+    CORRESPONDENCE_FOLDER,
+    SUPPLIER_ORDER_FOLDER,
+    SUPPLIER_REQUEST_FOLDER,
+)
 from mailflow.core.mail_file_plan import planned_msg_path
 from mailflow.core.project_paths import local_project_path
 from mailflow.models import (
@@ -157,10 +162,10 @@ def decide_archive(
 def destination_for(mail_type: MailType, interlocutor: InterlocutorType) -> str | None:
     if mail_type in {MailType.DEMANDE_DE_PRIX, MailType.DEVIS}:
         if interlocutor == InterlocutorType.FOURNISSEUR:
-            return "DEMANDE DE PRIX"
+            return SUPPLIER_REQUEST_FOLDER
     if mail_type == MailType.COMMANDE:
         if interlocutor == InterlocutorType.FOURNISSEUR:
-            return "COMMANDE"
+            return SUPPLIER_ORDER_FOLDER
     if mail_type in {
         MailType.FACTURE,
         MailType.CORRESPONDANCE_GENERALE,
@@ -169,7 +174,7 @@ def destination_for(mail_type: MailType, interlocutor: InterlocutorType) -> str 
         MailType.LIVRAISON,
         MailType.ADMINISTRATIF,
     }:
-        return "CORRESPONDANCE"
+        return CORRESPONDENCE_FOLDER
     if mail_type == MailType.A_VERIFIER:
         return "A verifier"
     return None

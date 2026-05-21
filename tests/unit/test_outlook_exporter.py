@@ -84,7 +84,7 @@ def decision(tmp_path: Path) -> ArchiveDecision:
         requires_review=False,
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="DEMANDE DE PRIX",
+        target_relative_folder="Fournisseurs/Demande de prix",
         target_path=tmp_path,
         confidence=0.9,
         duplicate_status="none",

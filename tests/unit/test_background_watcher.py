@@ -33,7 +33,7 @@ def make_row(entry_id: str, tmp_path: Path) -> PreviewRow:
         requires_review=False,
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="CORRESPONDANCE",
+        target_relative_folder="Correspondance",
         target_path=tmp_path,
         confidence=0.9,
         duplicate_status="none",
