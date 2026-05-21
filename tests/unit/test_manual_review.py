@@ -11,6 +11,7 @@ from mailflow.core.manual_review import (
     classify_with_learned_terms,
     learned_rule_from_signal,
     misleading_term_from_signal,
+    suggested_manual_destination,
 )
 from mailflow.models import (
     ArchiveDecision,
@@ -140,6 +141,25 @@ def test_apply_manual_classification_keeps_a_verifier_in_review(tmp_path: Path) 
 
     assert updated.action == PreviewAction.REVIEW
     assert updated.decision.archive is False
+
+
+def test_suggested_manual_destination_moves_corrected_review_rows() -> None:
+    assert suggested_manual_destination(
+        MailType.DEVIS,
+        InterlocutorType.FOURNISSEUR,
+    ) == "Fournisseurs/Demande de prix"
+    assert suggested_manual_destination(
+        MailType.COMMANDE,
+        InterlocutorType.FOURNISSEUR,
+    ) == "Fournisseurs/Commande"
+    assert suggested_manual_destination(
+        MailType.CORRESPONDANCE_GENERALE,
+        InterlocutorType.CLIENT,
+    ) == "Correspondance"
+    assert suggested_manual_destination(
+        MailType.A_VERIFIER,
+        InterlocutorType.CLIENT,
+    ) == "A verifier"
 
 
 def test_apply_manual_classification_accepts_safe_dynamic_destination(tmp_path: Path) -> None:

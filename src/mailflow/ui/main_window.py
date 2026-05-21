@@ -44,6 +44,7 @@ UI_TEXT = {
     "archive_all_except_review": "Tout archiver sauf a verifier",
     "mark_ignored": "Ignorer selection",
     "restore_archivable": "Tout remettre a archiver",
+    "background_mode": "Passer en arriere-plan",
     "open_project_folder": "Ouvrir dossier projet",
     "export_project_html": "Exporter HTML projet",
     "export_report": "Exporter rapport",
@@ -55,6 +56,8 @@ UI_TEXT = {
     "tray_open": "Ouvrir MailFlow",
     "tray_enable_watch": "Activer surveillance Outlook",
     "tray_disable_watch": "Desactiver surveillance Outlook",
+    "tray_watch_active": "surveillance active",
+    "tray_watch_inactive": "surveillance inactive",
     "tray_quit": "Quitter",
 }
 
@@ -86,7 +89,7 @@ def run_desktop_app(settings: AppSettings) -> int:
 
 def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     from PySide6.QtCore import Qt, QTimer
-    from PySide6.QtGui import QAction, QColor, QIcon
+    from PySide6.QtGui import QAction, QBrush, QColor, QIcon, QPainter, QPen, QPixmap
     from PySide6.QtWidgets import (
         QAbstractItemView,
         QApplication,
@@ -130,6 +133,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         set_openai_api_key,
     )
     from mailflow.core.app_controller import PreviewRequest, build_default_controller
+    from mailflow.core.manual_review import (
+        SPECIAL_MANUAL_DESTINATIONS,
+        suggested_manual_destination,
+    )
     from mailflow.resources import app_icon_path
     from mailflow.ui.mail_preview import preview_row_to_html
     from mailflow.ui.preview_table import (
@@ -242,10 +249,13 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     more_actions_menu = QMenu(more_actions_button)
     ignore_action = QAction(UI_TEXT["mark_ignored"], window)
     restore_archivable_action = QAction(UI_TEXT["restore_archivable"], window)
+    background_action = QAction(UI_TEXT["background_mode"], window)
     open_folder_action = QAction(UI_TEXT["open_project_folder"], window)
     report_action = QAction(UI_TEXT["export_report"], window)
     more_actions_menu.addAction(ignore_action)
     more_actions_menu.addAction(restore_archivable_action)
+    more_actions_menu.addSeparator()
+    more_actions_menu.addAction(background_action)
     more_actions_menu.addSeparator()
     more_actions_menu.addAction(open_folder_action)
     more_actions_menu.addAction(report_action)
@@ -443,9 +453,25 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     watch_timer = QTimer(window)
     watch_timer.setInterval(WATCH_INTERVAL_MS)
     app_icon = QIcon(str(app_icon_path()))
+
+    def tray_status_icon(watch_enabled: bool) -> Any:
+        pixmap = app_icon.pixmap(64, 64)
+        if pixmap.isNull():
+            pixmap = QPixmap(64, 64)
+            pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#ffffff"), 5))
+        painter.setBrush(
+            QBrush(QColor("#16a34a" if watch_enabled else "#94a3b8"))
+        )
+        painter.drawEllipse(39, 39, 20, 20)
+        painter.end()
+        return QIcon(pixmap)
+
     window.setWindowIcon(app_icon)
-    tray_icon = QSystemTrayIcon(app_icon, window)
-    tray_icon.setToolTip(UI_TEXT["window_title"])
+    tray_icon = QSystemTrayIcon(tray_status_icon(False), window)
+    tray_icon.setToolTip(tray_tooltip_text(False))
     tray_menu = QMenu(window)
     tray_open_action = QAction(UI_TEXT["tray_open"], window)
     tray_watch_action = QAction(UI_TEXT["tray_enable_watch"], window)
@@ -504,10 +530,33 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             UI_TEXT["tray_disable_watch"] if enabled else UI_TEXT["tray_enable_watch"]
         )
         tray_watch_action.blockSignals(False)
+        tray_icon.setIcon(tray_status_icon(enabled))
+        tray_icon.setToolTip(tray_tooltip_text(enabled))
 
     def request_watch_from_tray(enabled: bool) -> None:
         if watch_checkbox.isChecked() != enabled:
             watch_checkbox.setChecked(enabled)
+
+    def hide_to_background() -> None:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            append_log("Mode arriere-plan indisponible: zone de notification introuvable.")
+            return
+        if not tray_icon.isVisible():
+            tray_icon.show()
+        window.hide()
+        notify_user(
+            "MailFlow en arriere-plan",
+            tray_tooltip_text(watch_checkbox.isChecked()),
+        )
+        status = (
+            UI_TEXT["tray_watch_active"]
+            if watch_checkbox.isChecked()
+            else UI_TEXT["tray_watch_inactive"]
+        )
+        append_log(
+            "Mode arriere-plan actif: "
+            f"{status}."
+        )
 
     def quit_application() -> None:
         dynamic_window.mailflow_force_quit = True
@@ -898,11 +947,38 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         destination_combo = QComboBox()
         destination_combo.setEditable(True)
         destination_combo.addItems(list(DESTINATION_OPTIONS))
+        initial_destination = (
+            combo_text(row_index, DESTINATION_COLUMN) or row.decision.target_relative_folder
+        )
         set_combo_value(
             destination_combo,
-            combo_text(row_index, DESTINATION_COLUMN) or row.decision.target_relative_folder,
+            initial_destination,
             DESTINATION_OPTIONS,
         )
+        auto_destination = initial_destination in SPECIAL_MANUAL_DESTINATIONS
+
+        def sync_suggested_destination(_value: str = "") -> None:
+            if not auto_destination:
+                return
+            try:
+                suggested = suggested_manual_destination(
+                    MailType(mail_type_combo.currentText()),
+                    InterlocutorType(interlocutor_combo.currentText()),
+                )
+            except ValueError:
+                return
+            destination_combo.blockSignals(True)
+            set_combo_value(destination_combo, suggested, DESTINATION_OPTIONS)
+            destination_combo.blockSignals(False)
+
+        def disable_auto_destination(_value: str = "") -> None:
+            nonlocal auto_destination
+            auto_destination = False
+
+        mail_type_combo.currentTextChanged.connect(sync_suggested_destination)
+        interlocutor_combo.currentTextChanged.connect(sync_suggested_destination)
+        destination_combo.currentTextChanged.connect(disable_auto_destination)
+        sync_suggested_destination()
         form.addRow("Type detecte", mail_type_combo)
         form.addRow("Interlocuteur", interlocutor_combo)
         form.addRow("Destination proposee", destination_combo)
@@ -941,6 +1017,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     def set_combo_value(combo: Any, value: str, options: tuple[str, ...]) -> None:
         if value in options:
+            combo.setCurrentText(value)
+            return
+        if value:
+            combo.addItem(value)
             combo.setCurrentText(value)
 
     def update_projects_root() -> None:
@@ -1294,6 +1374,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     tray_watch_action.toggled.connect(request_watch_from_tray)
     tray_open_action.triggered.connect(show_window_from_tray)
     tray_quit_action.triggered.connect(quit_application)
+    background_action.triggered.connect(lambda _checked=False: hide_to_background())
     tray_icon.activated.connect(
         lambda reason: show_window_from_tray()
         if reason == QSystemTrayIcon.ActivationReason.Trigger
@@ -1344,6 +1425,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_more_actions_menu = more_actions_menu
     dynamic_window.mailflow_ignore_action = ignore_action
     dynamic_window.mailflow_restore_archivable_action = restore_archivable_action
+    dynamic_window.mailflow_background_action = background_action
     dynamic_window.mailflow_open_folder_action = open_folder_action
     dynamic_window.mailflow_report_action = report_action
     dynamic_window.mailflow_import_directory_button = import_directory_button
@@ -1498,6 +1580,11 @@ def should_hide_to_tray(
 
 def should_pause_watch_scan(*, window_visible: bool, preview_has_rows: bool) -> bool:
     return window_visible and preview_has_rows
+
+
+def tray_tooltip_text(watch_enabled: bool) -> str:
+    status = UI_TEXT["tray_watch_active"] if watch_enabled else UI_TEXT["tray_watch_inactive"]
+    return f"{UI_TEXT['window_title']} - {status}"
 
 
 def confirm_html_overwrite(path: Path, *, parent: Any | None = None) -> bool:

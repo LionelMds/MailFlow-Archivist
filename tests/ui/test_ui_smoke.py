@@ -34,6 +34,7 @@ from mailflow.ui.main_window import (
     should_hide_to_tray,
     should_pause_watch_scan,
     summarize_archive_selection,
+    tray_tooltip_text,
 )
 from mailflow.ui.preview_table import ACTION_LABELS, PREVIEW_COLUMNS
 
@@ -227,7 +228,9 @@ def test_ui_text_contains_expected_actions() -> None:
     assert UI_TEXT["rename_directory"] == "Renommer entreprise"
     assert UI_TEXT["archive"] == "Archiver"
     assert UI_TEXT["more_actions"] == "Plus"
+    assert UI_TEXT["background_mode"] == "Passer en arriere-plan"
     assert UI_TEXT["tray_open"] == "Ouvrir MailFlow"
+    assert UI_TEXT["tray_watch_active"] == "surveillance active"
     assert UI_TEXT["tray_quit"] == "Quitter"
     assert "Destination proposee" in PREVIEW_COLUMNS
     assert ACTION_LABELS[PreviewAction.REVIEW] == "A verifier"
@@ -347,6 +350,11 @@ def test_should_pause_watch_scan_only_when_preview_is_open() -> None:
     assert not should_pause_watch_scan(window_visible=True, preview_has_rows=False)
 
 
+def test_tray_tooltip_shows_watch_state() -> None:
+    assert tray_tooltip_text(False) == "MailFlow Archivist - surveillance inactive"
+    assert tray_tooltip_text(True) == "MailFlow Archivist - surveillance active"
+
+
 def test_main_window_instantiates_when_pyside6_is_available() -> None:
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication, QLineEdit
@@ -374,7 +382,9 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_reset_button.text() == "Reinitialiser"
     assert not window.windowIcon().isNull()
     assert not dynamic_window.mailflow_tray_icon.icon().isNull()
-    assert dynamic_window.mailflow_tray_icon.toolTip() == "MailFlow Archivist"
+    assert dynamic_window.mailflow_tray_icon.toolTip() == (
+        "MailFlow Archivist - surveillance inactive"
+    )
     assert dynamic_window.mailflow_tray_open_action.text() == "Ouvrir MailFlow"
     assert dynamic_window.mailflow_tray_watch_action.isCheckable()
     assert dynamic_window.mailflow_tray_quit_action.text() == "Quitter"
@@ -386,6 +396,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_archive_all_action.text() == "Tout archiver sauf a verifier"
     assert dynamic_window.mailflow_more_actions_button.text() == "Plus"
     assert dynamic_window.mailflow_more_actions_menu.actions()[0].text() == "Ignorer selection"
+    assert dynamic_window.mailflow_background_action.text() == "Passer en arriere-plan"
     assert dynamic_window.mailflow_restore_archivable_action.text() == (
         "Tout remettre a archiver"
     )

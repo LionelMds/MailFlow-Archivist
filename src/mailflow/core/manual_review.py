@@ -33,6 +33,7 @@ MANUAL_DESTINATIONS = (
     "A verifier",
     "Ne pas archiver",
 )
+SPECIAL_MANUAL_DESTINATIONS = {"A verifier", "Ne pas archiver"}
 
 
 @dataclass(frozen=True)
@@ -107,12 +108,27 @@ def resolve_manual_target_folder(
     organization_directory: OrganizationDirectoryProtocol | None = None,
 ) -> str:
     normalized = target_relative_folder.replace("\\", "/").strip("/")
-    if normalized in {"A verifier", "Ne pas archiver"}:
+    if normalized in SPECIAL_MANUAL_DESTINATIONS:
         return normalized
     if normalized not in MANUAL_DESTINATIONS:
         return normalized
     company = company_folder_for_row(row, organization_directory)
     return f"{normalized}/{company}"
+
+
+def suggested_manual_destination(
+    mail_type: MailType,
+    interlocutor: InterlocutorType,
+) -> str:
+    if mail_type == MailType.INUTILE_OU_FAIBLE_VALEUR:
+        return "Ne pas archiver"
+    if mail_type == MailType.A_VERIFIER or interlocutor == InterlocutorType.INCONNU:
+        return "A verifier"
+    if interlocutor == InterlocutorType.FOURNISSEUR:
+        if mail_type == MailType.COMMANDE:
+            return SUPPLIER_ORDER_FOLDER
+        return SUPPLIER_REQUEST_FOLDER
+    return CORRESPONDENCE_FOLDER
 
 
 def classify_with_learned_terms(
