@@ -61,3 +61,62 @@ def test_directory_store_keeps_generic_domain_as_contact_only(tmp_path: Path) ->
     assert not result.new_domain
     assert store.organization_name_for_email("atelier@gmail.com") == "Atelier Example SA"
     assert store.organization_name_for_email("autre@gmail.com") is None
+
+
+def test_directory_store_lists_organizations_for_ui(tmp_path: Path) -> None:
+    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
+    store.record_observation(observation("contact@gva.ch", display_name="Jean AIG"))
+    store.record_observation(
+        replace(
+            observation("achat@gva.ch", display_name="Marie AIG"),
+            project_number="2026-4995",
+        )
+    )
+
+    entries = store.list_organizations()
+
+    assert len(entries) == 1
+    assert entries[0].name == "AIG"
+    assert entries[0].domains == ("gva.ch",)
+    assert entries[0].contacts == (
+        "Marie AIG <achat@gva.ch>",
+        "Jean AIG <contact@gva.ch>",
+    )
+    assert entries[0].project_count == 2
+
+
+def test_directory_store_renames_organization(tmp_path: Path) -> None:
+    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
+    store.record_observation(observation("contact@gva.ch"))
+    organization_id = store.list_organizations()[0].organization_id
+
+    store.rename_organization(organization_id, "Aeroport International Geneve")
+
+    assert store.organization_name_for_email("nouveau@gva.ch") == (
+        "Aeroport International Geneve"
+    )
+    assert store.list_organizations()[0].name == "Aeroport International Geneve"
+
+
+def test_directory_store_merges_organizations(tmp_path: Path) -> None:
+    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
+    store.record_observation(observation("contact@gva.ch"))
+    store.record_observation(
+        observation(
+            "vente@metalfactory.ch",
+            display_name="Metal Factory",
+            organization_name="Metal Factory",
+            domain="metalfactory.ch",
+        )
+    )
+    entries_by_name = {entry.name: entry.organization_id for entry in store.list_organizations()}
+
+    store.merge_organizations(entries_by_name["Metal Factory"], entries_by_name["AIG"])
+
+    entries = store.list_organizations()
+    assert len(entries) == 1
+    assert entries[0].name == "AIG"
+    assert entries[0].domains == ("gva.ch", "metalfactory.ch")
+    assert store.organization_name_for_email("vente@metalfactory.ch") == "AIG"
+    assert store.count_organizations() == 1
+    assert store.count_contacts() == 2

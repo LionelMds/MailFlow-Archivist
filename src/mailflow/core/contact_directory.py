@@ -56,6 +56,15 @@ class DirectoryUpsertOutcome:
     new_project_participant: bool = False
 
 
+@dataclass(frozen=True)
+class OrganizationDirectoryEntry:
+    organization_id: int
+    name: str
+    domains: tuple[str, ...]
+    contacts: tuple[str, ...]
+    project_count: int
+
+
 class ContactDirectoryStoreProtocol(Protocol):
     def record_observation(self, observation: ContactObservation) -> DirectoryUpsertOutcome:
         ...

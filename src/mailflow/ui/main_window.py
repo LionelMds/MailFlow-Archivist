@@ -33,6 +33,7 @@ UI_TEXT = {
     "actions": "Actions",
     "logs": "Logs",
     "scan_button": "Scanner Outlook",
+    "reset_workspace": "Reinitialiser",
     "watch_outlook": "Surveillance Outlook",
     "save_settings": "Enregistrer parametres",
     "save_openai_key": "Enregistrer cle",
@@ -47,6 +48,9 @@ UI_TEXT = {
     "export_project_html": "Exporter HTML projet",
     "export_report": "Exporter rapport",
     "import_directory": "Importer annuaire Outlook",
+    "refresh_directory": "Rafraichir",
+    "rename_directory": "Renommer entreprise",
+    "merge_directory": "Fusionner entreprise",
     "more_actions": "Plus",
     "tray_open": "Ouvrir MailFlow",
     "tray_enable_watch": "Activer surveillance Outlook",
@@ -186,6 +190,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     project_input.setPlaceholderText("Projet")
     project_input.setFixedWidth(120)
     scan_button = QPushButton(UI_TEXT["scan_button"])
+    reset_button = QPushButton(UI_TEXT["reset_workspace"])
     watch_checkbox = QCheckBox(UI_TEXT["watch_outlook"])
     top_layout.addWidget(app_title)
     top_layout.addSpacing(8)
@@ -198,6 +203,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     top_layout.addWidget(QLabel("Projet"))
     top_layout.addWidget(project_input)
     top_layout.addWidget(scan_button)
+    top_layout.addWidget(reset_button)
     top_layout.addWidget(watch_checkbox)
     layout.addWidget(top_bar)
 
@@ -284,13 +290,36 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     directory_layout = QVBoxLayout(directory_page)
     directory_layout.setContentsMargins(0, 0, 0, 0)
     directory_layout.setSpacing(8)
+    directory_actions = QWidget()
+    directory_actions_layout = QHBoxLayout(directory_actions)
+    directory_actions_layout.setContentsMargins(0, 0, 0, 0)
     import_directory_button = QPushButton(UI_TEXT["import_directory"])
+    refresh_directory_button = QPushButton(UI_TEXT["refresh_directory"])
+    rename_directory_button = QPushButton(UI_TEXT["rename_directory"])
+    merge_directory_button = QPushButton(UI_TEXT["merge_directory"])
+    directory_actions_layout.addWidget(import_directory_button)
+    directory_actions_layout.addWidget(refresh_directory_button)
+    directory_actions_layout.addWidget(rename_directory_button)
+    directory_actions_layout.addWidget(merge_directory_button)
+    directory_actions_layout.addStretch(1)
+    directory_table = QTableWidget(0, 4)
+    directory_table.setHorizontalHeaderLabels(["Entreprise", "Domaines", "Contacts", "Projets"])
+    directory_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    directory_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+    directory_table.horizontalHeader().setSectionsMovable(True)
+    directory_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+    directory_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+    directory_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+    directory_table.horizontalHeader().setSectionResizeMode(
+        3,
+        QHeaderView.ResizeMode.ResizeToContents,
+    )
     directory_status_label = QLabel("Annuaire local")
     directory_status_label.setWordWrap(True)
     directory_status_label.setStyleSheet("QLabel { color: #334155; }")
-    directory_layout.addWidget(import_directory_button)
+    directory_layout.addWidget(directory_actions)
+    directory_layout.addWidget(directory_table, 1)
     directory_layout.addWidget(directory_status_label)
-    directory_layout.addStretch(1)
     pages.addWidget(directory_page)
 
     settings_page = QWidget()
@@ -709,6 +738,112 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         except Exception as exc:
             append_log(f"Erreur fusion dossier: {exc}")
 
+    def refresh_directory_table() -> None:
+        try:
+            entries = active_controller.directory_entries()
+        except Exception as exc:
+            directory_table.setRowCount(0)
+            directory_status_label.setText(f"Annuaire indisponible: {exc}")
+            return
+        directory_table.clearContents()
+        directory_table.setRowCount(len(entries))
+        directory_table.setHorizontalHeaderLabels(["Entreprise", "Domaines", "Contacts", "Projets"])
+        for row_index, entry in enumerate(entries):
+            organization_id = int(entry.organization_id)
+            name = str(entry.name)
+            domains = tuple(str(item) for item in entry.domains)
+            contacts = tuple(str(item) for item in entry.contacts)
+            project_count = int(entry.project_count)
+
+            name_item = QTableWidgetItem(name)
+            name_item.setData(Qt.ItemDataRole.UserRole, organization_id)
+            domain_item = QTableWidgetItem(format_directory_values(domains, limit=8))
+            contact_item = QTableWidgetItem(format_directory_values(contacts, limit=6))
+            project_item = QTableWidgetItem(str(project_count))
+            domain_item.setToolTip("\n".join(domains))
+            contact_item.setToolTip("\n".join(contacts))
+            directory_table.setItem(row_index, 0, name_item)
+            directory_table.setItem(row_index, 1, domain_item)
+            directory_table.setItem(row_index, 2, contact_item)
+            directory_table.setItem(row_index, 3, project_item)
+        directory_table.resizeRowsToContents()
+        directory_status_label.setText(
+            f"{len(entries)} entreprise(s) dans l'annuaire local."
+        )
+
+    def selected_directory_organization() -> tuple[int, str] | None:
+        selection_model = directory_table.selectionModel()
+        selected_rows = (
+            selection_model.selectedRows()
+            if selection_model is not None
+            else []
+        )
+        row_index = selected_rows[0].row() if selected_rows else directory_table.currentRow()
+        if row_index < 0:
+            return None
+        item = directory_table.item(row_index, 0)
+        if item is None:
+            return None
+        organization_id = int(item.data(Qt.ItemDataRole.UserRole))
+        return organization_id, item.text()
+
+    def rename_selected_directory_organization() -> None:
+        selected = selected_directory_organization()
+        if selected is None:
+            append_log("Selectionner une entreprise dans l'annuaire.")
+            return
+        organization_id, current_name = selected
+        new_name, accepted = QInputDialog.getText(
+            window,
+            "Renommer entreprise",
+            "Nouveau nom de l'entreprise",
+            text=current_name,
+        )
+        if not accepted:
+            return
+        try:
+            active_controller.rename_directory_organization(organization_id, new_name)
+            refresh_directory_table()
+            append_log(f"Entreprise renommee: {current_name} -> {new_name.strip()}.")
+        except Exception as exc:
+            append_log(f"Erreur renommage entreprise: {exc}")
+
+    def merge_selected_directory_organization() -> None:
+        selected = selected_directory_organization()
+        if selected is None:
+            append_log("Selectionner une entreprise dans l'annuaire.")
+            return
+        source_id, source_name = selected
+        try:
+            entries = active_controller.directory_entries()
+        except Exception as exc:
+            append_log(f"Annuaire indisponible: {exc}")
+            return
+        options_by_label = {
+            format_directory_entry_label(entry): int(entry.organization_id)
+            for entry in entries
+            if int(entry.organization_id) != source_id
+        }
+        if not options_by_label:
+            append_log("Aucune autre entreprise disponible pour la fusion.")
+            return
+        target_label, accepted = QInputDialog.getItem(
+            window,
+            "Fusionner entreprise",
+            f"Fusionner {source_name} vers",
+            list(options_by_label),
+            editable=False,
+        )
+        if not accepted:
+            return
+        target_id = options_by_label[str(target_label)]
+        try:
+            active_controller.merge_directory_organizations(source_id, target_id)
+            refresh_directory_table()
+            append_log(f"Entreprise fusionnee: {source_name} -> {target_label}.")
+        except Exception as exc:
+            append_log(f"Erreur fusion entreprise: {exc}")
+
     def open_manual_dialog(row_index: int) -> None:
         if refreshing_table:
             return
@@ -937,6 +1072,23 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         except Exception as exc:
             append_log(f"Erreur scan: {exc}")
 
+    def on_reset_workspace() -> None:
+        try:
+            if watch_checkbox.isChecked():
+                watch_checkbox.setChecked(False)
+            active_controller.reset_preview()
+            watch_state.reset([])
+            project_input.clear()
+            table.clearSelection()
+            refresh_table()
+            mail_preview.clear()
+            navigation.setCurrentRow(0)
+            append_log(
+                "Espace de travail reinitialise. Reglages, annuaire et archives conserves."
+            )
+        except Exception as exc:
+            append_log(f"Erreur reinitialisation: {exc}")
+
     def on_export_report() -> None:
         try:
             path = active_controller.export_report()
@@ -973,6 +1125,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             )
             message = format_directory_import_result(result)
             directory_status_label.setText(message)
+            refresh_directory_table()
             append_log(message)
         except Exception as exc:
             append_log(f"Erreur import annuaire: {exc}")
@@ -1136,6 +1289,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(f"Erreur archivage global: {exc}")
 
     scan_button.clicked.connect(on_scan)
+    reset_button.clicked.connect(on_reset_workspace)
     watch_checkbox.toggled.connect(on_watch_toggled)
     tray_watch_action.toggled.connect(request_watch_from_tray)
     tray_open_action.triggered.connect(show_window_from_tray)
@@ -1157,6 +1311,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     )
     report_action.triggered.connect(lambda _checked=False: on_export_report())
     import_directory_button.clicked.connect(on_import_directory)
+    refresh_directory_button.clicked.connect(refresh_directory_table)
+    rename_directory_button.clicked.connect(rename_selected_directory_organization)
+    merge_directory_button.clicked.connect(merge_selected_directory_organization)
     save_openai_key_button.clicked.connect(save_openai_key_from_input)
     test_openai_key_button.clicked.connect(test_openai_key_from_input)
     check_updates_button.clicked.connect(check_updates_from_ui)
@@ -1170,8 +1327,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     table.itemSelectionChanged.connect(update_preview_from_selection)
     dynamic_window.mailflow_close_handler = handle_window_close
     populate_account_options()
+    refresh_directory_table()
 
     dynamic_window.mailflow_controller = active_controller
+    dynamic_window.mailflow_scan_button = scan_button
+    dynamic_window.mailflow_reset_button = reset_button
     dynamic_window.mailflow_preview_table = table
     dynamic_window.mailflow_folder_tree = folder_tree
     dynamic_window.mailflow_rename_folder_button = rename_folder_button
@@ -1187,6 +1347,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_open_folder_action = open_folder_action
     dynamic_window.mailflow_report_action = report_action
     dynamic_window.mailflow_import_directory_button = import_directory_button
+    dynamic_window.mailflow_refresh_directory_button = refresh_directory_button
+    dynamic_window.mailflow_rename_directory_button = rename_directory_button
+    dynamic_window.mailflow_merge_directory_button = merge_directory_button
+    dynamic_window.mailflow_directory_table = directory_table
     dynamic_window.mailflow_directory_status_label = directory_status_label
     dynamic_window.mailflow_logs = logs
     dynamic_window.mailflow_mail_preview = mail_preview
@@ -1417,6 +1581,22 @@ def format_project_html_export_result(results: Sequence[object]) -> str:
         attachment_count = len(getattr(result, "attachment_paths", []))
         lines.append(f"- {count} mail(s), {attachment_count} piece(s) jointe(s): {path}")
     return "\n".join(lines)
+
+
+def format_directory_values(values: Sequence[str], *, limit: int) -> str:
+    cleaned = [value for value in values if value.strip()]
+    if len(cleaned) <= limit:
+        return ", ".join(cleaned)
+    visible = ", ".join(cleaned[:limit])
+    return f"{visible}, +{len(cleaned) - limit}"
+
+
+def format_directory_entry_label(entry: Any) -> str:
+    organization_id = int(entry.organization_id)
+    name = str(entry.name)
+    domains = tuple(str(item) for item in entry.domains)
+    domain_label = format_directory_values(domains, limit=3) or "sans domaine"
+    return f"{name} [{domain_label}] #{organization_id}"
 
 
 def format_directory_import_result(result: object) -> str:

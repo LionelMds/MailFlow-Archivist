@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from mailflow.classifier.ai_classifier import AiClassifier
 from mailflow.classifier.pipeline import ClassificationPipeline
@@ -24,8 +24,10 @@ from mailflow.core.archive_service import ArchiveService
 from mailflow.core.contact_directory import (
     ContactDirectoryStoreProtocol,
     DirectoryImportResult,
+    OrganizationDirectoryEntry,
     import_contact_directory_from_mails,
 )
+from mailflow.core.correspondence_hierarchy import OrganizationDirectoryProtocol
 from mailflow.core.folder_tree import (
     FolderPathSummary,
     FolderTreeNode,
@@ -101,6 +103,25 @@ class LearningStoreProtocol(Protocol):
         ...
 
 
+class DirectoryStoreProtocol(
+    ContactDirectoryStoreProtocol,
+    OrganizationDirectoryProtocol,
+    Protocol,
+):
+    def list_organizations(self) -> list[OrganizationDirectoryEntry]:
+        ...
+
+    def rename_organization(self, organization_id: int, name: str) -> None:
+        ...
+
+    def merge_organizations(
+        self,
+        source_organization_id: int,
+        target_organization_id: int,
+    ) -> None:
+        ...
+
+
 @dataclass(frozen=True)
 class PreviewRequest:
     account_identifier: str | None
@@ -119,7 +140,7 @@ class AppController:
         report_dir: Path,
         archive_executor: ArchiveBatchExecutor | None = None,
         learning_store: LearningStoreProtocol | None = None,
-        directory_store: ContactDirectoryStoreProtocol | None = None,
+        directory_store: DirectoryStoreProtocol | None = None,
     ) -> None:
         self.scan_service = scan_service
         self.preview_pipeline = preview_pipeline
@@ -144,6 +165,11 @@ class AppController:
         mails = [item.metadata for item in scanned]
         self.outlook_items = {item.metadata.entry_id: item.item for item in scanned}
         self.preview_rows = self.preview_pipeline.preview(mails)
+        return self.preview_rows
+
+    def reset_preview(self) -> list[PreviewRow]:
+        self.preview_rows = []
+        self.outlook_items = {}
         return self.preview_rows
 
     def rows_ready_for_archive(self, *, include_review: bool = False) -> list[PreviewRow]:
@@ -223,10 +249,16 @@ class AppController:
         if row_index < 0 or row_index >= len(self.preview_rows):
             msg = f"Index de ligne invalide: {row_index}"
             raise IndexError(msg)
+        organization_directory = (
+            cast(OrganizationDirectoryProtocol, self.directory_store)
+            if hasattr(self.directory_store, "organization_name_for_email")
+            else None
+        )
         updated_row, signal = apply_manual_classification(
             self.preview_rows[row_index],
             update,
             projects_root=self.projects_root,
+            organization_directory=organization_directory,
         )
         self.preview_rows[row_index] = updated_row
         if self.learning_store is not None:
@@ -267,6 +299,31 @@ class AppController:
         return import_contact_directory_from_mails(
             [item.metadata for item in scanned],
             self.directory_store,
+        )
+
+    def directory_entries(self) -> list[OrganizationDirectoryEntry]:
+        if self.directory_store is None:
+            msg = "Aucun annuaire n'est configure"
+            raise RuntimeError(msg)
+        return self.directory_store.list_organizations()
+
+    def rename_directory_organization(self, organization_id: int, name: str) -> None:
+        if self.directory_store is None:
+            msg = "Aucun annuaire n'est configure"
+            raise RuntimeError(msg)
+        self.directory_store.rename_organization(organization_id, name)
+
+    def merge_directory_organizations(
+        self,
+        source_organization_id: int,
+        target_organization_id: int,
+    ) -> None:
+        if self.directory_store is None:
+            msg = "Aucun annuaire n'est configure"
+            raise RuntimeError(msg)
+        self.directory_store.merge_organizations(
+            source_organization_id,
+            target_organization_id,
         )
 
     def archive_ready(self, *, include_review: bool = False) -> ArchiveBatchResult:
@@ -385,7 +442,7 @@ class OutlookAppController(AppController):
         report_dir: Path,
         archive_executor: ArchiveBatchExecutor | None = None,
         learning_store: LearningStoreProtocol | None = None,
-        directory_store: ContactDirectoryStoreProtocol | None = None,
+        directory_store: DirectoryStoreProtocol | None = None,
     ) -> None:
         super().__init__(
             scan_service=scan_service,

@@ -7,7 +7,11 @@ import pytest
 
 from mailflow.core.app_controller import AppController, PreviewRequest, selected_rows
 from mailflow.core.archive_batch import ArchiveBatchExecutor
-from mailflow.core.contact_directory import ContactObservation, DirectoryUpsertOutcome
+from mailflow.core.contact_directory import (
+    ContactObservation,
+    DirectoryUpsertOutcome,
+    OrganizationDirectoryEntry,
+)
 from mailflow.core.manual_review import LearnedClassificationRule, LearnedMisleadingTerm
 from mailflow.core.scan_service import DirectoryScanRequest, ScanRequest
 from mailflow.models import (
@@ -97,15 +101,45 @@ class FakeLearningStore:
 class FakeDirectoryStore:
     def __init__(self) -> None:
         self.contacts: list[str] = []
+        self.domain_map: dict[str, str] = {}
+        self.entries = [
+            OrganizationDirectoryEntry(
+                organization_id=1,
+                name="AIG",
+                domains=("gva.ch",),
+                contacts=("contact@gva.ch",),
+                project_count=1,
+            )
+        ]
+        self.renamed: tuple[int, str] | None = None
+        self.merged: tuple[int, int] | None = None
 
     def record_observation(self, observation: ContactObservation) -> DirectoryUpsertOutcome:
         self.contacts.append(observation.email)
+        self.domain_map[observation.domain] = observation.organization_name
         return DirectoryUpsertOutcome(
             new_organization=True,
             new_domain=observation.allow_domain_mapping,
             new_contact=True,
             new_project_participant=True,
         )
+
+    def organization_name_for_email(self, email: str) -> str | None:
+        domain = email.rsplit("@", maxsplit=1)[-1].casefold()
+        return self.domain_map.get(domain)
+
+    def list_organizations(self) -> list[OrganizationDirectoryEntry]:
+        return self.entries
+
+    def rename_organization(self, organization_id: int, name: str) -> None:
+        self.renamed = (organization_id, name)
+
+    def merge_organizations(
+        self,
+        source_organization_id: int,
+        target_organization_id: int,
+    ) -> None:
+        self.merged = (source_organization_id, target_organization_id)
 
 
 class FakePreviewPipeline:
@@ -203,6 +237,24 @@ def test_controller_scans_and_builds_preview_rows(tmp_path: Path) -> None:
             project_number="2025-4893",
         )
     ]
+
+
+def test_controller_reset_preview_clears_rows_and_outlook_items(tmp_path: Path) -> None:
+    row = make_row(tmp_path)
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+    controller.preview_rows = [row]
+    controller.outlook_items = {row.mail.entry_id: object()}
+
+    rows = controller.reset_preview()
+
+    assert rows == []
+    assert controller.preview_rows == []
+    assert controller.outlook_items == {}
 
 
 def test_controller_rejects_missing_year(tmp_path: Path) -> None:
@@ -418,6 +470,24 @@ def test_controller_imports_contact_directory_from_all_project_folders(tmp_path:
     assert directory_store.contacts == ["contact@gva.ch"]
 
 
+def test_controller_exposes_directory_entries_and_edits(tmp_path: Path) -> None:
+    directory_store = FakeDirectoryStore()
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+        directory_store=directory_store,
+    )
+
+    assert controller.directory_entries() == directory_store.entries
+    controller.rename_directory_organization(1, "Aeroport International Geneve")
+    controller.merge_directory_organizations(2, 1)
+
+    assert directory_store.renamed == (1, "Aeroport International Geneve")
+    assert directory_store.merged == (2, 1)
+
+
 def test_controller_archives_ready_rows_with_stored_outlook_items(tmp_path: Path) -> None:
     create_project_folder(tmp_path)
     mail = make_mail()
@@ -576,6 +646,40 @@ def test_controller_applies_manual_update_and_records_learning(tmp_path: Path) -
     assert updated.action == PreviewAction.ARCHIVE
     assert controller.preview_rows[0].decision.mail_type == MailType.DEVIS
     assert learning_store.signals[0].learning_term == "Offerte"
+
+
+def test_controller_manual_update_uses_directory_for_company_folder(tmp_path: Path) -> None:
+    row = make_row(tmp_path, PreviewAction.REVIEW).model_copy(
+        update={
+            "mail": make_row(tmp_path, PreviewAction.REVIEW).mail.model_copy(
+                update={
+                    "sender_name": "Jean Dupont",
+                    "sender_email": "jean.dupont@gva.ch",
+                }
+            )
+        }
+    )
+    directory_store = FakeDirectoryStore()
+    directory_store.domain_map["gva.ch"] = "AIG"
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+        directory_store=directory_store,
+    )
+    controller.preview_rows = [row]
+
+    updated = controller.apply_manual_update(
+        0,
+        ManualClassificationUpdate(
+            mail_type=MailType.CORRESPONDANCE_GENERALE,
+            interlocutor=InterlocutorType.CLIENT,
+            target_relative_folder="Correspondance",
+        ),
+    )
+
+    assert updated.decision.target_relative_folder == "Correspondance/AIG"
 
 
 def test_selected_rows_ignores_invalid_indexes(tmp_path: Path) -> None:

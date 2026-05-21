@@ -26,14 +26,23 @@ from mailflow.models import (
 )
 
 
-def make_row(tmp_path: Path) -> PreviewRow:
+def make_row(
+    tmp_path: Path,
+    *,
+    sender_name: str = "Dupont",
+    sender_email: str = "",
+    direction: Direction = Direction.RECEIVED,
+    recipients: list[str] | None = None,
+) -> PreviewRow:
     mail = MailMetadata(
         entry_id="ENTRY-1",
         project_number="2025-4893",
         outlook_folder="Boite de reception/2025/2025-4893",
-        direction=Direction.RECEIVED,
+        direction=direction,
         subject="A verifier",
-        sender_name="Dupont",
+        sender_name=sender_name,
+        sender_email=sender_email,
+        recipients=recipients or ["lionel@balzmetal.ch"],
         sent_at=datetime(2026, 5, 6, 10, 30),
     )
     decision = ArchiveDecision(
@@ -83,8 +92,10 @@ def test_apply_manual_classification_updates_decision_and_learning_signal(
     assert updated.decision.archive is True
     assert updated.decision.requires_review is False
     assert updated.decision.target_path == (
-        tmp_path / "2025" / "2025-4893" / "Fournisseurs/Demande de prix"
+        tmp_path / "2025" / "2025-4893" / "Fournisseurs/Demande de prix" / "Dupont"
     )
+    assert updated.decision.target_relative_folder == "Fournisseurs/Demande de prix/Dupont"
+    assert signal.selected_target_folder == "Fournisseurs/Demande de prix/Dupont"
     assert signal.learning_term == "Offerte"
     assert signal.misleading_term == "newsletter"
     assert signal.manual_required is False
@@ -108,6 +119,7 @@ def test_apply_manual_classification_records_manual_required_without_term(
     )
 
     assert updated.action == PreviewAction.ARCHIVE
+    assert updated.decision.target_relative_folder == "Correspondance/Dupont"
     assert signal.learning_term is None
     assert signal.manual_required is True
 
@@ -150,6 +162,76 @@ def test_apply_manual_classification_accepts_safe_dynamic_destination(tmp_path: 
         / "Fournisseurs/Commande"
         / "Metal Factory"
     )
+
+
+def test_manual_base_destination_uses_domain_company_for_client(tmp_path: Path) -> None:
+    update = ManualClassificationUpdate(
+        mail_type=MailType.CORRESPONDANCE_GENERALE,
+        interlocutor=InterlocutorType.CLIENT,
+        target_relative_folder="Correspondance",
+    )
+    row = make_row(
+        tmp_path,
+        sender_name="Jean Dupont",
+        sender_email="jean.dupont@gva.ch",
+    )
+
+    updated, signal = apply_manual_classification(row, update, projects_root=tmp_path)
+
+    assert updated.decision.target_relative_folder == "Correspondance/GVA"
+    assert updated.decision.target_path == (
+        tmp_path / "2025" / "2025-4893" / "Correspondance" / "GVA"
+    )
+    assert signal.selected_target_folder == "Correspondance/GVA"
+
+
+def test_manual_base_destination_prefers_directory_company_for_domain(
+    tmp_path: Path,
+) -> None:
+    class Directory:
+        def organization_name_for_email(self, email: str) -> str | None:
+            return "AIG" if email.endswith("@gva.ch") else None
+
+    update = ManualClassificationUpdate(
+        mail_type=MailType.CORRESPONDANCE_GENERALE,
+        interlocutor=InterlocutorType.CLIENT,
+        target_relative_folder="Correspondance",
+    )
+    row = make_row(
+        tmp_path,
+        sender_name="Jean Dupont",
+        sender_email="jean.dupont@gva.ch",
+    )
+
+    updated, _signal = apply_manual_classification(
+        row,
+        update,
+        projects_root=tmp_path,
+        organization_directory=Directory(),
+    )
+
+    assert updated.decision.target_relative_folder == "Correspondance/AIG"
+
+
+def test_manual_base_destination_uses_external_recipient_domain_for_sent_mail(
+    tmp_path: Path,
+) -> None:
+    update = ManualClassificationUpdate(
+        mail_type=MailType.CORRESPONDANCE_GENERALE,
+        interlocutor=InterlocutorType.CLIENT,
+        target_relative_folder="Correspondance",
+    )
+    row = make_row(
+        tmp_path,
+        direction=Direction.SENT,
+        sender_name="Lionel",
+        sender_email="lionel@balzmetal.ch",
+        recipients=["chef@gva.ch", "bureau@balzmetal.ch"],
+    )
+
+    updated, _signal = apply_manual_classification(row, update, projects_root=tmp_path)
+
+    assert updated.decision.target_relative_folder == "Correspondance/GVA"
 
 
 def test_apply_manual_classification_rejects_unsafe_destination(tmp_path: Path) -> None:

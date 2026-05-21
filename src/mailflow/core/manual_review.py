@@ -9,6 +9,8 @@ from mailflow.core.correspondence_hierarchy import (
     CORRESPONDENCE_FOLDER,
     SUPPLIER_ORDER_FOLDER,
     SUPPLIER_REQUEST_FOLDER,
+    OrganizationDirectoryProtocol,
+    company_folder_for_row,
     is_safe_relative_folder,
 )
 from mailflow.core.project_paths import local_project_path
@@ -52,16 +54,22 @@ def apply_manual_classification(
     update: ManualClassificationUpdate,
     *,
     projects_root: Path,
+    organization_directory: OrganizationDirectoryProtocol | None = None,
     now: datetime | None = None,
 ) -> tuple[PreviewRow, ManualLearningSignal]:
     if not is_safe_relative_folder(update.target_relative_folder):
         msg = f"Destination manuelle invalide: {update.target_relative_folder}"
         raise ValueError(msg)
 
+    target_relative_folder = resolve_manual_target_folder(
+        row,
+        update.target_relative_folder,
+        organization_directory=organization_directory,
+    )
     project_path = local_project_path(projects_root, row.mail.project_number)
-    target_path = _target_path(project_path, update.target_relative_folder)
-    archive = _should_archive(update)
-    requires_review = _requires_review(update)
+    target_path = _target_path(project_path, target_relative_folder)
+    archive = _should_archive(target_relative_folder, update.mail_type)
+    requires_review = _requires_review(target_relative_folder, update)
     decision = ArchiveDecision(
         mail_id=row.mail.entry_id,
         project_number=row.mail.project_number,
@@ -69,7 +77,7 @@ def apply_manual_classification(
         requires_review=requires_review,
         mail_type=update.mail_type,
         interlocutor=update.interlocutor,
-        target_relative_folder=update.target_relative_folder,
+        target_relative_folder=target_relative_folder,
         target_path=target_path,
         confidence=1.0,
         duplicate_status=row.decision.duplicate_status,
@@ -83,13 +91,28 @@ def apply_manual_classification(
         subject=row.mail.subject,
         selected_mail_type=update.mail_type,
         selected_interlocutor=update.interlocutor,
-        selected_target_folder=update.target_relative_folder,
+        selected_target_folder=target_relative_folder,
         learning_term=None if update.manual_required else update.learning_term,
         misleading_term=update.misleading_term,
         manual_required=update.manual_required,
         created_at=now or datetime.now(UTC),
     )
     return updated_row, signal
+
+
+def resolve_manual_target_folder(
+    row: PreviewRow,
+    target_relative_folder: str,
+    *,
+    organization_directory: OrganizationDirectoryProtocol | None = None,
+) -> str:
+    normalized = target_relative_folder.replace("\\", "/").strip("/")
+    if normalized in {"A verifier", "Ne pas archiver"}:
+        return normalized
+    if normalized not in MANUAL_DESTINATIONS:
+        return normalized
+    company = company_folder_for_row(row, organization_directory)
+    return f"{normalized}/{company}"
 
 
 def classify_with_learned_terms(
@@ -129,17 +152,20 @@ def misleading_term_from_signal(signal: ManualLearningSignal) -> LearnedMisleadi
     return LearnedMisleadingTerm(term=signal.misleading_term)
 
 
-def _should_archive(update: ManualClassificationUpdate) -> bool:
-    if update.mail_type == MailType.INUTILE_OU_FAIBLE_VALEUR:
+def _should_archive(target_relative_folder: str, mail_type: MailType) -> bool:
+    if mail_type == MailType.INUTILE_OU_FAIBLE_VALEUR:
         return False
-    return update.target_relative_folder not in {"A verifier", "Ne pas archiver"}
+    return target_relative_folder not in {"A verifier", "Ne pas archiver"}
 
 
-def _requires_review(update: ManualClassificationUpdate) -> bool:
+def _requires_review(
+    target_relative_folder: str,
+    update: ManualClassificationUpdate,
+) -> bool:
     return (
         update.mail_type == MailType.A_VERIFIER
         or update.interlocutor == InterlocutorType.INCONNU
-        or update.target_relative_folder == "A verifier"
+        or target_relative_folder == "A verifier"
     )
 
 

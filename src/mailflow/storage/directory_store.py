@@ -5,7 +5,12 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from mailflow.core.contact_directory import ContactObservation, DirectoryUpsertOutcome
+from mailflow.core.contact_directory import (
+    ContactObservation,
+    DirectoryUpsertOutcome,
+    OrganizationDirectoryEntry,
+)
+from mailflow.core.correspondence_hierarchy import safe_folder_name
 
 DIRECTORY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS organizations(
@@ -126,6 +131,107 @@ class SQLiteDirectoryStore:
                 (domain,),
             ).fetchone()
         return None if row is None else str(row[0])
+
+    def list_organizations(self) -> list[OrganizationDirectoryEntry]:
+        self.initialize()
+        with self._connect() as connection:
+            organization_rows = connection.execute(
+                """
+                SELECT id, name
+                FROM organizations
+                ORDER BY name COLLATE NOCASE
+                """
+            ).fetchall()
+            return [
+                OrganizationDirectoryEntry(
+                    organization_id=int(row[0]),
+                    name=str(row[1]),
+                    domains=tuple(_domains_for_organization(connection, int(row[0]))),
+                    contacts=tuple(_contacts_for_organization(connection, int(row[0]))),
+                    project_count=_project_count_for_organization(connection, int(row[0])),
+                )
+                for row in organization_rows
+            ]
+
+    def rename_organization(self, organization_id: int, name: str) -> None:
+        if not name.strip():
+            msg = "Le nom d'entreprise est obligatoire"
+            raise ValueError(msg)
+        cleaned = safe_folder_name(name)
+        normalized = _normalize_organization_name(cleaned)
+        now = datetime.now(UTC).isoformat()
+        self.initialize()
+        with self._connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT id
+                FROM organizations
+                WHERE normalized_name = ? AND id <> ?
+                LIMIT 1
+                """,
+                (normalized, organization_id),
+            ).fetchone()
+            if existing is not None:
+                msg = (
+                    "Une entreprise avec ce nom existe deja. "
+                    "Utiliser la fusion pour regrouper les doublons."
+                )
+                raise ValueError(msg)
+            cursor = connection.execute(
+                """
+                UPDATE organizations
+                SET name = ?,
+                    normalized_name = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (cleaned, normalized, now, organization_id),
+            )
+            if cursor.rowcount == 0:
+                msg = f"Entreprise introuvable: {organization_id}"
+                raise ValueError(msg)
+
+    def merge_organizations(self, source_organization_id: int, target_organization_id: int) -> None:
+        if source_organization_id == target_organization_id:
+            msg = "Selectionner deux entreprises differentes pour fusionner"
+            raise ValueError(msg)
+        now = datetime.now(UTC).isoformat()
+        self.initialize()
+        with self._connect() as connection:
+            _ensure_organization_exists(connection, source_organization_id)
+            _ensure_organization_exists(connection, target_organization_id)
+            connection.execute(
+                """
+                UPDATE organization_domains
+                SET organization_id = ?,
+                    last_seen_at = ?
+                WHERE organization_id = ?
+                """,
+                (target_organization_id, now, source_organization_id),
+            )
+            connection.execute(
+                """
+                UPDATE contacts
+                SET organization_id = ?,
+                    last_seen_at = ?
+                WHERE organization_id = ?
+                """,
+                (target_organization_id, now, source_organization_id),
+            )
+            _merge_project_participants(
+                connection,
+                source_organization_id=source_organization_id,
+                target_organization_id=target_organization_id,
+                now=now,
+            )
+            connection.execute(
+                "UPDATE organizations SET updated_at = ? WHERE id = ?",
+                (now, target_organization_id),
+            )
+            connection.execute(
+                "DELETE FROM organizations WHERE id = ?",
+                (source_organization_id,),
+            )
 
     def count_organizations(self) -> int:
         self.initialize()
@@ -347,6 +453,116 @@ def _get_or_create_organization(
         msg = "Impossible de creer l'organisation"
         raise RuntimeError(msg)
     return int(lastrowid), True
+
+
+def _domains_for_organization(connection: sqlite3.Connection, organization_id: int) -> list[str]:
+    rows = connection.execute(
+        """
+        SELECT domain
+        FROM organization_domains
+        WHERE organization_id = ?
+        ORDER BY domain COLLATE NOCASE
+        """,
+        (organization_id,),
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def _contacts_for_organization(connection: sqlite3.Connection, organization_id: int) -> list[str]:
+    rows = connection.execute(
+        """
+        SELECT email, display_name
+        FROM contacts
+        WHERE organization_id = ?
+        ORDER BY email COLLATE NOCASE
+        """,
+        (organization_id,),
+    ).fetchall()
+    contacts: list[str] = []
+    for email, display_name in rows:
+        email_value = str(email)
+        display_value = "" if display_name is None else str(display_name).strip()
+        if display_value and display_value.casefold() != email_value.casefold():
+            contacts.append(f"{display_value} <{email_value}>")
+        else:
+            contacts.append(email_value)
+    return contacts
+
+
+def _project_count_for_organization(
+    connection: sqlite3.Connection,
+    organization_id: int,
+) -> int:
+    row = connection.execute(
+        """
+        SELECT COUNT(DISTINCT project_number)
+        FROM project_participants
+        WHERE organization_id = ?
+        """,
+        (organization_id,),
+    ).fetchone()
+    return int(row[0])
+
+
+def _ensure_organization_exists(connection: sqlite3.Connection, organization_id: int) -> None:
+    row = connection.execute(
+        "SELECT id FROM organizations WHERE id = ? LIMIT 1",
+        (organization_id,),
+    ).fetchone()
+    if row is None:
+        msg = f"Entreprise introuvable: {organization_id}"
+        raise ValueError(msg)
+
+
+def _merge_project_participants(
+    connection: sqlite3.Connection,
+    *,
+    source_organization_id: int,
+    target_organization_id: int,
+    now: str,
+) -> None:
+    source_rows = connection.execute(
+        """
+        SELECT id, project_number, role, observation_count
+        FROM project_participants
+        WHERE organization_id = ?
+        """,
+        (source_organization_id,),
+    ).fetchall()
+    for source_id, project_number, _role, observation_count in source_rows:
+        target_row = connection.execute(
+            """
+            SELECT id
+            FROM project_participants
+            WHERE project_number = ? AND organization_id = ?
+            LIMIT 1
+            """,
+            (str(project_number), target_organization_id),
+        ).fetchone()
+        if target_row is None:
+            connection.execute(
+                """
+                UPDATE project_participants
+                SET organization_id = ?,
+                    last_seen_at = ?
+                WHERE id = ?
+                """,
+                (target_organization_id, now, int(source_id)),
+            )
+            continue
+        connection.execute(
+            """
+            UPDATE project_participants
+            SET last_seen_at = ?,
+                observation_count = observation_count + ?
+            WHERE id = ?
+            """,
+            (now, int(observation_count), int(target_row[0])),
+        )
+        connection.execute(
+            "DELETE FROM project_participants WHERE id = ?",
+            (int(source_id),),
+        )
 
 
 def _normalize_organization_name(name: str) -> str:

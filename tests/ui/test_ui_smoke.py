@@ -7,7 +7,7 @@ from typing import Any, cast
 import pytest
 
 from mailflow.config import AppSettings
-from mailflow.core.contact_directory import DirectoryImportResult
+from mailflow.core.contact_directory import DirectoryImportResult, OrganizationDirectoryEntry
 from mailflow.core.folder_tree import FolderPathSummary, FolderTreeNode
 from mailflow.models import (
     AiMode,
@@ -43,10 +43,25 @@ class FakeController:
         self.preview_rows: list[object] = []
         self.report_path = Path("rapport.csv")
         self.archived_all = False
+        self.reset_count = 0
+        self.directory_entries_list = [
+            OrganizationDirectoryEntry(
+                organization_id=1,
+                name="AIG",
+                domains=("gva.ch",),
+                contacts=("contact@gva.ch",),
+                project_count=1,
+            )
+        ]
 
     def scan_and_preview(self, _request: object) -> list[object]:
         self.preview_rows = []
         return []
+
+    def reset_preview(self) -> list[object]:
+        self.preview_rows = []
+        self.reset_count += 1
+        return self.preview_rows
 
     def export_report(self) -> Path:
         return self.report_path
@@ -71,6 +86,32 @@ class FakeController:
             new_contacts=0,
             new_project_participants=0,
         )
+
+    def directory_entries(self) -> list[OrganizationDirectoryEntry]:
+        return self.directory_entries_list
+
+    def rename_directory_organization(self, organization_id: int, name: str) -> None:
+        self.directory_entries_list = [
+            OrganizationDirectoryEntry(
+                organization_id=organization_id,
+                name=name,
+                domains=("gva.ch",),
+                contacts=("contact@gva.ch",),
+                project_count=1,
+            )
+        ]
+
+    def merge_directory_organizations(
+        self,
+        source_organization_id: int,
+        target_organization_id: int,
+    ) -> None:
+        self.directory_entries_list = [
+            entry
+            for entry in self.directory_entries_list
+            if entry.organization_id != source_organization_id
+            or entry.organization_id == target_organization_id
+        ]
 
     def mark_all_ignored(self) -> list[object]:
         self.preview_rows = []
@@ -179,9 +220,11 @@ def make_preview_row(tmp_path: Path, action: PreviewAction) -> PreviewRow:
 
 def test_ui_text_contains_expected_actions() -> None:
     assert UI_TEXT["scan_button"] == "Scanner Outlook"
+    assert UI_TEXT["reset_workspace"] == "Reinitialiser"
     assert UI_TEXT["watch_outlook"] == "Surveillance Outlook"
     assert UI_TEXT["export_project_html"] == "Exporter HTML projet"
     assert UI_TEXT["import_directory"] == "Importer annuaire Outlook"
+    assert UI_TEXT["rename_directory"] == "Renommer entreprise"
     assert UI_TEXT["archive"] == "Archiver"
     assert UI_TEXT["more_actions"] == "Plus"
     assert UI_TEXT["tray_open"] == "Ouvrir MailFlow"
@@ -313,6 +356,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     app = QApplication.instance() or QApplication([])
     window = MainWindow(AppSettings(), controller=FakeController())
     dynamic_window = cast(Any, window)
+    controller = cast(FakeController, dynamic_window.mailflow_controller)
 
     assert window.windowTitle() == "MailFlow Archivist"
     assert dynamic_window.mailflow_outlook_root_combo.currentText() == "Boite de reception"
@@ -326,6 +370,8 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_ai_include_body_checkbox.isChecked()
     assert dynamic_window.mailflow_watch_checkbox.text() == "Surveillance Outlook"
     assert dynamic_window.mailflow_watch_timer.interval() == 300000
+    assert dynamic_window.mailflow_scan_button.text() == "Scanner Outlook"
+    assert dynamic_window.mailflow_reset_button.text() == "Reinitialiser"
     assert not window.windowIcon().isNull()
     assert not dynamic_window.mailflow_tray_icon.icon().isNull()
     assert dynamic_window.mailflow_tray_icon.toolTip() == "MailFlow Archivist"
@@ -344,6 +390,12 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
         "Tout remettre a archiver"
     )
     assert dynamic_window.mailflow_import_directory_button.text() == "Importer annuaire Outlook"
+    assert dynamic_window.mailflow_refresh_directory_button.text() == "Rafraichir"
+    assert dynamic_window.mailflow_rename_directory_button.text() == "Renommer entreprise"
+    assert dynamic_window.mailflow_merge_directory_button.text() == "Fusionner entreprise"
+    assert dynamic_window.mailflow_directory_table.rowCount() == 1
+    assert dynamic_window.mailflow_directory_table.item(0, 0).text() == "AIG"
+    assert dynamic_window.mailflow_directory_table.item(0, 1).text() == "gva.ch"
     assert dynamic_window.mailflow_navigation.count() == 4
     assert dynamic_window.mailflow_navigation.item(0).text() == "Mails"
     assert dynamic_window.mailflow_navigation.item(1).text() == "Arborescence"
@@ -354,5 +406,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_workspace_splitter.count() == 2
     assert dynamic_window.mailflow_settings_scroll_area.widgetResizable()
     assert not dynamic_window.mailflow_logs.isVisible()
+    dynamic_window.mailflow_reset_button.click()
+    assert controller.reset_count == 1
     window.close()
     app.quit()

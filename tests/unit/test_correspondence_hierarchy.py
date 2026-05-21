@@ -116,6 +116,39 @@ def test_client_rows_are_grouped_in_company_approval_folder(tmp_path: Path) -> N
     )
 
 
+def test_client_rows_with_multiple_people_are_grouped_by_domain(tmp_path: Path) -> None:
+    rows = [
+        make_row(
+            tmp_path,
+            entry_id="CLIENT-1",
+            sent_at=datetime(2026, 5, 1, 9),
+            mail_type=MailType.ADMINISTRATIF,
+            interlocutor=InterlocutorType.CLIENT,
+            sender_name="Jean Dupont",
+            sender_email="jean.dupont@gva.ch",
+        ),
+        make_row(
+            tmp_path,
+            entry_id="CLIENT-2",
+            sent_at=datetime(2026, 5, 1, 10),
+            mail_type=MailType.TECHNIQUE,
+            interlocutor=InterlocutorType.CLIENT,
+            sender_name="Marie Martin",
+            sender_email="marie.martin@gva.ch",
+        ),
+    ]
+
+    by_id = {
+        row.mail.entry_id: row.decision.target_relative_folder
+        for row in apply_correspondence_hierarchy(rows, projects_root=tmp_path)
+    }
+
+    assert by_id == {
+        "CLIENT-1": "Correspondance/GVA",
+        "CLIENT-2": "Correspondance/GVA",
+    }
+
+
 def test_supplier_rows_switch_after_latest_offer_until_new_rfq(tmp_path: Path) -> None:
     rows = [
         make_row(
