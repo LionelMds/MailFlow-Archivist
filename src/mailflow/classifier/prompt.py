@@ -10,6 +10,8 @@ Tu classes des e-mails Outlook de projets Balz Metal Sa pour archivage local.
 Reponds uniquement avec le schema structure demande.
 N'archive jamais un mail inutile.
 Si la confiance est inferieure a 0.80, choisis target_folder = "A verifier".
+Choisis target_folder uniquement parmi CORRESPONDANCE, DEMANDE DE PRIX, COMMANDE,
+A verifier, Ne pas archiver.
 Ne demande jamais le contenu complet des pieces jointes.
 """
 
@@ -39,4 +41,3 @@ def build_ai_payload(
         "body_excerpt": body_excerpt,
         "known_context": known_context or {},
     }
-

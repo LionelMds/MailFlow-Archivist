@@ -38,7 +38,7 @@ def make_row(tmp_path: Path) -> PreviewRow:
         requires_review=False,
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="Fournisseurs/Demande de prix",
+        target_relative_folder="DEMANDE DE PRIX",
         target_path=tmp_path,
         confidence=0.9,
         duplicate_status="none",
@@ -76,4 +76,3 @@ def test_export_preview_report_writes_semicolon_csv(tmp_path: Path) -> None:
 
     assert rows[0]["project"] == "2025-4893"
     assert rows[0]["action"] == "archive"
-

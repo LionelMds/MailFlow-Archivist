@@ -18,6 +18,10 @@
 #define OutputBaseFilename "MailFlow-Archivist-Setup"
 #endif
 
+#ifndef IconFile
+#define IconFile "..\..\src\mailflow\assets\mailflow-icon.ico"
+#endif
+
 [Setup]
 AppId={{6A1D221D-41A1-4B4F-8D6D-8A8B1F82B214}
 AppName={#AppName}
@@ -36,6 +40,7 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\{#AppExeName}
+SetupIconFile={#IconFile}
 CloseApplications=yes
 RestartApplications=no
 

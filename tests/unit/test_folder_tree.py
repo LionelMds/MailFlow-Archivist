@@ -65,43 +65,41 @@ def make_row(tmp_path: Path, entry_id: str, folder: str) -> PreviewRow:
 
 def test_build_folder_tree_counts_nested_folders(tmp_path: Path) -> None:
     rows = [
-        make_row(tmp_path, "ENTRY-1", "Fournisseurs/Demande de prix/Metal Factory"),
-        make_row(tmp_path, "ENTRY-2", "Fournisseurs/Demande de prix/Metal Factory"),
-        make_row(tmp_path, "ENTRY-3", "Fournisseurs/Commande/Metal Factory"),
+        make_row(tmp_path, "ENTRY-1", "DEMANDE DE PRIX/Metal Factory"),
+        make_row(tmp_path, "ENTRY-2", "DEMANDE DE PRIX/Metal Factory"),
+        make_row(tmp_path, "ENTRY-3", "COMMANDE/Metal Factory"),
     ]
 
     tree = build_folder_tree(rows)
 
-    assert tree[0].name == "Fournisseurs"
-    assert tree[0].mail_count == 3
-    assert tree[0].children[0].name == "Demande de prix"
-    assert tree[0].children[1].name == "Commande"
-    assert tree[0].children[0].children[0].mail_count == 2
+    assert tree[0].name == "DEMANDE DE PRIX"
+    assert tree[0].mail_count == 2
+    assert tree[1].name == "COMMANDE"
+    assert tree[0].children[0].mail_count == 2
     assert folder_path_counts(rows)[0].mail_count == 1
 
 
 def test_rename_folder_leaf_updates_rows_and_target_paths(tmp_path: Path) -> None:
     rows = [
-        make_row(tmp_path, "ENTRY-1", "Fournisseurs/Demande de prix/METAL-FACTORY"),
-        make_row(tmp_path, "ENTRY-2", "Fournisseurs/Commande/Metal Factory"),
+        make_row(tmp_path, "ENTRY-1", "DEMANDE DE PRIX/METAL-FACTORY"),
+        make_row(tmp_path, "ENTRY-2", "COMMANDE/Metal Factory"),
     ]
 
     updated = rename_folder_leaf(
         rows,
-        "Fournisseurs/Demande de prix/METAL-FACTORY",
+        "DEMANDE DE PRIX/METAL-FACTORY",
         "Metal Factory",
         projects_root=tmp_path,
     )
 
     assert updated[0].decision.target_relative_folder == (
-        "Fournisseurs/Demande de prix/Metal Factory"
+        "DEMANDE DE PRIX/Metal Factory"
     )
     assert updated[0].decision.target_path == (
         tmp_path
         / "2025"
         / "2025-4893"
-        / "Fournisseurs"
-        / "Demande de prix"
+        / "DEMANDE DE PRIX"
         / "Metal Factory"
     )
     assert updated[1] == rows[1]
@@ -109,45 +107,45 @@ def test_rename_folder_leaf_updates_rows_and_target_paths(tmp_path: Path) -> Non
 
 def test_merge_folder_rewrites_source_prefix(tmp_path: Path) -> None:
     rows = [
-        make_row(tmp_path, "ENTRY-1", "Fournisseurs/Demande de prix/METAL-FACTORY"),
-        make_row(tmp_path, "ENTRY-2", "Fournisseurs/Demande de prix/Metal Factory"),
+        make_row(tmp_path, "ENTRY-1", "DEMANDE DE PRIX/METAL-FACTORY"),
+        make_row(tmp_path, "ENTRY-2", "DEMANDE DE PRIX/Metal Factory"),
     ]
 
     updated = merge_folder(
         rows,
-        "Fournisseurs/Demande de prix/METAL-FACTORY",
-        "Fournisseurs/Demande de prix/Metal Factory",
+        "DEMANDE DE PRIX/METAL-FACTORY",
+        "DEMANDE DE PRIX/Metal Factory",
         projects_root=tmp_path,
     )
 
     assert [row.decision.target_relative_folder for row in updated] == [
-        "Fournisseurs/Demande de prix/Metal Factory",
-        "Fournisseurs/Demande de prix/Metal Factory",
+        "DEMANDE DE PRIX/Metal Factory",
+        "DEMANDE DE PRIX/Metal Factory",
     ]
     assert "fusionne" in updated[0].decision.reason
 
 
 def test_folder_rewrite_rejects_unsafe_or_self_targets(tmp_path: Path) -> None:
-    rows = [make_row(tmp_path, "ENTRY-1", "Fournisseurs/Demande de prix/Metal Factory")]
+    rows = [make_row(tmp_path, "ENTRY-1", "DEMANDE DE PRIX/Metal Factory")]
 
     with pytest.raises(ValueError):
         rename_folder_leaf(
             rows,
-            "Fournisseurs/Demande de prix/Metal Factory",
+            "DEMANDE DE PRIX/Metal Factory",
             "Metal Factory",
             projects_root=tmp_path,
         )
     with pytest.raises(ValueError):
         merge_folder(
             rows,
-            "Fournisseurs/Demande de prix/Metal Factory",
+            "DEMANDE DE PRIX/Metal Factory",
             "C:/Foo",
             projects_root=tmp_path,
         )
     with pytest.raises(ValueError):
         merge_folder(
             rows,
-            "Fournisseurs/Demande de prix/Metal Factory",
-            "Fournisseurs/Demande de prix/Metal Factory/Archive",
+            "DEMANDE DE PRIX/Metal Factory",
+            "DEMANDE DE PRIX/Metal Factory/Archive",
             projects_root=tmp_path,
         )

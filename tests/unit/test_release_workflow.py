@@ -36,6 +36,16 @@ def test_release_publishes_installers_not_zip_archives() -> None:
     assert "release-assets/*.zip" not in workflow
 
 
+def test_release_build_uses_official_logo_assets() -> None:
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert '--icon "src/mailflow/assets/mailflow-icon.ico"' in workflow
+    assert '--icon "src/mailflow/assets/mailflow-icon.icns"' in workflow
+    assert '--add-data "src/mailflow/assets;mailflow/assets"' in workflow
+    assert '--add-data "src/mailflow/assets:mailflow/assets"' in workflow
+    assert '/DIconFile="$iconFile"' in workflow
+
+
 def test_windows_installer_is_per_user_and_update_aware() -> None:
     installer_script = WINDOWS_INSTALLER_SCRIPT.read_text(encoding="utf-8")
 
@@ -45,3 +55,4 @@ def test_windows_installer_is_per_user_and_update_aware() -> None:
         installer_script
     )
     assert "MailFlow-Archivist.exe" in installer_script
+    assert "SetupIconFile={#IconFile}" in installer_script

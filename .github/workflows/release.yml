@@ -92,6 +92,8 @@ jobs:
             --windowed `
             --name "MailFlow-Archivist" `
             --paths src `
+            --icon "src/mailflow/assets/mailflow-icon.ico" `
+            --add-data "src/mailflow/assets;mailflow/assets" `
             --collect-submodules keyring.backends `
             --exclude-module PySide6.Qt3DCore `
             --exclude-module PySide6.Qt3DRender `
@@ -119,6 +121,8 @@ jobs:
             --windowed \
             --name "MailFlow-Archivist" \
             --paths src \
+            --icon "src/mailflow/assets/mailflow-icon.icns" \
+            --add-data "src/mailflow/assets:mailflow/assets" \
             --collect-submodules keyring.backends \
             --exclude-module PySide6.Qt3DCore \
             --exclude-module PySide6.Qt3DRender \
@@ -144,10 +148,12 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}".TrimStart("v")
           $sourceDir = (Resolve-Path "dist/MailFlow-Archivist").Path
+          $iconFile = (Resolve-Path "src/mailflow/assets/mailflow-icon.ico").Path
           $outputDir = (Get-Location).Path
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
             /DAppVersion="$version" `
             /DSourceDir="$sourceDir" `
+            /DIconFile="$iconFile" `
             /DOutputDir="$outputDir" `
             /DOutputBaseFilename="MailFlow-Archivist-Setup" `
             "packaging/windows/MailFlow-Archivist.iss"

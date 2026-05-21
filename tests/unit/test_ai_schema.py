@@ -13,7 +13,7 @@ def test_ai_schema_accepts_valid_structured_output() -> None:
             "usefulness": "normal",
             "mail_type": "commande",
             "interlocutor": "fournisseur",
-            "target_folder": "Fournisseurs/Commande",
+            "target_folder": "COMMANDE",
             "confidence": 0.91,
             "short_summary": "Commande fournisseur a archiver.",
             "reason": "Commande explicite avec reference projet.",
@@ -31,7 +31,7 @@ def test_ai_schema_forces_review_target_for_low_confidence() -> None:
                 "usefulness": "a_verifier",
                 "mail_type": "a_verifier",
                 "interlocutor": "inconnu",
-                "target_folder": "Correspondance",
+                "target_folder": "CORRESPONDANCE",
                 "confidence": 0.5,
                 "short_summary": "Ambigu.",
                 "reason": "Pas assez clair.",
@@ -70,4 +70,3 @@ def test_ai_schema_rejects_extra_fields() -> None:
                 "body": "should not be accepted",
             }
         )
-

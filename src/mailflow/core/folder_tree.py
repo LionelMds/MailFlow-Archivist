@@ -10,11 +10,13 @@ from mailflow.models import PreviewRow
 
 SPECIAL_FOLDERS = {"A verifier", "Ne pas archiver"}
 FOLDER_SORT_PRIORITY = {
+    "CORRESPONDANCE": 0,
+    "DEMANDE DE PRIX": 1,
+    "COMMANDE": 2,
     "Correspondance": 0,
     "Fournisseurs": 1,
     "Demande de prix": 2,
     "Commande": 3,
-    "Approbation": 4,
     "A verifier": 90,
     "Ne pas archiver": 91,
 }

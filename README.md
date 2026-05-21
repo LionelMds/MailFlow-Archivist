@@ -1,5 +1,7 @@
 # MailFlow Archivist
 
+<img src="src/mailflow/assets/mailflow-logo.png" alt="MailFlow logo" width="220">
+
 MailFlow Archivist est une application desktop Windows pour preparer et archiver les e-mails Outlook classes par projet vers les dossiers locaux Balz Metal Sa.
 
 Le MVP est non destructif :
@@ -23,11 +25,14 @@ Cette premiere tranche met en place :
 - scanner et exporteur Outlook mockables ;
 - service de scan Outlook par compte, racine, annee et projet optionnel ;
 - pipeline de previsualisation regles + IA + decision ;
-- hierarchie par entreprise et dossier metier pour les destinations ;
+- hierarchie limitee a `CORRESPONDANCE`, `DEMANDE DE PRIX`, `COMMANDE`,
+  puis entreprise ;
+- annuaire SQLite evolutif alimente par les domaines et contacts Outlook ;
 - previsualisateur d'arborescence avec renommage et fusion avant archivage ;
 - parametrage IA dans l'interface avec cle OpenAI stockee dans `keyring` et test visuel ;
 - recherche de mises a jour depuis l'application avec lancement de l'installateur ;
-- export HTML projet centralise dans `Correspondance` avec pieces jointes liees ;
+- logo officiel MailFlow utilise dans l'application, l'icone Windows et l'app macOS ;
+- export HTML projet centralise dans `CORRESPONDANCE` avec pieces jointes liees ;
 - surveillance Outlook par scan regulier avec confirmation avant mise a jour HTML ;
 - export CSV de rapport sans corps de mails ;
 - squelette UI PySide6 ;
@@ -38,8 +43,8 @@ Cette premiere tranche met en place :
 Le bouton `Exporter HTML projet` cree un journal par projet scanne :
 
 ```text
-[Projet]\Correspondance\2025-4893 - Correspondance projet.html
-[Projet]\Correspondance\2025-4893 - pieces jointes\
+[Projet]\CORRESPONDANCE\2025-4893 - Correspondance projet.html
+[Projet]\CORRESPONDANCE\2025-4893 - pieces jointes\
 ```
 
 Le HTML regroupe les mails envoyes et recus dans la meme arborescence que la
@@ -51,12 +56,11 @@ aussi un lien local direct, et l'export demande a OneDrive/Windows de garder les
 jointes disponibles localement quand elles sont dans un dossier OneDrive. Les pieces
 jointes deja presentes sont reutilisees et ne sont pas ecrasees.
 
-Les destinations proposees sont hierarchisees par dossier metier puis entreprise. Les
-correspondances client vont par defaut dans `Correspondance/Entreprise/Approbation`.
-Les correspondances fournisseur vont dans `Fournisseurs/Demande de prix/Entreprise`
-jusqu'a la derniere offre du cycle, puis dans `Fournisseurs/Commande/Entreprise`, sauf
-nouvelle demande d'offre. Pour les fournisseurs, le nom de dossier privilegie le nom
-d'entreprise deduit du domaine e-mail ou du nom societe, pas le nom de l'interlocuteur.
+Les destinations proposees sont limitees a trois dossiers metier :
+`CORRESPONDANCE/Entreprise`, `DEMANDE DE PRIX/Entreprise` et `COMMANDE/Entreprise`.
+L'annuaire local peut etre alimente depuis tout l'historique Outlook projet :
+une adresse ou un domaine connu, par exemple `@gva.ch`, prend le pas sur les
+heuristiques de nom et permet de classer directement sous l'entreprise officielle.
 Le journal HTML permet aussi de filtrer par dossier cible.
 
 Apres le scan, le panneau `Arborescence` affiche les dossiers proposes avec le nombre
@@ -104,6 +108,7 @@ python -m pytest
 python -m ruff check .
 python -m mypy src tests
 python -m mailflow --diagnose-outlook
+python -m mailflow --import-contact-directory --account "lionel@balzmetal.ch" --outlook-root "Boite de reception"
 ```
 
 Sur ce poste, si `python` pointe vers l'alias Microsoft Store, utiliser un Python 3.11+ explicite ou le runtime configure dans Codex.

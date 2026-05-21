@@ -157,10 +157,10 @@ def decide_archive(
 def destination_for(mail_type: MailType, interlocutor: InterlocutorType) -> str | None:
     if mail_type in {MailType.DEMANDE_DE_PRIX, MailType.DEVIS}:
         if interlocutor == InterlocutorType.FOURNISSEUR:
-            return "Fournisseurs/Demande de prix"
+            return "DEMANDE DE PRIX"
     if mail_type == MailType.COMMANDE:
         if interlocutor == InterlocutorType.FOURNISSEUR:
-            return "Fournisseurs/Commande"
+            return "COMMANDE"
     if mail_type in {
         MailType.FACTURE,
         MailType.CORRESPONDANCE_GENERALE,
@@ -169,7 +169,7 @@ def destination_for(mail_type: MailType, interlocutor: InterlocutorType) -> str 
         MailType.LIVRAISON,
         MailType.ADMINISTRATIF,
     }:
-        return "Correspondance"
+        return "CORRESPONDANCE"
     if mail_type == MailType.A_VERIFIER:
         return "A verifier"
     return None

@@ -26,6 +26,12 @@ class ScanRequest:
     project_number: str | None = None
 
 
+@dataclass(frozen=True)
+class DirectoryScanRequest:
+    account_identifier: str | None
+    outlook_root_folder: str
+
+
 class OutlookScanService:
     def __init__(
         self,
@@ -50,4 +56,17 @@ class OutlookScanService:
             year_folder,
             outlook_root_path=request.outlook_root_folder,
             project_numbers=project_numbers,
+        )
+
+    def scan_all_project_folders_with_items(
+        self,
+        request: DirectoryScanRequest,
+    ) -> list[ScannedMail]:
+        root_folder = self.folder_resolver.resolve_folder_path(
+            request.outlook_root_folder,
+            account_identifier=request.account_identifier,
+        )
+        return self.scanner.scan_all_project_folders_with_items(
+            root_folder,
+            outlook_root_path=request.outlook_root_folder,
         )

@@ -5,7 +5,10 @@ from typing import Protocol
 
 from mailflow.classifier.decision_engine import ArchiveState, decide_archive
 from mailflow.classifier.rules_classifier import classify_mail
-from mailflow.core.correspondence_hierarchy import apply_correspondence_hierarchy
+from mailflow.core.correspondence_hierarchy import (
+    OrganizationDirectoryProtocol,
+    apply_correspondence_hierarchy,
+)
 from mailflow.core.manual_review import (
     LearnedClassificationRule,
     LearnedMisleadingTerm,
@@ -60,6 +63,7 @@ class ClassificationPipeline:
         privacy_mask_phone_numbers: bool = False,
         learned_rules: list[LearnedClassificationRule] | None = None,
         misleading_terms: list[LearnedMisleadingTerm] | None = None,
+        organization_directory: OrganizationDirectoryProtocol | None = None,
     ) -> None:
         self.projects_root = projects_root
         self.archive_state = archive_state
@@ -71,10 +75,15 @@ class ClassificationPipeline:
         self.privacy_mask_phone_numbers = privacy_mask_phone_numbers
         self.learned_rules = learned_rules or []
         self.misleading_terms = misleading_terms or []
+        self.organization_directory = organization_directory
 
     def preview(self, mails: list[MailMetadata]) -> list[PreviewRow]:
         rows = [self.preview_one(mail) for mail in mails]
-        return apply_correspondence_hierarchy(rows, projects_root=self.projects_root)
+        return apply_correspondence_hierarchy(
+            rows,
+            projects_root=self.projects_root,
+            organization_directory=self.organization_directory,
+        )
 
     def preview_one(self, mail: MailMetadata) -> PreviewRow:
         rule = classify_with_learned_terms(mail, self.learned_rules) or classify_mail(

@@ -7,8 +7,9 @@ import pytest
 
 from mailflow.core.app_controller import AppController, PreviewRequest, selected_rows
 from mailflow.core.archive_batch import ArchiveBatchExecutor
+from mailflow.core.contact_directory import ContactObservation, DirectoryUpsertOutcome
 from mailflow.core.manual_review import LearnedClassificationRule, LearnedMisleadingTerm
-from mailflow.core.scan_service import ScanRequest
+from mailflow.core.scan_service import DirectoryScanRequest, ScanRequest
 from mailflow.models import (
     ArchiveDecision,
     ClassificationResult,
@@ -30,12 +31,20 @@ class FakeScanService:
     def __init__(self, mails: list[MailMetadata]) -> None:
         self.mails = mails
         self.requests: list[ScanRequest] = []
+        self.directory_requests: list[DirectoryScanRequest] = []
 
     def scan(self, request: ScanRequest) -> list[MailMetadata]:
         return [scanned.metadata for scanned in self.scan_with_items(request)]
 
     def scan_with_items(self, request: ScanRequest) -> list[ScannedMail]:
         self.requests.append(request)
+        return [ScannedMail(item=object(), metadata=mail) for mail in self.mails]
+
+    def scan_all_project_folders_with_items(
+        self,
+        request: DirectoryScanRequest,
+    ) -> list[ScannedMail]:
+        self.directory_requests.append(request)
         return [ScannedMail(item=object(), metadata=mail) for mail in self.mails]
 
 
@@ -85,6 +94,20 @@ class FakeLearningStore:
         return []
 
 
+class FakeDirectoryStore:
+    def __init__(self) -> None:
+        self.contacts: list[str] = []
+
+    def record_observation(self, observation: ContactObservation) -> DirectoryUpsertOutcome:
+        self.contacts.append(observation.email)
+        return DirectoryUpsertOutcome(
+            new_organization=True,
+            new_domain=observation.allow_domain_mapping,
+            new_contact=True,
+            new_project_participant=True,
+        )
+
+
 class FakePreviewPipeline:
     def __init__(self, rows: list[PreviewRow]) -> None:
         self.rows = rows
@@ -126,7 +149,7 @@ def make_row(
         requires_review=action == PreviewAction.REVIEW,
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="Fournisseurs/Demande de prix",
+        target_relative_folder="DEMANDE DE PRIX",
         target_path=tmp_path,
         confidence=0.9,
         duplicate_status="none",
@@ -328,13 +351,12 @@ def test_controller_updates_preview_folder_tree(tmp_path: Path) -> None:
         update={
             "decision": make_row(tmp_path).decision.model_copy(
                 update={
-                    "target_relative_folder": "Fournisseurs/Demande de prix/METAL-FACTORY",
+                    "target_relative_folder": "DEMANDE DE PRIX/METAL-FACTORY",
                     "target_path": (
                         tmp_path
                         / "2025"
                         / "2025-4893"
-                        / "Fournisseurs"
-                        / "Demande de prix"
+                        / "DEMANDE DE PRIX"
                         / "METAL-FACTORY"
                     ),
                 }
@@ -349,15 +371,48 @@ def test_controller_updates_preview_folder_tree(tmp_path: Path) -> None:
     )
     controller.preview_rows = [row]
 
-    assert controller.folder_tree()[0].name == "Fournisseurs"
+    assert controller.folder_tree()[0].name == "DEMANDE DE PRIX"
     controller.rename_preview_folder(
-        "Fournisseurs/Demande de prix/METAL-FACTORY",
+        "DEMANDE DE PRIX/METAL-FACTORY",
         "Metal Factory",
     )
 
     assert controller.preview_rows[0].decision.target_relative_folder == (
-        "Fournisseurs/Demande de prix/Metal Factory"
+        "DEMANDE DE PRIX/Metal Factory"
     )
+
+
+def test_controller_imports_contact_directory_from_all_project_folders(tmp_path: Path) -> None:
+    mail = make_mail().model_copy(
+        update={
+            "sender_name": "AIG",
+            "sender_email": "contact@gva.ch",
+            "recipients": ["lionel@balzmetal.ch"],
+        }
+    )
+    scanner = FakeScanService([mail])
+    directory_store = FakeDirectoryStore()
+    controller = AppController(
+        scan_service=scanner,
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+        directory_store=directory_store,
+    )
+
+    result = controller.import_contact_directory(
+        account_identifier="lionel@balzmetal.ch",
+        outlook_root_folder="Boite de reception",
+    )
+
+    assert scanner.directory_requests == [
+        DirectoryScanRequest(
+            account_identifier="lionel@balzmetal.ch",
+            outlook_root_folder="Boite de reception",
+        )
+    ]
+    assert result.imported_contact_count == 1
+    assert directory_store.contacts == ["contact@gva.ch"]
 
 
 def test_controller_archives_ready_rows_with_stored_outlook_items(tmp_path: Path) -> None:
@@ -396,13 +451,12 @@ def test_controller_creates_missing_destination_subfolders(tmp_path: Path) -> No
         update={
             "decision": make_row(tmp_path).decision.model_copy(
                 update={
-                    "target_relative_folder": "Fournisseurs/Commande/Metal Factory",
+                    "target_relative_folder": "COMMANDE/Metal Factory",
                     "target_path": (
                         tmp_path
                         / "2025"
                         / "2025-4893"
-                        / "Fournisseurs"
-                        / "Commande"
+                        / "COMMANDE"
                         / "Metal Factory"
                     ),
                 }
@@ -511,7 +565,7 @@ def test_controller_applies_manual_update_and_records_learning(tmp_path: Path) -
         ManualClassificationUpdate(
             mail_type=MailType.DEVIS,
             interlocutor=InterlocutorType.FOURNISSEUR,
-            target_relative_folder="Fournisseurs/Demande de prix",
+            target_relative_folder="DEMANDE DE PRIX",
             learning_term="Offerte",
         ),
     )

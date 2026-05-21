@@ -20,9 +20,9 @@ from mailflow.models import (
 )
 
 MANUAL_DESTINATIONS = (
-    "Correspondance",
-    "Fournisseurs/Demande de prix",
-    "Fournisseurs/Commande",
+    "CORRESPONDANCE",
+    "DEMANDE DE PRIX",
+    "COMMANDE",
     "A verifier",
     "Ne pas archiver",
 )

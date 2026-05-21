@@ -51,7 +51,7 @@ def make_row(
         requires_review=False,
         mail_type=mail_type,
         interlocutor=interlocutor,
-        target_relative_folder="Correspondance",
+        target_relative_folder="CORRESPONDANCE",
         target_path=tmp_path,
         confidence=0.9,
         duplicate_status="none",
@@ -110,9 +110,9 @@ def test_client_rows_are_grouped_in_company_approval_folder(tmp_path: Path) -> N
 
     updated = apply_correspondence_hierarchy([row], projects_root=tmp_path)[0]
 
-    assert updated.decision.target_relative_folder == "Correspondance/AIG/Approbation"
+    assert updated.decision.target_relative_folder == "CORRESPONDANCE/AIG"
     assert updated.decision.target_path == (
-        tmp_path / "2025" / "2025-4893" / "Correspondance" / "AIG" / "Approbation"
+        tmp_path / "2025" / "2025-4893" / "CORRESPONDANCE" / "AIG"
     )
 
 
@@ -171,12 +171,12 @@ def test_supplier_rows_switch_after_latest_offer_until_new_rfq(tmp_path: Path) -
         for row in apply_correspondence_hierarchy(rows, projects_root=tmp_path)
     }
 
-    assert by_id["RFQ-1"] == "Fournisseurs/Demande de prix/Metal Factory"
-    assert by_id["DISCUSSION-1"] == "Fournisseurs/Demande de prix/Metal Factory"
-    assert by_id["OFFER-1"] == "Fournisseurs/Demande de prix/Metal Factory"
-    assert by_id["ORDER-1"] == "Fournisseurs/Commande/Metal Factory"
-    assert by_id["RFQ-2"] == "Fournisseurs/Demande de prix/Metal Factory"
-    assert by_id["DISCUSSION-2"] == "Fournisseurs/Demande de prix/Metal Factory"
+    assert by_id["RFQ-1"] == "DEMANDE DE PRIX/Metal Factory"
+    assert by_id["DISCUSSION-1"] == "DEMANDE DE PRIX/Metal Factory"
+    assert by_id["OFFER-1"] == "DEMANDE DE PRIX/Metal Factory"
+    assert by_id["ORDER-1"] == "COMMANDE/Metal Factory"
+    assert by_id["RFQ-2"] == "DEMANDE DE PRIX/Metal Factory"
+    assert by_id["DISCUSSION-2"] == "DEMANDE DE PRIX/Metal Factory"
 
 
 def test_supplier_grouping_uses_email_domain_across_sent_and_received(tmp_path: Path) -> None:
@@ -208,8 +208,8 @@ def test_supplier_grouping_uses_email_domain_across_sent_and_received(tmp_path: 
         for row in apply_correspondence_hierarchy(rows, projects_root=tmp_path)
     }
 
-    assert by_id["SENT-RFQ"] == "Fournisseurs/Demande de prix/HANS KOHLER AG"
-    assert by_id["RECEIVED-OFFER"] == "Fournisseurs/Demande de prix/HANS KOHLER AG"
+    assert by_id["SENT-RFQ"] == "DEMANDE DE PRIX/HANS KOHLER AG"
+    assert by_id["RECEIVED-OFFER"] == "DEMANDE DE PRIX/HANS KOHLER AG"
 
 
 def test_supplier_folder_prefers_company_domain_over_contact_person(tmp_path: Path) -> None:
@@ -226,12 +226,36 @@ def test_supplier_folder_prefers_company_domain_over_contact_person(tmp_path: Pa
     updated = apply_correspondence_hierarchy([row], projects_root=tmp_path)[0]
 
     assert updated.decision.target_relative_folder == (
-        "Fournisseurs/Demande de prix/Kohler"
+        "DEMANDE DE PRIX/Kohler"
     )
 
 
+def test_company_resolution_prefers_directory_domain(tmp_path: Path) -> None:
+    class Directory:
+        def organization_name_for_email(self, email: str) -> str | None:
+            return "AIG" if email.endswith("@gva.ch") else None
+
+    row = make_row(
+        tmp_path,
+        entry_id="CLIENT-GVA",
+        sent_at=datetime(2026, 5, 2, 8),
+        mail_type=MailType.ADMINISTRATIF,
+        interlocutor=InterlocutorType.CLIENT,
+        sender_name="Jean Dupont",
+        sender_email="jean.dupont@gva.ch",
+    )
+
+    updated = apply_correspondence_hierarchy(
+        [row],
+        projects_root=tmp_path,
+        organization_directory=Directory(),
+    )[0]
+
+    assert updated.decision.target_relative_folder == "CORRESPONDANCE/AIG"
+
+
 def test_safe_relative_folder_rejects_unsafe_paths() -> None:
-    assert is_safe_relative_folder("Fournisseurs/Commande/Metal Factory")
+    assert is_safe_relative_folder("COMMANDE/Metal Factory")
     assert is_safe_relative_folder("A verifier")
     assert not is_safe_relative_folder("../Foo")
     assert not is_safe_relative_folder("C:/Foo")

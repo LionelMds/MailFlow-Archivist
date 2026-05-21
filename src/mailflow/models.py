@@ -103,9 +103,9 @@ class RuleClassification(BaseModel):
 
 Usefulness = Literal["important", "normal", "faible", "inutile", "a_verifier"]
 AiTargetFolder = Literal[
-    "Correspondance",
-    "Fournisseurs/Demande de prix",
-    "Fournisseurs/Commande",
+    "CORRESPONDANCE",
+    "DEMANDE DE PRIX",
+    "COMMANDE",
     "A verifier",
     "Ne pas archiver",
 ]

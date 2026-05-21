@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from types import SimpleNamespace
 
-from mailflow.core.scan_service import OutlookScanService, ScanRequest
+from mailflow.core.scan_service import DirectoryScanRequest, OutlookScanService, ScanRequest
 from mailflow.outlook.scanner import OutlookScanner
 
 
@@ -83,3 +83,28 @@ def test_scan_service_filters_specific_project() -> None:
     )
 
     assert [mail.entry_id for mail in mails] == ["ENTRY-1"]
+
+
+def test_scan_service_resolves_root_for_directory_import() -> None:
+    project = SimpleNamespace(
+        Name="2025-4893",
+        Items=FakeCollection([mail_item("ENTRY-1")]),
+        Folders=FakeCollection([]),
+    )
+    root = SimpleNamespace(
+        Name="Boite de reception",
+        Items=FakeCollection([]),
+        Folders=FakeCollection([SimpleNamespace(Name="2025", Folders=FakeCollection([project]))]),
+    )
+    resolver = FakeResolver(root)
+    service = OutlookScanService(folder_resolver=resolver, scanner=OutlookScanner())
+
+    scanned = service.scan_all_project_folders_with_items(
+        DirectoryScanRequest(
+            account_identifier="Balz",
+            outlook_root_folder="Boite de reception",
+        )
+    )
+
+    assert resolver.calls == [(["Boite de reception"], "Balz")]
+    assert [item.metadata.entry_id for item in scanned] == ["ENTRY-1"]

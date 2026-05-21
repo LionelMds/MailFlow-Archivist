@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 
 from mailflow.config import AppSettings
+from mailflow.core.contact_directory import DirectoryImportResult
 from mailflow.core.folder_tree import FolderPathSummary, FolderTreeNode
 from mailflow.models import (
     AiMode,
@@ -52,6 +53,24 @@ class FakeController:
 
     def export_project_html(self, *, overwrite_html: bool = False) -> list[object]:
         return []
+
+    def import_contact_directory(
+        self,
+        *,
+        account_identifier: str | None,
+        outlook_root_folder: str,
+    ) -> DirectoryImportResult:
+        return DirectoryImportResult(
+            scanned_mail_count=0,
+            observed_contact_count=0,
+            imported_contact_count=0,
+            skipped_internal_count=0,
+            skipped_generic_domain_count=0,
+            new_organizations=0,
+            new_domains=0,
+            new_contacts=0,
+            new_project_participants=0,
+        )
 
     def mark_all_ignored(self) -> list[object]:
         self.preview_rows = []
@@ -135,7 +154,7 @@ def make_preview_row(tmp_path: Path, action: PreviewAction) -> PreviewRow:
         requires_review=action == PreviewAction.REVIEW,
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="Fournisseurs/Demande de prix",
+        target_relative_folder="DEMANDE DE PRIX",
         target_path=tmp_path,
         confidence=0.9,
         duplicate_status="none",
@@ -162,6 +181,7 @@ def test_ui_text_contains_expected_actions() -> None:
     assert UI_TEXT["scan_button"] == "Scanner Outlook"
     assert UI_TEXT["watch_outlook"] == "Surveillance Outlook"
     assert UI_TEXT["export_project_html"] == "Exporter HTML projet"
+    assert UI_TEXT["import_directory"] == "Importer annuaire Outlook"
     assert UI_TEXT["tray_open"] == "Ouvrir MailFlow"
     assert UI_TEXT["tray_quit"] == "Quitter"
     assert "Destination proposee" in PREVIEW_COLUMNS
@@ -206,7 +226,7 @@ def test_build_manual_classification_update_from_dialog_values() -> None:
     update = build_manual_classification_update(
         mail_type_value="devis",
         interlocutor_value="fournisseur",
-        destination_value="Fournisseurs/Demande de prix",
+        destination_value="DEMANDE DE PRIX",
         learning_term="Offerte",
         misleading_term="newsletter",
         manual_required=False,
@@ -214,7 +234,7 @@ def test_build_manual_classification_update_from_dialog_values() -> None:
 
     assert update.mail_type == MailType.DEVIS
     assert update.interlocutor == InterlocutorType.FOURNISSEUR
-    assert update.target_relative_folder == "Fournisseurs/Demande de prix"
+    assert update.target_relative_folder == "DEMANDE DE PRIX"
     assert update.learning_term == "Offerte"
     assert update.misleading_term == "newsletter"
     assert not update.manual_required
@@ -304,6 +324,8 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_ai_include_body_checkbox.isChecked()
     assert dynamic_window.mailflow_watch_checkbox.text() == "Surveillance Outlook"
     assert dynamic_window.mailflow_watch_timer.interval() == 300000
+    assert not window.windowIcon().isNull()
+    assert not dynamic_window.mailflow_tray_icon.icon().isNull()
     assert dynamic_window.mailflow_tray_icon.toolTip() == "MailFlow Archivist"
     assert dynamic_window.mailflow_tray_open_action.text() == "Ouvrir MailFlow"
     assert dynamic_window.mailflow_tray_watch_action.isCheckable()
@@ -314,6 +336,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_restore_archivable_button.text() == (
         "Tout remettre a archiver"
     )
+    assert dynamic_window.mailflow_import_directory_button.text() == "Importer annuaire Outlook"
     assert dynamic_window.mailflow_main_splitter.count() == 7
     assert dynamic_window.mailflow_scroll_area.widget() == dynamic_window.mailflow_main_splitter
     assert dynamic_window.mailflow_main_splitter.minimumHeight() > 0

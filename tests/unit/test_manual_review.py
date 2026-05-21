@@ -72,7 +72,7 @@ def test_apply_manual_classification_updates_decision_and_learning_signal(
     update = ManualClassificationUpdate(
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="Fournisseurs/Demande de prix",
+        target_relative_folder="DEMANDE DE PRIX",
         learning_term="Offerte",
         misleading_term="newsletter",
     )
@@ -83,7 +83,7 @@ def test_apply_manual_classification_updates_decision_and_learning_signal(
     assert updated.decision.archive is True
     assert updated.decision.requires_review is False
     assert updated.decision.target_path == (
-        tmp_path / "2025" / "2025-4893" / "Fournisseurs" / "Demande de prix"
+        tmp_path / "2025" / "2025-4893" / "DEMANDE DE PRIX"
     )
     assert signal.learning_term == "Offerte"
     assert signal.misleading_term == "newsletter"
@@ -96,7 +96,7 @@ def test_apply_manual_classification_records_manual_required_without_term(
     update = ManualClassificationUpdate(
         mail_type=MailType.CORRESPONDANCE_GENERALE,
         interlocutor=InterlocutorType.CLIENT,
-        target_relative_folder="Correspondance",
+        target_relative_folder="CORRESPONDANCE",
         learning_term=" ",
         manual_required=True,
     )
@@ -134,7 +134,7 @@ def test_apply_manual_classification_accepts_safe_dynamic_destination(tmp_path: 
     update = ManualClassificationUpdate(
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="Fournisseurs/Commande/Metal Factory",
+        target_relative_folder="COMMANDE/Metal Factory",
     )
 
     updated, _signal = apply_manual_classification(
@@ -147,8 +147,7 @@ def test_apply_manual_classification_accepts_safe_dynamic_destination(tmp_path: 
         tmp_path
         / "2025"
         / "2025-4893"
-        / "Fournisseurs"
-        / "Commande"
+        / "COMMANDE"
         / "Metal Factory"
     )
 
@@ -170,7 +169,7 @@ def test_learned_rule_from_signal_ignores_manual_required(tmp_path: Path) -> Non
         ManualClassificationUpdate(
             mail_type=MailType.DEVIS,
             interlocutor=InterlocutorType.FOURNISSEUR,
-            target_relative_folder="Fournisseurs/Demande de prix",
+            target_relative_folder="DEMANDE DE PRIX",
             learning_term="Offerte",
             manual_required=True,
         ),
@@ -186,7 +185,7 @@ def test_misleading_term_from_signal_records_negative_learning(tmp_path: Path) -
         ManualClassificationUpdate(
             mail_type=MailType.CORRESPONDANCE_GENERALE,
             interlocutor=InterlocutorType.CLIENT,
-            target_relative_folder="Correspondance",
+            target_relative_folder="CORRESPONDANCE",
             misleading_term="offre",
         ),
         projects_root=tmp_path,
@@ -204,7 +203,7 @@ def test_classify_with_learned_terms_matches_subject(tmp_path: Path) -> None:
         term="mot special",
         mail_type=MailType.ADMINISTRATIF,
         interlocutor=InterlocutorType.CLIENT,
-        target_relative_folder="Correspondance",
+        target_relative_folder="CORRESPONDANCE",
     )
 
     result = classify_with_learned_terms(mail, [rule])

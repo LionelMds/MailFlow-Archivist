@@ -34,7 +34,7 @@ def make_row(action: PreviewAction, *, archive: bool, tmp_path: Path) -> Preview
         requires_review=action == PreviewAction.REVIEW,
         mail_type=MailType.DEVIS,
         interlocutor=InterlocutorType.FOURNISSEUR,
-        target_relative_folder="Fournisseurs/Demande de prix",
+        target_relative_folder="DEMANDE DE PRIX",
         target_path=tmp_path,
         confidence=0.9,
         duplicate_status="none",

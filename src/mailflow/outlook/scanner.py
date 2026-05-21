@@ -74,6 +74,32 @@ class OutlookScanner:
             scanned_mails.extend(self.scan_project_folder_with_items(project_folder, outlook_path))
         return scanned_mails
 
+    def scan_all_project_folders_with_items(
+        self,
+        root_folder: Any,
+        *,
+        outlook_root_path: str,
+    ) -> list[ScannedMail]:
+        scanned_mails: list[ScannedMail] = []
+        for project_folder, outlook_path in self.iter_project_folders_recursive(
+            root_folder,
+            outlook_root_path=outlook_root_path,
+        ):
+            scanned_mails.extend(
+                self.scan_project_folder_directory_items(project_folder, outlook_path)
+            )
+        return scanned_mails
+
+    def iter_project_folders_recursive(
+        self,
+        root_folder: Any,
+        *,
+        outlook_root_path: str,
+    ) -> Iterable[tuple[Any, str]]:
+        root_name = str(getattr(root_folder, "Name", "")).strip()
+        initial_path = outlook_root_path.strip("/") or root_name
+        yield from _iter_project_folders_recursive(root_folder, [initial_path])
+
     def scan_project_folder(self, project_folder: Any, outlook_path: str) -> list[MailMetadata]:
         return [
             scanned.metadata
@@ -90,6 +116,25 @@ class OutlookScanner:
             ScannedMail(
                 item=item,
                 metadata=self.mail_item_to_metadata(
+                    item,
+                    project_number=project_number,
+                    outlook_folder=outlook_path,
+                ),
+            )
+            for item in iter_com_collection(getattr(project_folder, "Items", []))
+            if _looks_like_mail_item(item)
+        ]
+
+    def scan_project_folder_directory_items(
+        self,
+        project_folder: Any,
+        outlook_path: str,
+    ) -> list[ScannedMail]:
+        project_number = _project_number_from_folder(project_folder)
+        return [
+            ScannedMail(
+                item=item,
+                metadata=self.mail_item_to_directory_metadata(
                     item,
                     project_number=project_number,
                     outlook_folder=outlook_path,
@@ -129,6 +174,31 @@ class OutlookScanner:
             categories=split_categories(_optional_text_attr(item, "Categories")),
         )
 
+    def mail_item_to_directory_metadata(
+        self,
+        item: Any,
+        *,
+        project_number: str,
+        outlook_folder: str,
+    ) -> MailMetadata:
+        sender_email = _text_attr(item, "SenderEmailAddress")
+        sent_at = _coerce_datetime(
+            getattr(item, "SentOn", None)
+            or getattr(item, "ReceivedTime", None)
+            or getattr(item, "CreationTime", None)
+        )
+        return MailMetadata(
+            entry_id=_text_attr(item, "EntryID"),
+            project_number=project_number,
+            outlook_folder=outlook_folder,
+            direction=_direction(sender_email, self.account_email),
+            subject=_text_attr(item, "Subject"),
+            sender_name=_text_attr(item, "SenderName"),
+            sender_email=sender_email,
+            recipients=_recipient_names(getattr(item, "Recipients", [])),
+            sent_at=sent_at,
+        )
+
 
 def iter_com_collection(collection: Any) -> list[Any]:
     if collection is None:
@@ -151,6 +221,20 @@ def _project_number_from_folder(project_folder: Any) -> str:
         msg = f"Dossier Outlook projet invalide: {folder_name}"
         raise ValueError(msg)
     return project_number
+
+
+def _iter_project_folders_recursive(
+    folder: Any,
+    path_parts: list[str],
+) -> Iterable[tuple[Any, str]]:
+    for child in iter_com_collection(getattr(folder, "Folders", [])):
+        child_name = str(getattr(child, "Name", "")).strip()
+        child_path_parts = [*path_parts, child_name] if child_name else path_parts
+        if is_project_folder_name(child_name):
+            project_number = _project_number_from_folder(child)
+            yield child, "/".join([*path_parts, project_number])
+            continue
+        yield from _iter_project_folders_recursive(child, child_path_parts)
 
 
 def _direction(sender_email: str, account_email: str) -> Direction:

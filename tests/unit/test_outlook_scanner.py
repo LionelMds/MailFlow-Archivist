@@ -35,6 +35,43 @@ class FakeCollection:
         return self._items[index - 1]
 
 
+def mail_item(entry_id: str) -> object:
+    return SimpleNamespace(
+        EntryID=entry_id,
+        MessageClass="IPM.Note",
+        Subject="Offre",
+        SenderName="Dupont",
+        SenderEmailAddress="sales@dupont.test",
+        Recipients=[],
+        SentOn=datetime(2026, 5, 6, 10, 30),
+        Attachments=[],
+        Body="Bonjour",
+        Categories="",
+    )
+
+
+class DirectoryOnlyMailItem:
+    EntryID = "ENTRY-LIGHT"
+    MessageClass = "IPM.Note"
+    Subject = "Contact"
+    SenderName = "AIG"
+    SenderEmailAddress = "contact@gva.ch"
+    Recipients: list[object] = []
+    SentOn = datetime(2026, 5, 6, 10, 30)
+
+    @property
+    def Body(self) -> str:
+        raise AssertionError("directory import must not read mail body")
+
+    @property
+    def Attachments(self) -> object:
+        raise AssertionError("directory import must not read attachments")
+
+    @property
+    def Categories(self) -> str:
+        raise AssertionError("directory import must not read categories")
+
+
 def test_iter_project_folders_filters_names() -> None:
     folders = FakeCollection(
         [
@@ -85,6 +122,75 @@ def test_scan_year_folder_scans_only_project_folders() -> None:
     assert len(mails) == 1
     assert mails[0].project_number == "2025-4893"
     assert mails[0].outlook_folder == "Boite de reception/2025/2025-4893"
+
+
+def test_scan_all_project_folders_recurses_under_root() -> None:
+    project_2025 = SimpleNamespace(
+        Name="2025-4893 (Marquise)",
+        Items=FakeCollection([mail_item("ENTRY-2025")]),
+        Folders=FakeCollection([]),
+    )
+    project_2026 = SimpleNamespace(
+        Name="2026-4995",
+        Items=FakeCollection([mail_item("ENTRY-2026")]),
+        Folders=FakeCollection([]),
+    )
+    root = SimpleNamespace(
+        Name="Boite de reception",
+        Folders=FakeCollection(
+            [
+                SimpleNamespace(
+                    Name="2025",
+                    Items=FakeCollection([]),
+                    Folders=FakeCollection([project_2025]),
+                ),
+                SimpleNamespace(
+                    Name="Archive",
+                    Items=FakeCollection([]),
+                    Folders=FakeCollection([]),
+                ),
+                SimpleNamespace(
+                    Name="2026",
+                    Items=FakeCollection([]),
+                    Folders=FakeCollection([project_2026]),
+                ),
+            ]
+        ),
+    )
+
+    scanned = OutlookScanner().scan_all_project_folders_with_items(
+        root,
+        outlook_root_path="Boite de reception",
+    )
+
+    assert [item.metadata.entry_id for item in scanned] == ["ENTRY-2025", "ENTRY-2026"]
+    assert [item.metadata.outlook_folder for item in scanned] == [
+        "Boite de reception/2025/2025-4893",
+        "Boite de reception/2026/2026-4995",
+    ]
+
+
+def test_scan_all_project_folders_uses_lightweight_directory_metadata() -> None:
+    project = SimpleNamespace(
+        Name="2025-4893",
+        Items=FakeCollection([DirectoryOnlyMailItem()]),
+        Folders=FakeCollection([]),
+    )
+    root = SimpleNamespace(
+        Name="Boite de reception",
+        Folders=FakeCollection(
+            [SimpleNamespace(Name="2025", Folders=FakeCollection([project]))]
+        ),
+    )
+
+    scanned = OutlookScanner().scan_all_project_folders_with_items(
+        root,
+        outlook_root_path="Boite de reception",
+    )
+
+    assert scanned[0].metadata.sender_email == "contact@gva.ch"
+    assert scanned[0].metadata.body_excerpt == ""
+    assert scanned[0].metadata.attachment_names == []
 
 
 def test_mail_item_to_metadata_maps_received_mail() -> None:

@@ -4,7 +4,7 @@
 
 MailFlow Archivist scanne les dossiers Outlook projet, propose une decision d'archivage, puis exporte les mails valides en `.msg` avec leurs pieces jointes.
 
-Le logiciel peut aussi generer un journal HTML projet centralise dans `Correspondance`.
+Le logiciel peut aussi generer un journal HTML projet centralise dans `CORRESPONDANCE`.
 Ce fichier reprend la meme arborescence que la previsualisation MailFlow. Il permet de
 parcourir les echanges par dossier, avec recherche et filtres par sens, type,
 interlocuteur et dossier cible. Les pieces jointes sont placees dans un dossier commun
@@ -21,21 +21,23 @@ Avant tout archivage, l'utilisateur garde la main sur :
 ## Hierarchie des dossiers
 
 Apres la classification, MailFlow propose une destination par entreprise
-d'interlocuteur :
+d'interlocuteur, limitee a trois dossiers metier :
 
-- client : `Correspondance/Entreprise/Approbation` ;
+- correspondance client, interne ou generale : `CORRESPONDANCE/Entreprise` ;
 - fournisseur avant ou jusqu'a la derniere offre du cycle :
-  `Fournisseurs/Demande de prix/Entreprise` ;
+  `DEMANDE DE PRIX/Entreprise` ;
 - fournisseur apres la derniere offre du cycle :
-  `Fournisseurs/Commande/Entreprise`.
+  `COMMANDE/Entreprise`.
 
 Une nouvelle demande d'offre demarre un nouveau cycle fournisseur. Les echanges qui
 suivent cette nouvelle demande restent donc en `Demande de prix` jusqu'a la prochaine
 offre trouvee.
 
-L'entreprise est deduite du texte entre parentheses quand Outlook le fournit, du nom
-d'entreprise explicite, ou du domaine e-mail. Pour les fournisseurs, MailFlow evite de
-nommer le dossier avec le nom d'une personne et privilegie le nom de l'entreprise.
+L'entreprise est d'abord resolue depuis l'annuaire local. Celui-ci associe les domaines
+et adresses e-mail aux entreprises, par exemple `gva.ch -> AIG`. Si aucun lien n'est
+connu, MailFlow utilise le texte entre parentheses quand Outlook le fournit, le nom
+d'entreprise explicite, puis le domaine e-mail. Pour les fournisseurs, MailFlow evite
+de nommer le dossier avec le nom d'une personne et privilegie le nom de l'entreprise.
 La destination reste modifiable manuellement dans la previsualisation. Les sous-dossiers
 de destination sont crees si le dossier projet existe deja ; le dossier projet lui-meme
 n'est jamais cree automatiquement.
@@ -71,6 +73,21 @@ Ils restent modifiables tant que l'utilisateur n'a pas confirme l'archivage ou l
 - Les dossiers projet manquants bloquent l'archivage du projet.
 - Les fichiers existants ne sont pas remplaces automatiquement.
 - Les pieces jointes completes ne sont pas envoyees a l'IA dans le MVP.
+
+## Annuaire
+
+Le bouton `Importer annuaire Outlook` scanne tous les dossiers projet sous la racine
+Outlook selectionnee. L'import est non destructif : il lit les mails, extrait les
+adresses, domaines, noms affiches et numeros projet, puis alimente la base SQLite
+locale. Les domaines internes Balz Metal sont ignores. Les domaines generiques comme
+`gmail.com`, `outlook.com` ou `icloud.com` ne sont pas generalises a toute une
+entreprise sauf si le nom affiche contient clairement une societe.
+
+L'import peut aussi etre lance en ligne de commande :
+
+```powershell
+python -m mailflow --import-contact-directory --account "lionel@balzmetal.ch" --outlook-root "Boite de reception"
+```
 
 ## Mode IA
 
@@ -123,15 +140,15 @@ l'installateur le demande.
 Sortie attendue :
 
 ```text
-[Projet]\Correspondance\2025-4893 - Correspondance projet.html
-[Projet]\Correspondance\2025-4893 - pieces jointes\
+[Projet]\CORRESPONDANCE\2025-4893 - Correspondance projet.html
+[Projet]\CORRESPONDANCE\2025-4893 - pieces jointes\
   1-R-Offre garde-corps - plan.pdf
   2-E-Reponse offre - devis.xlsx
 ```
 
 Le fichier HTML est mis a jour uniquement apres confirmation. Il affiche un panneau
 `Arborescence` a gauche et les mails groupes sous leurs dossiers cibles a droite. Un
-clic sur une branche, par exemple `Fournisseurs`, affiche aussi les sous-dossiers et
+clic sur une branche, par exemple `DEMANDE DE PRIX`, affiche aussi les sous-dossiers et
 mails contenus dans cette branche. L'ordre d'affichage reprend l'ordre metier :
 correspondance client, demandes de prix fournisseurs, puis commandes fournisseurs.
 

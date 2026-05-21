@@ -17,7 +17,7 @@ def record(tmp_path: Path) -> ArchivedMailRecord:
         sender="dupont@example.com",
         sent_at=datetime(2026, 5, 6, 10, 30),
         msg_path=tmp_path / "mail.msg",
-        target_folder="Correspondance",
+        target_folder="CORRESPONDANCE",
         classification=MailType.DEVIS,
         confidence=0.9,
         archived_at=datetime(2026, 5, 6, 11, 0),
@@ -38,4 +38,3 @@ def test_sqlite_store_is_idempotent(tmp_path: Path) -> None:
     assert store.record_archived(record(tmp_path)) is True
     assert store.record_archived(record(tmp_path)) is False
     assert store.count_archived() == 1
-

@@ -21,6 +21,11 @@ from mailflow.core.archive_batch import (
     ArchiveFailure,
 )
 from mailflow.core.archive_service import ArchiveService
+from mailflow.core.contact_directory import (
+    ContactDirectoryStoreProtocol,
+    DirectoryImportResult,
+    import_contact_directory_from_mails,
+)
 from mailflow.core.folder_tree import (
     FolderPathSummary,
     FolderTreeNode,
@@ -40,7 +45,7 @@ from mailflow.core.project_html_exporter import (
 )
 from mailflow.core.project_paths import local_project_path
 from mailflow.core.reporting import export_preview_report
-from mailflow.core.scan_service import OutlookScanService, ScanRequest
+from mailflow.core.scan_service import DirectoryScanRequest, OutlookScanService, ScanRequest
 from mailflow.models import (
     AiMode,
     MailMetadata,
@@ -53,6 +58,7 @@ from mailflow.models import (
 from mailflow.outlook.client import OutlookClient
 from mailflow.outlook.exporter import OutlookExporter
 from mailflow.outlook.scanner import OutlookScanner, ScannedMail
+from mailflow.storage.directory_store import SQLiteDirectoryStore
 from mailflow.storage.learning_store import SQLiteLearningStore
 from mailflow.storage.sqlite_store import SQLiteArchiveStore
 
@@ -62,6 +68,12 @@ class ScanServiceProtocol(Protocol):
         ...
 
     def scan_with_items(self, request: ScanRequest) -> list[ScannedMail]:
+        ...
+
+    def scan_all_project_folders_with_items(
+        self,
+        request: DirectoryScanRequest,
+    ) -> list[ScannedMail]:
         ...
 
 
@@ -107,6 +119,7 @@ class AppController:
         report_dir: Path,
         archive_executor: ArchiveBatchExecutor | None = None,
         learning_store: LearningStoreProtocol | None = None,
+        directory_store: ContactDirectoryStoreProtocol | None = None,
     ) -> None:
         self.scan_service = scan_service
         self.preview_pipeline = preview_pipeline
@@ -114,6 +127,7 @@ class AppController:
         self.report_dir = report_dir
         self.archive_executor = archive_executor
         self.learning_store = learning_store
+        self.directory_store = directory_store
         self.preview_rows: list[PreviewRow] = []
         self.outlook_items: dict[str, object] = {}
 
@@ -231,6 +245,30 @@ class AppController:
     ) -> list[str]:
         return []
 
+    def import_contact_directory(
+        self,
+        *,
+        account_identifier: str | None,
+        outlook_root_folder: str,
+    ) -> DirectoryImportResult:
+        if self.directory_store is None:
+            msg = "Aucun annuaire n'est configure"
+            raise RuntimeError(msg)
+        root = outlook_root_folder.strip()
+        if not root:
+            msg = "Le dossier Outlook racine est obligatoire"
+            raise ValueError(msg)
+        scanned = self.scan_service.scan_all_project_folders_with_items(
+            DirectoryScanRequest(
+                account_identifier=_clean_optional(account_identifier),
+                outlook_root_folder=root,
+            )
+        )
+        return import_contact_directory_from_mails(
+            [item.metadata for item in scanned],
+            self.directory_store,
+        )
+
     def archive_ready(self, *, include_review: bool = False) -> ArchiveBatchResult:
         return self._archive_preview_rows(self.preview_rows, include_review=include_review)
 
@@ -300,6 +338,8 @@ def build_default_controller(settings: AppSettings) -> AppController:
     store.initialize()
     learning_store = SQLiteLearningStore(settings.paths.sqlite_file)
     learning_store.initialize()
+    directory_store = SQLiteDirectoryStore(settings.paths.sqlite_file)
+    directory_store.initialize()
     ai_classifier = _build_ai_classifier(settings)
     outlook_client = OutlookClient()
     return OutlookAppController(
@@ -318,11 +358,13 @@ def build_default_controller(settings: AppSettings) -> AppController:
             privacy_mask_phone_numbers=settings.privacy_mask_phone_numbers,
             learned_rules=learning_store.learned_rules(),
             misleading_terms=learning_store.misleading_terms(),
+            organization_directory=directory_store,
         ),
         outlook_client=outlook_client,
         projects_root=settings.local_projects_root,
         report_dir=settings.paths.data_dir,
         learning_store=learning_store,
+        directory_store=directory_store,
         archive_executor=ArchiveBatchExecutor(
             ArchiveService(
                 exporter=OutlookExporter(),
@@ -343,6 +385,7 @@ class OutlookAppController(AppController):
         report_dir: Path,
         archive_executor: ArchiveBatchExecutor | None = None,
         learning_store: LearningStoreProtocol | None = None,
+        directory_store: ContactDirectoryStoreProtocol | None = None,
     ) -> None:
         super().__init__(
             scan_service=scan_service,
@@ -351,6 +394,7 @@ class OutlookAppController(AppController):
             report_dir=report_dir,
             archive_executor=archive_executor,
             learning_store=learning_store,
+            directory_store=directory_store,
         )
         self.outlook_client = outlook_client
 

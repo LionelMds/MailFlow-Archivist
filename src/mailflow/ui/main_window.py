@@ -45,6 +45,7 @@ UI_TEXT = {
     "open_project_folder": "Ouvrir dossier projet",
     "export_project_html": "Exporter HTML projet",
     "export_report": "Exporter rapport",
+    "import_directory": "Importer annuaire Outlook",
     "tray_open": "Ouvrir MailFlow",
     "tray_enable_watch": "Activer surveillance Outlook",
     "tray_disable_watch": "Desactiver surveillance Outlook",
@@ -79,7 +80,7 @@ def run_desktop_app(settings: AppSettings) -> int:
 
 def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     from PySide6.QtCore import Qt, QTimer
-    from PySide6.QtGui import QAction, QColor
+    from PySide6.QtGui import QAction, QColor, QIcon
     from PySide6.QtWidgets import (
         QAbstractItemView,
         QApplication,
@@ -103,7 +104,6 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QScrollArea,
         QSizePolicy,
         QSplitter,
-        QStyle,
         QSystemTrayIcon,
         QTableWidget,
         QTableWidgetItem,
@@ -123,6 +123,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         set_openai_api_key,
     )
     from mailflow.core.app_controller import PreviewRequest, build_default_controller
+    from mailflow.resources import app_icon_path
     from mailflow.ui.mail_preview import preview_row_to_html
     from mailflow.ui.preview_table import (
         DESTINATION_COLUMN,
@@ -367,6 +368,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     open_folder_button = QPushButton(UI_TEXT["open_project_folder"])
     export_html_button = QPushButton(UI_TEXT["export_project_html"])
     report_button = QPushButton(UI_TEXT["export_report"])
+    import_directory_button = QPushButton(UI_TEXT["import_directory"])
     for index, button in enumerate(
         [
             archive_button,
@@ -376,6 +378,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             open_folder_button,
             export_html_button,
             report_button,
+            import_directory_button,
         ]
     ):
         actions_layout.addWidget(button, index // 3, index % 3)
@@ -396,7 +399,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     window.setCentralWidget(central)
     watch_timer = QTimer(window)
     watch_timer.setInterval(WATCH_INTERVAL_MS)
-    app_icon = window.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+    app_icon = QIcon(str(app_icon_path()))
     window.setWindowIcon(app_icon)
     tray_icon = QSystemTrayIcon(app_icon, window)
     tray_icon.setToolTip(UI_TEXT["window_title"])
@@ -947,6 +950,16 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             return
         append_log(format_project_html_export_result(results))
 
+    def on_import_directory() -> None:
+        try:
+            result = active_controller.import_contact_directory(
+                account_identifier=selected_account_identifier(),
+                outlook_root_folder=current_outlook_root_folder(),
+            )
+            append_log(format_directory_import_result(result))
+        except Exception as exc:
+            append_log(f"Erreur import annuaire: {exc}")
+
     def on_mark_ignored() -> None:
         indexes = selected_table_row_indexes()
         if not indexes:
@@ -1118,6 +1131,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     watch_timer.timeout.connect(run_watch_scan)
     report_button.clicked.connect(on_export_report)
     export_html_button.clicked.connect(on_export_project_html)
+    import_directory_button.clicked.connect(on_import_directory)
     save_openai_key_button.clicked.connect(save_openai_key_from_input)
     test_openai_key_button.clicked.connect(test_openai_key_from_input)
     check_updates_button.clicked.connect(check_updates_from_ui)
@@ -1146,6 +1160,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_logs = logs
     dynamic_window.mailflow_mail_preview = mail_preview
     dynamic_window.mailflow_export_html_button = export_html_button
+    dynamic_window.mailflow_import_directory_button = import_directory_button
     dynamic_window.mailflow_watch_checkbox = watch_checkbox
     dynamic_window.mailflow_watch_timer = watch_timer
     dynamic_window.mailflow_ai_mode_combo = ai_mode_combo
@@ -1370,6 +1385,16 @@ def format_project_html_export_result(results: Sequence[object]) -> str:
         attachment_count = len(getattr(result, "attachment_paths", []))
         lines.append(f"- {count} mail(s), {attachment_count} piece(s) jointe(s): {path}")
     return "\n".join(lines)
+
+
+def format_directory_import_result(result: object) -> str:
+    return (
+        "Import annuaire termine: "
+        f"{getattr(result, 'scanned_mail_count', 0)} mail(s) scanne(s), "
+        f"{getattr(result, 'imported_contact_count', 0)} contact(s) importe(s), "
+        f"{getattr(result, 'new_organizations', 0)} entreprise(s) creee(s), "
+        f"{getattr(result, 'new_domains', 0)} domaine(s) ajoute(s)."
+    )
 
 
 def format_archive_result(result: ArchiveBatchResult) -> str:

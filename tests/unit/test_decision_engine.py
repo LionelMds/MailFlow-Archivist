@@ -50,7 +50,7 @@ def confident_rule() -> RuleClassification:
 
 def test_destination_mapping_for_supplier_quote() -> None:
     assert destination_for(MailType.DEVIS, InterlocutorType.FOURNISSEUR) == (
-        "Fournisseurs/Demande de prix"
+        "DEMANDE DE PRIX"
     )
 
 
@@ -70,7 +70,7 @@ def test_decision_archives_confident_rule_when_project_exists(tmp_path: Path) ->
     assert decision.archive is True
     assert decision.requires_review is False
     assert decision.target_path == (
-        tmp_path / "2025" / "2025-4893" / "Fournisseurs" / "Demande de prix"
+        tmp_path / "2025" / "2025-4893" / "DEMANDE DE PRIX"
     )
 
 
@@ -135,7 +135,7 @@ def test_decision_detects_candidate_file_conflict(tmp_path: Path) -> None:
 
 def test_decision_detects_planned_msg_file_conflict(tmp_path: Path) -> None:
     project_path = tmp_path / "2025" / "2025-4893"
-    target_path = project_path / "Fournisseurs" / "Demande de prix"
+    target_path = project_path / "DEMANDE DE PRIX"
     target_path.mkdir(parents=True)
     mail = sample_mail().model_copy(update={"archive_order": 1})
     planned_msg_path(mail, target_path).write_text("already here", encoding="utf-8")

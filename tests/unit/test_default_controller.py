@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from mailflow.core.app_controller import OutlookAppController
-from mailflow.core.scan_service import ScanRequest
+from mailflow.core.scan_service import DirectoryScanRequest, ScanRequest
 from mailflow.models import MailMetadata, OutlookAccount, PreviewRow
 from mailflow.outlook.scanner import ScannedMail
 
@@ -25,6 +25,12 @@ class FakeScanService:
         return []
 
     def scan_with_items(self, request: ScanRequest) -> list[ScannedMail]:
+        return []
+
+    def scan_all_project_folders_with_items(
+        self,
+        request: DirectoryScanRequest,
+    ) -> list[ScannedMail]:
         return []
 
 

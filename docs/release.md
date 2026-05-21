@@ -18,6 +18,10 @@ propres a chaque plateforme. Il ne collecte pas tout PySide6 : les modules Qt lo
 utilises, comme WebEngine, QML, Quick, Multimedia, Designer et PDF, sont exclus pour
 garder des artefacts raisonnables.
 
+Le logo officiel est embarque depuis `src/mailflow/assets`. PyInstaller applique
+`mailflow-icon.ico` sous Windows et `mailflow-icon.icns` sous macOS, et l'installateur
+Windows Inno Setup reprend la meme icone.
+
 ## Artefacts
 
 - `MailFlow-Archivist-Setup.exe` : installateur Windows par utilisateur, genere avec

@@ -778,7 +778,7 @@ def _rows_by_project(rows: Sequence[PreviewRow]) -> dict[str, list[PreviewRow]]:
 
 def _project_html_path(projects_root: Path, project_number: str) -> Path:
     project_path = local_project_path(projects_root, project_number)
-    return project_path / "Correspondance" / f"{project_number} - Correspondance projet.html"
+    return project_path / "CORRESPONDANCE" / f"{project_number} - Correspondance projet.html"
 
 
 def _relative_attachment_href(attachment_dir: Path, attachment_path: Path) -> str:
