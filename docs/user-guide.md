@@ -10,6 +10,11 @@ parcourir les echanges par dossier, avec recherche et filtres par sens, type,
 interlocuteur et dossier cible. Les pieces jointes sont placees dans un dossier commun
 a cote du HTML.
 
+L'inspecteur MailFlow et le journal HTML affichent aussi un `Resume projet` : points
+globaux, partie clients, partie fournisseurs, commandes detectees et problemes ou
+reclamations lorsqu'il y en a. Ce recap est calcule depuis les mails scannes et les
+decisions de classement deja visibles.
+
 Avant tout archivage, l'utilisateur garde la main sur :
 
 - la racine locale des projets ;
@@ -44,6 +49,12 @@ de nommer le dossier avec le nom d'une personne et privilegie le nom de l'entrep
 La destination reste modifiable manuellement dans la previsualisation. Les sous-dossiers
 de destination sont crees si le dossier projet existe deja ; le dossier projet lui-meme
 n'est jamais cree automatiquement.
+
+Le role d'une entreprise peut aussi etre fixe par projet dans l'onglet `Annuaire` :
+`client`, `fournisseur`, `intervenant_externe`, `interne` ou `inconnu`. Ce role prime
+sur la reponse IA pour toutes les lignes du projet scanne. Par defaut, `gva.ch` est
+traite comme domaine client, ce qui evite de classer les echanges AIG/GVA comme
+`interne` ou simple intervenant lorsque des collegues Balz Metal sont en copie.
 
 ## Arborescence proposee
 
@@ -156,6 +167,12 @@ Le fichier HTML est mis a jour uniquement apres confirmation. Il affiche un pann
 clic sur une branche, par exemple `Fournisseurs/Demande de prix`, affiche aussi les sous-dossiers et
 mails contenus dans cette branche. L'ordre d'affichage reprend l'ordre metier :
 correspondance client, demandes de prix fournisseurs, puis commandes fournisseurs.
+
+Le bloc `Resume projet` en haut du HTML reprend les elements utiles du scan :
+periode couverte, interlocuteurs principaux, derniers points marquants, points clients,
+points fournisseurs, commandes/suivis de commande et alertes de type probleme,
+reclamation, retard ou non-conformite. Il utilise les sujets, extraits nettoyes,
+dossiers cibles, roles d'annuaire et resumes IA deja generes quand ils existent.
 
 Les pieces jointes existantes sont conservees. Les liens vers les pieces jointes sont
 relatifs au fichier HTML, prefixes par `./` et ouverts dans un nouvel onglet/fenetre

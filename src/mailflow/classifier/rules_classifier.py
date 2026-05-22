@@ -313,7 +313,8 @@ def _infer_interlocutor(
     direction: Direction,
 ) -> InterlocutorType:
     if direction == Direction.SENT:
-        if recipients and all(_is_internal_address(recipient) for recipient in recipients):
+        primary_recipient = recipients[0] if recipients else ""
+        if primary_recipient and _is_internal_address(primary_recipient):
             return InterlocutorType.INTERNE
         if mail_type in {MailType.DEMANDE_DE_PRIX, MailType.DEVIS, MailType.COMMANDE}:
             return InterlocutorType.FOURNISSEUR

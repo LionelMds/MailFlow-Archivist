@@ -142,6 +142,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         SPECIAL_MANUAL_DESTINATIONS,
         suggested_manual_destination,
     )
+    from mailflow.core.project_digest import build_project_digest
     from mailflow.resources import app_icon_path
     from mailflow.ui.mail_preview import preview_row_to_html
     from mailflow.ui.preview_table import (
@@ -156,6 +157,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         preview_row_to_cells,
         should_highlight_cell,
     )
+    from mailflow.ui.project_digest_preview import project_digest_to_html
 
     class MailFlowMainWindow(QMainWindow):
         def closeEvent(self, event: Any) -> None:
@@ -175,6 +177,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     refreshing_table = False
     refreshing_outlook_options = False
     watch_paused_logged = False
+    refreshing_directory_table = False
     watch_state = WatchState()
     review_queue = ReviewQueue()
     sent_review_reminders: set[str] = set()
@@ -319,8 +322,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     directory_actions_layout.addWidget(rename_directory_button)
     directory_actions_layout.addWidget(merge_directory_button)
     directory_actions_layout.addStretch(1)
-    directory_table = QTableWidget(0, 4)
-    directory_table.setHorizontalHeaderLabels(["Entreprise", "Domaines", "Contacts", "Projets"])
+    directory_table = QTableWidget(0, 5)
+    directory_table.setHorizontalHeaderLabels(
+        ["Entreprise", "Domaines", "Contacts", "Role projet", "Projets"]
+    )
     directory_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     directory_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
     directory_table.horizontalHeader().setSectionsMovable(True)
@@ -329,6 +334,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     directory_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
     directory_table.horizontalHeader().setSectionResizeMode(
         3,
+        QHeaderView.ResizeMode.Interactive,
+    )
+    directory_table.horizontalHeader().setSectionResizeMode(
+        4,
         QHeaderView.ResizeMode.ResizeToContents,
     )
     directory_status_label = QLabel("Annuaire local")
@@ -414,10 +423,19 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     preview = QGroupBox("Inspecteur")
     preview_layout = QVBoxLayout(preview)
+    preview_splitter = QSplitter(Qt.Orientation.Vertical)
+    project_digest_preview = QTextEdit()
+    project_digest_preview.setReadOnly(True)
+    project_digest_preview.setMinimumHeight(160)
+    project_digest_preview.setHtml(project_digest_to_html(build_project_digest([])))
     mail_preview = QTextEdit()
     mail_preview.setReadOnly(True)
     mail_preview.setMinimumWidth(300)
-    preview_layout.addWidget(mail_preview)
+    preview_splitter.addWidget(project_digest_preview)
+    preview_splitter.addWidget(mail_preview)
+    preview_splitter.setStretchFactor(0, 1)
+    preview_splitter.setStretchFactor(1, 2)
+    preview_layout.addWidget(preview_splitter)
 
     logs = QTextEdit()
     logs.setReadOnly(True)
@@ -649,8 +667,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         table.resizeColumnsToContents()
         refreshing_table = False
         refresh_folder_tree()
+        refresh_project_digest()
         sync_review_queue_from_preview()
         update_mail_preview(table.currentRow())
+
+    def refresh_project_digest() -> None:
+        project_digest_preview.setHtml(
+            project_digest_to_html(build_project_digest(active_controller.preview_rows))
+        )
 
     def refresh_folder_tree() -> None:
         folder_tree.clear()
@@ -823,21 +847,30 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(f"Erreur fusion dossier: {exc}")
 
     def refresh_directory_table() -> None:
+        nonlocal refreshing_directory_table
+        refreshing_directory_table = True
         try:
-            entries = active_controller.directory_entries()
+            project_entries = active_controller.project_participant_entries()
+            entries = project_entries or active_controller.directory_entries()
         except Exception as exc:
+            refreshing_directory_table = False
             directory_table.setRowCount(0)
             directory_status_label.setText(f"Annuaire indisponible: {exc}")
             return
         directory_table.clearContents()
+        for row_index in range(directory_table.rowCount()):
+            directory_table.removeCellWidget(row_index, 3)
         directory_table.setRowCount(len(entries))
-        directory_table.setHorizontalHeaderLabels(["Entreprise", "Domaines", "Contacts", "Projets"])
+        directory_table.setHorizontalHeaderLabels(
+            ["Entreprise", "Domaines", "Contacts", "Role projet", "Projets"]
+        )
         for row_index, entry in enumerate(entries):
             organization_id = int(entry.organization_id)
             name = str(entry.name)
             domains = tuple(str(item) for item in entry.domains)
             contacts = tuple(str(item) for item in entry.contacts)
-            project_count = int(entry.project_count)
+            project_count = int(getattr(entry, "project_count", getattr(entry, "mail_count", 0)))
+            role = getattr(entry, "role", None)
 
             name_item = QTableWidgetItem(name)
             name_item.setData(Qt.ItemDataRole.UserRole, organization_id)
@@ -849,11 +882,46 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             directory_table.setItem(row_index, 0, name_item)
             directory_table.setItem(row_index, 1, domain_item)
             directory_table.setItem(row_index, 2, contact_item)
-            directory_table.setItem(row_index, 3, project_item)
+            directory_table.setCellWidget(
+                row_index,
+                3,
+                project_role_combo(organization_id, role),
+            )
+            directory_table.setItem(row_index, 4, project_item)
         directory_table.resizeRowsToContents()
+        refreshing_directory_table = False
+        project = active_controller.current_project_number()
+        scope = f" pour {project}" if project and project_entries else ""
         directory_status_label.setText(
-            f"{len(entries)} entreprise(s) dans l'annuaire local."
+            f"{len(entries)} entreprise(s){scope} dans l'annuaire local."
         )
+
+    def project_role_combo(organization_id: int, role: Any) -> Any:
+        combo = QComboBox()
+        for item in InterlocutorType:
+            combo.addItem(interlocutor_label(item), item.value)
+        current_role = role if isinstance(role, InterlocutorType) else InterlocutorType.INCONNU
+        set_combo_value_by_data(combo, current_role.value)
+
+        def role_changed(_value: str = "") -> None:
+            if refreshing_directory_table:
+                return
+            selected_role = InterlocutorType(str(combo.currentData()))
+            try:
+                active_controller.set_project_participant_role(organization_id, selected_role)
+                refresh_table()
+                refresh_folder_tree()
+                update_mail_preview(table.currentRow())
+                append_log(
+                    "Role projet applique: "
+                    f"{selected_role.value} pour l'entreprise #{organization_id}."
+                )
+            except Exception as exc:
+                append_log(f"Erreur role projet: {exc}")
+                refresh_directory_table()
+
+        combo.currentTextChanged.connect(role_changed)
+        return combo
 
     def selected_directory_organization() -> tuple[int, str] | None:
         selection_model = directory_table.selectionModel()
@@ -1526,6 +1594,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_directory_table = directory_table
     dynamic_window.mailflow_directory_status_label = directory_status_label
     dynamic_window.mailflow_logs = logs
+    dynamic_window.mailflow_project_digest_preview = project_digest_preview
     dynamic_window.mailflow_mail_preview = mail_preview
     dynamic_window.mailflow_export_html_button = export_html_button
     dynamic_window.mailflow_watch_checkbox = watch_checkbox
@@ -1581,6 +1650,10 @@ def ai_mode_label(mode: AiMode) -> str:
         AiMode.ALL: "tout classifier",
     }
     return labels[mode]
+
+
+def interlocutor_label(interlocutor: InterlocutorType) -> str:
+    return interlocutor.value
 
 
 def openai_key_status_text(

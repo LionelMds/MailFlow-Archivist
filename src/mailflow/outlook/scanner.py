@@ -245,9 +245,26 @@ def _direction(sender_email: str, account_email: str) -> Direction:
 
 def _recipient_names(recipients: Any) -> list[str]:
     names = []
-    for recipient in iter_com_collection(recipients):
+    ordered_recipients = sorted(
+        enumerate(iter_com_collection(recipients)),
+        key=lambda item: (_recipient_type_order(item[1]), item[0]),
+    )
+    for _index, recipient in ordered_recipients:
         names.append(_text_attr(recipient, "Address") or _text_attr(recipient, "Name"))
     return [name for name in names if name]
+
+
+def _recipient_type_order(recipient: Any) -> int:
+    recipient_type = getattr(recipient, "Type", 1)
+    try:
+        value = int(recipient_type)
+    except (TypeError, ValueError):
+        value = 1
+    if value == 1:
+        return 0
+    if value == 2:
+        return 1
+    return 2
 
 
 def _attachment_names(attachments: Any) -> list[str]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -7,7 +8,8 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from mailflow.classifier.ai_classifier import AiClassifier
-from mailflow.classifier.pipeline import ClassificationPipeline
+from mailflow.classifier.decision_engine import destination_for
+from mailflow.classifier.pipeline import ClassificationPipeline, action_from_decision
 from mailflow.config import AppSettings, get_openai_api_key
 from mailflow.core.archive_actions import (
     mark_rows_archivable,
@@ -25,9 +27,15 @@ from mailflow.core.contact_directory import (
     ContactDirectoryStoreProtocol,
     DirectoryImportResult,
     OrganizationDirectoryEntry,
+    ProjectParticipantEntry,
+    email_domain,
     import_contact_directory_from_mails,
+    split_contact,
 )
-from mailflow.core.correspondence_hierarchy import OrganizationDirectoryProtocol
+from mailflow.core.correspondence_hierarchy import (
+    OrganizationDirectoryProtocol,
+    apply_correspondence_hierarchy,
+)
 from mailflow.core.folder_tree import (
     FolderPathSummary,
     FolderTreeNode,
@@ -50,6 +58,8 @@ from mailflow.core.reporting import export_preview_report
 from mailflow.core.scan_service import DirectoryScanRequest, OutlookScanService, ScanRequest
 from mailflow.models import (
     AiMode,
+    Direction,
+    InterlocutorType,
     MailMetadata,
     ManualClassificationUpdate,
     ManualLearningSignal,
@@ -119,6 +129,24 @@ class DirectoryStoreProtocol(
         source_organization_id: int,
         target_organization_id: int,
     ) -> None:
+        ...
+
+    def list_project_participants(self, project_number: str) -> list[ProjectParticipantEntry]:
+        ...
+
+    def set_project_participant_role(
+        self,
+        project_number: str,
+        organization_id: int,
+        role: InterlocutorType,
+    ) -> None:
+        ...
+
+    def interlocutor_for_email(
+        self,
+        project_number: str,
+        email: str,
+    ) -> InterlocutorType | None:
         ...
 
 
@@ -326,6 +354,45 @@ class AppController:
             target_organization_id,
         )
 
+    def project_participant_entries(
+        self,
+        project_number: str | None = None,
+    ) -> list[ProjectParticipantEntry]:
+        if self.directory_store is None:
+            return []
+        project = project_number or self.current_project_number()
+        if project is None:
+            return []
+        return self.directory_store.list_project_participants(project)
+
+    def set_project_participant_role(
+        self,
+        organization_id: int,
+        role: InterlocutorType,
+        *,
+        project_number: str | None = None,
+    ) -> list[PreviewRow]:
+        if self.directory_store is None:
+            msg = "Aucun annuaire n'est configure"
+            raise RuntimeError(msg)
+        project = project_number or self.current_project_number()
+        if project is None:
+            msg = "Aucun projet scanne"
+            raise RuntimeError(msg)
+        self.directory_store.set_project_participant_role(project, organization_id, role)
+        self.preview_rows = apply_project_roles_to_rows(
+            self.preview_rows,
+            self.directory_store,
+            self.projects_root,
+        )
+        return self.preview_rows
+
+    def current_project_number(self) -> str | None:
+        for row in self.preview_rows:
+            if row.mail.project_number.strip():
+                return row.mail.project_number
+        return None
+
     def archive_ready(self, *, include_review: bool = False) -> ArchiveBatchResult:
         return self._archive_preview_rows(self.preview_rows, include_review=include_review)
 
@@ -416,6 +483,7 @@ def build_default_controller(settings: AppSettings) -> AppController:
             learned_rules=learning_store.learned_rules(),
             misleading_terms=learning_store.misleading_terms(),
             organization_directory=directory_store,
+            client_email_domains=settings.client_email_domains,
         ),
         outlook_client=outlook_client,
         projects_root=settings.local_projects_root,
@@ -499,6 +567,95 @@ def _normalize_preview_request(request: PreviewRequest) -> PreviewRequest:
 
 def selected_rows(rows: Sequence[PreviewRow], indexes: Sequence[int]) -> list[PreviewRow]:
     return [rows[index] for index in indexes if 0 <= index < len(rows)]
+
+
+def apply_project_roles_to_rows(
+    rows: list[PreviewRow],
+    directory_store: DirectoryStoreProtocol,
+    projects_root: Path,
+) -> list[PreviewRow]:
+    updated_rows = [_row_with_project_role(row, directory_store, projects_root) for row in rows]
+    return apply_correspondence_hierarchy(
+        updated_rows,
+        projects_root=projects_root,
+        organization_directory=directory_store,
+    )
+
+
+def _row_with_project_role(
+    row: PreviewRow,
+    directory_store: DirectoryStoreProtocol,
+    projects_root: Path,
+) -> PreviewRow:
+    role = _project_role_for_row(row, directory_store)
+    if role is None or role == row.decision.interlocutor:
+        return row
+    target_relative = destination_for(row.decision.mail_type, role) or "A verifier"
+    target_path = (
+        local_project_path(projects_root, row.mail.project_number)
+        if target_relative == "A verifier"
+        else local_project_path(projects_root, row.mail.project_number).joinpath(
+            *target_relative.split("/")
+        )
+    )
+    archive = row.decision.archive and target_relative != "A verifier"
+    requires_review = row.decision.requires_review or target_relative == "A verifier"
+    decision = row.decision.model_copy(
+        update={
+            "interlocutor": role,
+            "archive": archive,
+            "requires_review": requires_review,
+            "target_relative_folder": target_relative,
+            "target_path": target_path,
+            "reason": _append_project_role_reason(row.decision.reason, role),
+        }
+    )
+    return row.model_copy(
+        update={
+            "decision": decision,
+            "action": action_from_decision(
+                archive=decision.archive,
+                requires_review=decision.requires_review,
+            ),
+        }
+    )
+
+
+def _project_role_for_row(
+    row: PreviewRow,
+    directory_store: DirectoryStoreProtocol,
+) -> InterlocutorType | None:
+    for email in _participant_emails(row.mail):
+        role = directory_store.interlocutor_for_email(row.mail.project_number, email)
+        if role is not None and role != InterlocutorType.INCONNU:
+            return role
+    return None
+
+
+def _participant_emails(mail: MailMetadata) -> list[str]:
+    contacts = (
+        [mail.recipients[0] if mail.recipients else ""]
+        if mail.direction == Direction.SENT
+        else [mail.sender_email, mail.sender_name, mail.body_excerpt]
+    )
+    emails: list[str] = []
+    for contact in contacts:
+        _display_name, parsed_email = split_contact(contact)
+        if parsed_email and parsed_email not in emails:
+            emails.append(parsed_email)
+        for match in re.finditer(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", contact):
+            email = match.group(0).casefold()
+            domain = email_domain(email)
+            if domain is not None and email not in emails:
+                emails.append(email)
+    return emails
+
+
+def _append_project_role_reason(reason: str, role: InterlocutorType) -> str:
+    note = f"Role projet applique: {role.value}."
+    if note in reason:
+        return reason
+    return f"{reason} {note}".strip()
 
 
 def _clean_optional(value: str | None) -> str | None:

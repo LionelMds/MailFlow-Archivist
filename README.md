@@ -32,6 +32,7 @@ Cette premiere tranche met en place :
 - parametrage IA dans l'interface avec cle OpenAI stockee dans `keyring` et test visuel ;
 - recherche de mises a jour depuis l'application avec lancement de l'installateur ;
 - logo officiel MailFlow utilise dans l'application, l'icone Windows et l'app macOS ;
+- resume projet automatique dans l'inspecteur et dans le journal HTML ;
 - export HTML projet centralise dans `Correspondance` avec pieces jointes liees ;
 - surveillance Outlook par scan regulier avec confirmation avant mise a jour HTML ;
 - export CSV de rapport sans corps de mails ;
@@ -56,6 +57,13 @@ aussi un lien local direct, et l'export demande a OneDrive/Windows de garder les
 jointes disponibles localement quand elles sont dans un dossier OneDrive. Les pieces
 jointes deja presentes sont reutilisees et ne sont pas ecrasees.
 
+Un bloc `Resume projet` est ajoute en haut du HTML et dans l'inspecteur MailFlow. Il
+donne une synthese globale des echanges, separe les points clients et fournisseurs,
+liste les commandes/suivis de commande detectes et remonte les problemes ou
+reclamations quand des indices existent. Cette synthese est construite depuis les
+decisions de classement, l'annuaire, les sujets, les extraits et les resumes IA deja
+disponibles ; elle ne declenche pas d'envoi supplementaire a l'IA.
+
 Les destinations proposees sont limitees a trois dossiers metier :
 `Correspondance/Entreprise`, `Fournisseurs/Demande de prix/Entreprise` et
 `Fournisseurs/Commande/Entreprise`.
@@ -65,6 +73,8 @@ prix, en commande, ou en `A verifier` si MailFlow ne peut pas choisir avec certi
 L'annuaire local peut etre alimente depuis tout l'historique Outlook projet :
 une adresse ou un domaine connu, par exemple `@gva.ch`, prend le pas sur les
 heuristiques de nom et permet de classer directement sous l'entreprise officielle.
+L'onglet `Annuaire` permet aussi d'attribuer un role par projet a chaque entreprise ;
+ce role est reapplique a toutes les lignes du projet scanne.
 Le journal HTML permet aussi de filtrer par dossier cible.
 
 Apres le scan, le panneau `Arborescence` affiche les dossiers proposes avec le nombre

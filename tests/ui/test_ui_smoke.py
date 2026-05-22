@@ -7,7 +7,11 @@ from typing import Any, cast
 import pytest
 
 from mailflow.config import AI_MODEL_OPTIONS, AppSettings
-from mailflow.core.contact_directory import DirectoryImportResult, OrganizationDirectoryEntry
+from mailflow.core.contact_directory import (
+    DirectoryImportResult,
+    OrganizationDirectoryEntry,
+    ProjectParticipantEntry,
+)
 from mailflow.core.folder_tree import FolderPathSummary, FolderTreeNode
 from mailflow.models import (
     AiMode,
@@ -57,6 +61,7 @@ class FakeController:
                 project_count=1,
             )
         ]
+        self.project_role = InterlocutorType.CLIENT
 
     def scan_and_preview(self, _request: object) -> list[object]:
         self.preview_rows = []
@@ -93,6 +98,34 @@ class FakeController:
 
     def directory_entries(self) -> list[OrganizationDirectoryEntry]:
         return self.directory_entries_list
+
+    def project_participant_entries(
+        self,
+        project_number: str | None = None,
+    ) -> list[ProjectParticipantEntry]:
+        return [
+            ProjectParticipantEntry(
+                organization_id=1,
+                name="AIG",
+                domains=("gva.ch",),
+                contacts=("contact@gva.ch",),
+                role=self.project_role,
+                mail_count=3,
+            )
+        ]
+
+    def set_project_participant_role(
+        self,
+        organization_id: int,
+        role: InterlocutorType,
+        *,
+        project_number: str | None = None,
+    ) -> list[object]:
+        self.project_role = role
+        return self.preview_rows
+
+    def current_project_number(self) -> str | None:
+        return "2025-4893"
 
     def rename_directory_organization(self, organization_id: int, name: str) -> None:
         self.directory_entries_list = [
@@ -393,6 +426,8 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
 
     assert window.windowTitle() == "MailFlow Archivist"
     assert dynamic_window.mailflow_outlook_root_combo.currentText() == "Boite de reception"
+    assert dynamic_window.mailflow_project_digest_preview.isReadOnly()
+    assert "Aucun projet scanne" in dynamic_window.mailflow_project_digest_preview.toPlainText()
     assert dynamic_window.mailflow_mail_preview.isReadOnly()
     assert dynamic_window.mailflow_ai_mode_combo.currentData() == AiMode.AMBIGUOUS_ONLY.value
     assert dynamic_window.mailflow_ai_model_input.currentText() == "gpt-5.4-nano"
@@ -435,6 +470,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_directory_table.rowCount() == 1
     assert dynamic_window.mailflow_directory_table.item(0, 0).text() == "AIG"
     assert dynamic_window.mailflow_directory_table.item(0, 1).text() == "gva.ch"
+    assert dynamic_window.mailflow_directory_table.cellWidget(0, 3).currentText() == "client"
     assert dynamic_window.mailflow_navigation.count() == 4
     assert dynamic_window.mailflow_navigation.item(0).text() == "Mails"
     assert dynamic_window.mailflow_navigation.item(1).text() == "Arborescence"

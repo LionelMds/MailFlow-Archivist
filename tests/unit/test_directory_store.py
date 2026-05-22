@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from mailflow.core.contact_directory import ContactObservation
+from mailflow.models import InterlocutorType
 from mailflow.storage.directory_store import SQLiteDirectoryStore
 
 
@@ -120,3 +121,22 @@ def test_directory_store_merges_organizations(tmp_path: Path) -> None:
     assert store.organization_name_for_email("vente@metalfactory.ch") == "AIG"
     assert store.count_organizations() == 1
     assert store.count_contacts() == 2
+
+
+def test_directory_store_sets_project_participant_role(tmp_path: Path) -> None:
+    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
+    store.record_observation(observation("contact@gva.ch"))
+    organization_id = store.list_organizations()[0].organization_id
+
+    store.set_project_participant_role(
+        "2025-4893",
+        organization_id,
+        InterlocutorType.CLIENT,
+    )
+
+    assert store.interlocutor_for_email("2025-4893", "chef@gva.ch") == (
+        InterlocutorType.CLIENT
+    )
+    participants = store.list_project_participants("2025-4893")
+    assert participants[0].name == "AIG"
+    assert participants[0].role == InterlocutorType.CLIENT

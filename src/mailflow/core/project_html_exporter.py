@@ -12,6 +12,7 @@ from urllib.parse import quote
 from mailflow.core.cloud_files import request_local_availability
 from mailflow.core.filenames import build_archive_stem, build_attachment_filename
 from mailflow.core.folder_tree import FolderTreeNode, build_folder_tree, folder_sort_key
+from mailflow.core.project_digest import ProjectDigest, build_project_digest
 from mailflow.core.project_paths import local_project_path
 from mailflow.models import Direction, PreviewRow
 from mailflow.outlook.attachments import (
@@ -192,6 +193,8 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     folder_tree = build_folder_tree([entry.row for entry in entries])
     folder_sections = _render_folder_sections(entries)
     folder_nav = _render_folder_nav(folder_tree, total_count=len(entries))
+    project_digest = build_project_digest([entry.row for entry in entries])
+    digest_html = _render_project_digest(project_digest)
     return f"""<!doctype html>
 <html lang="fr">
 <head>
@@ -263,6 +266,44 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       color: var(--muted);
       font-size: 13px;
       margin-bottom: 12px;
+    }}
+    .project-digest {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 14px 16px;
+      margin-bottom: 16px;
+    }}
+    .project-digest h2 {{
+      margin: 0 0 6px;
+      font-size: 17px;
+      font-weight: 650;
+    }}
+    .digest-subtitle {{
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }}
+    .digest-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }}
+    .digest-section {{
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+    }}
+    .digest-section h3 {{
+      margin: 0 0 6px;
+      font-size: 14px;
+      font-weight: 650;
+    }}
+    .digest-section ul {{
+      margin: 0;
+      padding-left: 18px;
+      color: #253142;
+      line-height: 1.45;
+      font-size: 13px;
     }}
     .project-layout {{
       display: grid;
@@ -456,6 +497,7 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       .mail-body {{ padding-left: 16px; }}
       .project-layout {{ grid-template-columns: 1fr; }}
       .folder-panel {{ position: static; max-height: none; }}
+      .digest-grid {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
@@ -489,6 +531,7 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     <div class="summary">
       <span id="visibleCount">{len(entries)}</span> mail(s) affiches sur {len(entries)}
     </div>
+    {digest_html}
     <div class="project-layout">
       <aside class="folder-panel" aria-label="Arborescence des echanges">
         <h2>Arborescence</h2>
@@ -582,6 +625,49 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
   </script>
 </body>
 </html>
+"""
+
+
+def _render_project_digest(digest: ProjectDigest) -> str:
+    if not digest.has_useful_sections:
+        return ""
+    date_range = "-"
+    if digest.first_date is not None and digest.last_date is not None:
+        date_range = f"{digest.first_date:%d.%m.%Y} - {digest.last_date:%d.%m.%Y}"
+    sections = "\n".join(
+        section
+        for section in [
+            _render_digest_section("Global", digest.global_points),
+            _render_digest_section("Clients", digest.client_points),
+            _render_digest_section("Fournisseurs", digest.supplier_points),
+            _render_digest_section("Commandes", digest.order_points),
+            _render_digest_section("Problemes / reclamations", digest.issue_points),
+        ]
+        if section
+    )
+    return f"""
+    <section class="project-digest" aria-label="Resume du projet">
+      <h2>Resume projet</h2>
+      <p class="digest-subtitle">
+        {digest.mail_count} mail(s) analyses | {digest.sent_count} envoye(s) |
+        {digest.received_count} recu(s) | {date_range}
+      </p>
+      <div class="digest-grid">
+        {sections}
+      </div>
+    </section>
+"""
+
+
+def _render_digest_section(title: str, points: tuple[str, ...]) -> str:
+    if not points:
+        return ""
+    items = "".join(f"<li>{_e(point)}</li>" for point in points)
+    return f"""
+        <section class="digest-section">
+          <h3>{_e(title)}</h3>
+          <ul>{items}</ul>
+        </section>
 """
 
 

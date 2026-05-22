@@ -40,7 +40,7 @@ def test_ai_classifier_uses_structured_output_and_metadata_only() -> None:
         subject="Offre",
         sender_name="Dupont",
         sender_email="dupont@example.com",
-        recipients=["lionel@balzmetal.test"],
+        recipients=["lionel@balzmetal.ch"],
         sent_at=datetime(2026, 5, 6, 10, 30),
         attachment_names=["offre.xlsx"],
         body_excerpt="Bonjour +41 22 123 45 67. Voici le texte.",
@@ -55,6 +55,8 @@ def test_ai_classifier_uses_structured_output_and_metadata_only() -> None:
     user_payload = responses.kwargs["input"][1]["content"]
     assert '"project_number": "2025-4893"' in user_payload
     assert "offre.xlsx" in user_payload
+    assert '"primary_recipient": "lionel@balzmetal.ch"' in user_payload
+    assert '"primary_recipient_is_internal": true' in user_payload
     assert "+41 22" not in user_payload
 
 

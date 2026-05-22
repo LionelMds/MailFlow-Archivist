@@ -9,8 +9,10 @@ from mailflow.core.contact_directory import (
     ContactObservation,
     DirectoryUpsertOutcome,
     OrganizationDirectoryEntry,
+    ProjectParticipantEntry,
 )
 from mailflow.core.correspondence_hierarchy import safe_folder_name
+from mailflow.models import InterlocutorType
 
 DIRECTORY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS organizations(
@@ -132,6 +134,44 @@ class SQLiteDirectoryStore:
             ).fetchone()
         return None if row is None else str(row[0])
 
+    def interlocutor_for_email(
+        self,
+        project_number: str,
+        email: str,
+    ) -> InterlocutorType | None:
+        normalized_email = email.strip().casefold()
+        project = project_number.strip()
+        if not normalized_email or not project:
+            return None
+        self.initialize()
+        with self._connect() as connection:
+            organization_id = _organization_id_for_email(connection, normalized_email)
+            if organization_id is None:
+                return None
+            row = connection.execute(
+                """
+                SELECT role
+                FROM project_participants
+                WHERE project_number = ? AND organization_id = ?
+                LIMIT 1
+                """,
+                (project, organization_id),
+            ).fetchone()
+            if row is not None and str(row[0]) != InterlocutorType.INCONNU.value:
+                return InterlocutorType(str(row[0]))
+            row = connection.execute(
+                """
+                SELECT default_role
+                FROM organizations
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (organization_id,),
+            ).fetchone()
+        if row is None or str(row[0]) == InterlocutorType.INCONNU.value:
+            return None
+        return InterlocutorType(str(row[0]))
+
     def list_organizations(self) -> list[OrganizationDirectoryEntry]:
         self.initialize()
         with self._connect() as connection:
@@ -152,6 +192,70 @@ class SQLiteDirectoryStore:
                 )
                 for row in organization_rows
             ]
+
+    def list_project_participants(self, project_number: str) -> list[ProjectParticipantEntry]:
+        project = project_number.strip()
+        if not project:
+            return []
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    organizations.id,
+                    organizations.name,
+                    project_participants.role,
+                    project_participants.observation_count
+                FROM project_participants
+                JOIN organizations ON organizations.id = project_participants.organization_id
+                WHERE project_participants.project_number = ?
+                ORDER BY organizations.name COLLATE NOCASE
+                """,
+                (project,),
+            ).fetchall()
+            return [
+                ProjectParticipantEntry(
+                    organization_id=int(row[0]),
+                    name=str(row[1]),
+                    domains=tuple(_domains_for_organization(connection, int(row[0]))),
+                    contacts=tuple(_contacts_for_organization(connection, int(row[0]))),
+                    role=InterlocutorType(str(row[2])),
+                    mail_count=int(row[3]),
+                )
+                for row in rows
+            ]
+
+    def set_project_participant_role(
+        self,
+        project_number: str,
+        organization_id: int,
+        role: InterlocutorType,
+    ) -> None:
+        project = project_number.strip()
+        if not project:
+            msg = "Le numero de projet est obligatoire"
+            raise ValueError(msg)
+        now = datetime.now(UTC).isoformat()
+        self.initialize()
+        with self._connect() as connection:
+            _ensure_organization_exists(connection, organization_id)
+            connection.execute(
+                """
+                INSERT INTO project_participants(
+                    project_number,
+                    organization_id,
+                    role,
+                    first_seen_at,
+                    last_seen_at,
+                    observation_count
+                )
+                VALUES (?, ?, ?, ?, ?, 0)
+                ON CONFLICT(project_number, organization_id) DO UPDATE SET
+                    role = excluded.role,
+                    last_seen_at = excluded.last_seen_at
+                """,
+                (project, organization_id, role.value, now, now),
+            )
 
     def rename_organization(self, organization_id: int, name: str) -> None:
         if not name.strip():
@@ -415,6 +519,16 @@ def _organization_id_for_contact(connection: sqlite3.Connection, email: str) -> 
         (email,),
     ).fetchone()
     return None if row is None else int(row[0])
+
+
+def _organization_id_for_email(connection: sqlite3.Connection, email: str) -> int | None:
+    contact_org = _organization_id_for_contact(connection, email)
+    if contact_org is not None:
+        return contact_org
+    domain = _domain_from_email(email)
+    if domain is None:
+        return None
+    return _organization_id_for_domain(connection, domain)
 
 
 def _organization_id_for_domain(connection: sqlite3.Connection, domain: str) -> int | None:

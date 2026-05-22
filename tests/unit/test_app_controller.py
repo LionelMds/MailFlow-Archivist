@@ -11,6 +11,7 @@ from mailflow.core.contact_directory import (
     ContactObservation,
     DirectoryUpsertOutcome,
     OrganizationDirectoryEntry,
+    ProjectParticipantEntry,
 )
 from mailflow.core.manual_review import LearnedClassificationRule, LearnedMisleadingTerm
 from mailflow.core.scan_service import DirectoryScanRequest, ScanRequest
@@ -113,6 +114,7 @@ class FakeDirectoryStore:
         ]
         self.renamed: tuple[int, str] | None = None
         self.merged: tuple[int, int] | None = None
+        self.roles: dict[tuple[str, int], InterlocutorType] = {}
 
     def record_observation(self, observation: ContactObservation) -> DirectoryUpsertOutcome:
         self.contacts.append(observation.email)
@@ -140,6 +142,40 @@ class FakeDirectoryStore:
         target_organization_id: int,
     ) -> None:
         self.merged = (source_organization_id, target_organization_id)
+
+    def list_project_participants(self, project_number: str) -> list[ProjectParticipantEntry]:
+        return [
+            ProjectParticipantEntry(
+                organization_id=entry.organization_id,
+                name=entry.name,
+                domains=entry.domains,
+                contacts=entry.contacts,
+                role=self.roles.get(
+                    (project_number, entry.organization_id),
+                    InterlocutorType.INCONNU,
+                ),
+                mail_count=1,
+            )
+            for entry in self.entries
+        ]
+
+    def set_project_participant_role(
+        self,
+        project_number: str,
+        organization_id: int,
+        role: InterlocutorType,
+    ) -> None:
+        self.roles[(project_number, organization_id)] = role
+
+    def interlocutor_for_email(
+        self,
+        project_number: str,
+        email: str,
+    ) -> InterlocutorType | None:
+        domain = email.rsplit("@", maxsplit=1)[-1].casefold()
+        if self.domain_map.get(domain) is None and domain != "gva.ch":
+            return None
+        return self.roles.get((project_number, 1))
 
 
 class FakePreviewPipeline:
@@ -486,6 +522,46 @@ def test_controller_exposes_directory_entries_and_edits(tmp_path: Path) -> None:
 
     assert directory_store.renamed == (1, "Aeroport International Geneve")
     assert directory_store.merged == (2, 1)
+
+
+def test_controller_applies_project_role_to_all_preview_rows(tmp_path: Path) -> None:
+    directory_store = FakeDirectoryStore()
+    directory_store.domain_map["gva.ch"] = "AIG"
+    row = make_row(tmp_path).model_copy(
+        update={
+            "mail": make_mail().model_copy(
+                update={
+                    "project_number": "2025-4893",
+                    "direction": Direction.SENT,
+                    "sender_email": "lionel@balzmetal.ch",
+                    "recipients": ["chef@gva.ch", "andre@balzmetal.ch"],
+                    "subject": "Plan pour approbation",
+                }
+            ),
+            "decision": make_row(tmp_path).decision.model_copy(
+                update={
+                    "mail_type": MailType.PLAN,
+                    "interlocutor": InterlocutorType.INTERNE,
+                    "target_relative_folder": "Correspondance",
+                    "target_path": tmp_path / "2025" / "2025-4893" / "Correspondance",
+                }
+            ),
+        }
+    )
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+        directory_store=directory_store,
+    )
+    controller.preview_rows = [row]
+
+    updated = controller.set_project_participant_role(1, InterlocutorType.CLIENT)
+
+    assert directory_store.roles[("2025-4893", 1)] == InterlocutorType.CLIENT
+    assert updated[0].decision.interlocutor == InterlocutorType.CLIENT
+    assert updated[0].decision.target_relative_folder == "Correspondance/AIG"
 
 
 def test_controller_archives_ready_rows_with_stored_outlook_items(tmp_path: Path) -> None:

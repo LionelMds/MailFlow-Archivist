@@ -62,11 +62,36 @@ def test_sent_demande_etude_to_external_recipient_is_technical_external() -> Non
     assert destination_for(result.suggested_type, result.suggested_interlocutor) == "Correspondance"
 
 
+def test_sent_plan_uses_first_external_recipient_before_internal_copy() -> None:
+    result = classify_mail(
+        sent_mail(
+            "RE: Approbation du plan de la cloison",
+            body="Veuillez trouver ci-joint le plan actualise.",
+            recipients=["blaise.riva@gva.ch", "andre@balzmetal.ch"],
+        )
+    )
+
+    assert result.suggested_type == MailType.PLAN
+    assert result.suggested_interlocutor == InterlocutorType.INTERVENANT_EXTERNE
+    assert destination_for(result.suggested_type, result.suggested_interlocutor) == "Correspondance"
+
+
 def test_sent_mail_to_internal_recipient_stays_internal() -> None:
     result = classify_mail(
         sent_mail(
             "Demande d'offre de prix - NREF-2025-4893-LMDS",
             recipients=["bureau@balzmetal.ch"],
+        )
+    )
+
+    assert result.suggested_interlocutor == InterlocutorType.INTERNE
+
+
+def test_sent_mail_uses_first_internal_recipient_even_with_external_copy() -> None:
+    result = classify_mail(
+        sent_mail(
+            "Demande d'offre de prix - NREF-2025-4893-LMDS",
+            recipients=["bureau@balzmetal.ch", "sales@supplier.test"],
         )
     )
 

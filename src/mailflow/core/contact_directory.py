@@ -7,7 +7,7 @@ from email.utils import parseaddr
 from typing import Protocol
 
 from mailflow.core.correspondence_hierarchy import safe_folder_name
-from mailflow.models import MailMetadata
+from mailflow.models import InterlocutorType, MailMetadata
 
 GENERIC_EMAIL_DOMAINS = {
     "bluewin.ch",
@@ -63,6 +63,16 @@ class OrganizationDirectoryEntry:
     domains: tuple[str, ...]
     contacts: tuple[str, ...]
     project_count: int
+
+
+@dataclass(frozen=True)
+class ProjectParticipantEntry:
+    organization_id: int
+    name: str
+    domains: tuple[str, ...]
+    contacts: tuple[str, ...]
+    role: InterlocutorType
+    mail_count: int
 
 
 class ContactDirectoryStoreProtocol(Protocol):

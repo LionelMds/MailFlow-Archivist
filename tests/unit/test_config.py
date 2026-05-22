@@ -20,6 +20,7 @@ def test_settings_round_trip_without_api_key(tmp_path: Path) -> None:
     assert loaded.local_projects_root == tmp_path / "Clients"
     assert loaded.selected_year == "2025"
     assert loaded.review_reminder_times == ["09:00", "14:00"]
+    assert loaded.client_email_domains == ["gva.ch"]
     assert "openai_api_key" not in (tmp_path / "config.json").read_text(encoding="utf-8")
 
 

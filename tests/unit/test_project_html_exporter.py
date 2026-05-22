@@ -143,6 +143,9 @@ def test_project_html_export_writes_single_html_and_shared_attachments(tmp_path:
     ]
     assert result.attachment_paths[0].read_text(encoding="utf-8") == "pdf"
     html = result.html_path.read_text(encoding="utf-8")
+    assert "Resume projet" in html
+    assert "Global" in html
+    assert "Fournisseurs" in html
     assert "Prix &lt;special&gt;" in html
     assert 'data-direction="received"' in html
     assert 'id="folderFilter"' in html

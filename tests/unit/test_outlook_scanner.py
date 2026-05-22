@@ -246,3 +246,31 @@ def test_mail_item_to_metadata_maps_sent_mail() -> None:
     )
 
     assert metadata.direction == Direction.SENT
+
+
+def test_mail_item_to_metadata_orders_to_recipients_before_internal_cc() -> None:
+    item = SimpleNamespace(
+        EntryID="ENTRY-3",
+        MessageClass="IPM.Note",
+        Subject="Plan",
+        SenderName="Lionel",
+        SenderEmailAddress="lionel@balzmetal.test",
+        Recipients=FakeCollection(
+            [
+                SimpleNamespace(Address="andre@balzmetal.ch", Type=2),
+                SimpleNamespace(Address="blaise.riva@gva.ch", Type=1),
+            ]
+        ),
+        SentOn=datetime(2026, 5, 6, 10, 30),
+        Attachments=[],
+        Body="Bonjour",
+        Categories="",
+    )
+
+    metadata = OutlookScanner(account_email="lionel@balzmetal.test").mail_item_to_metadata(
+        item,
+        project_number="2025-4893",
+        outlook_folder="Boite de reception/2025/2025-4893",
+    )
+
+    assert metadata.recipients == ["blaise.riva@gva.ch", "andre@balzmetal.ch"]

@@ -63,6 +63,7 @@ class AppSettings(BaseModel):
     ai_include_body_excerpt: bool = True
     privacy_mask_phone_numbers: bool = False
     review_reminder_times: list[str] = Field(default_factory=lambda: ["09:00", "14:00"])
+    client_email_domains: list[str] = Field(default_factory=lambda: ["gva.ch"])
     rule_confidence_threshold: float = 0.80
     decision_confidence_threshold: float = 0.80
 
