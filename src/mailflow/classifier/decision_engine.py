@@ -42,7 +42,9 @@ def decide_archive(
     project_path = local_project_path(projects_root, mail.project_number)
     mail_type, interlocutor, archive, confidence, reason = _classification_choice(rule, ai)
     target_relative = (
-        _target_from_ai(ai) or destination_for(mail_type, interlocutor) or "Ne pas archiver"
+        _target_from_ai(ai, interlocutor)
+        or destination_for(mail_type, interlocutor)
+        or "Ne pas archiver"
     )
     target_path = _resolve_target_path(project_path, target_relative)
 
@@ -116,6 +118,20 @@ def decide_archive(
             reason="Aucune destination d'archivage determinee, validation requise.",
         )
 
+    if target_relative == "A verifier":
+        return _decision(
+            mail,
+            archive=False,
+            requires_review=True,
+            mail_type=mail_type,
+            interlocutor=interlocutor,
+            target_relative=target_relative,
+            target_path=target_path,
+            confidence=confidence,
+            duplicate_status="none",
+            reason="Destination a verifier, validation utilisateur requise.",
+        )
+
     if confidence < confidence_threshold or mail_type == MailType.A_VERIFIER:
         return _decision(
             mail,
@@ -160,13 +176,20 @@ def decide_archive(
 
 
 def destination_for(mail_type: MailType, interlocutor: InterlocutorType) -> str | None:
-    if mail_type in {MailType.DEMANDE_DE_PRIX, MailType.DEVIS}:
-        if interlocutor == InterlocutorType.FOURNISSEUR:
+    if interlocutor == InterlocutorType.FOURNISSEUR:
+        if mail_type in {MailType.DEMANDE_DE_PRIX, MailType.DEVIS}:
             return SUPPLIER_REQUEST_FOLDER
-    if mail_type == MailType.COMMANDE:
-        if interlocutor == InterlocutorType.FOURNISSEUR:
+        if mail_type in {MailType.COMMANDE, MailType.FACTURE, MailType.LIVRAISON}:
             return SUPPLIER_ORDER_FOLDER
+        if mail_type == MailType.INUTILE_OU_FAIBLE_VALEUR:
+            return None
+        return "A verifier"
+    if interlocutor == InterlocutorType.INCONNU:
+        return "A verifier"
     if mail_type in {
+        MailType.DEMANDE_DE_PRIX,
+        MailType.DEVIS,
+        MailType.COMMANDE,
         MailType.FACTURE,
         MailType.CORRESPONDANCE_GENERALE,
         MailType.TECHNIQUE,
@@ -201,10 +224,21 @@ def _classification_choice(
     )
 
 
-def _target_from_ai(ai: AiMailClassification | None) -> str | None:
+def _target_from_ai(
+    ai: AiMailClassification | None,
+    interlocutor: InterlocutorType,
+) -> str | None:
     if ai is None:
         return None
     if ai.target_folder == "A verifier":
+        return "A verifier"
+    if interlocutor == InterlocutorType.INCONNU:
+        return "A verifier"
+    if interlocutor == InterlocutorType.FOURNISSEUR:
+        if ai.target_folder == CORRESPONDENCE_FOLDER:
+            return "A verifier"
+        return ai.target_folder
+    if ai.target_folder in {SUPPLIER_REQUEST_FOLDER, SUPPLIER_ORDER_FOLDER}:
         return "A verifier"
     return ai.target_folder
 

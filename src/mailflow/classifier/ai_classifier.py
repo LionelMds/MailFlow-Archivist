@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from mailflow.classifier.prompt import SYSTEM_PROMPT, build_ai_payload
+from mailflow.config import DEFAULT_AI_MODEL
 from mailflow.models import AiMailClassification, Direction, MailMetadata
 
 
@@ -30,7 +31,7 @@ class AiClassifier:
         self,
         *,
         api_key: str,
-        model: str = "gpt-5.4-nano",
+        model: str = DEFAULT_AI_MODEL,
         client: OpenAiClient | None = None,
     ) -> None:
         self._api_key = api_key

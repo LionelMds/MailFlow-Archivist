@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
 from mailflow.core.project_paths import local_project_path
-from mailflow.models import Direction, InterlocutorType, MailType, PreviewRow
+from mailflow.models import Direction, PreviewRow
 
 CORRESPONDENCE_FOLDER = "Correspondance"
 SUPPLIER_ROOT_FOLDER = "Fournisseurs"
@@ -22,6 +21,7 @@ INTERNAL_DOMAINS = ("balzmetal.ch",)
 LEGAL_SUFFIXES = {"ag", "gmbh", "sa", "sarl", "sagl", "ltd", "llc", "inc", "spa", "srl"}
 GENERIC_CONTACT_WORDS = {"contact", "info", "office", "sales", "vente", "bureau"}
 INVALID_PATH_CHARS = '<>:"/\\|?*'
+SPECIAL_FOLDERS = {"A verifier", "Ne pas archiver"}
 
 
 @dataclass(frozen=True)
@@ -146,84 +146,55 @@ def _folder_plan(
     organization_directory: OrganizationDirectoryProtocol | None = None,
 ) -> dict[str, HierarchicalFolder]:
     plan: dict[str, HierarchicalFolder] = {}
-    supplier_groups: dict[tuple[str, str], list[PreviewRow]] = defaultdict(list)
+    company_groups: dict[tuple[str, str], list[PreviewRow]] = defaultdict(list)
     for row in rows:
-        company = company_folder_for_row(row, organization_directory)
+        target_relative_folder = _normalized_relative_folder(
+            row.decision.target_relative_folder
+        )
+        if target_relative_folder in SPECIAL_FOLDERS:
+            company = company_folder_for_row(row, organization_directory)
+            plan[row.mail.entry_id] = HierarchicalFolder(
+                company,
+                target_relative_folder,
+            )
+            continue
         company_key = company_key_for_row(row, organization_directory)
-        interlocutor = row.decision.interlocutor
-        if row.decision.target_relative_folder in {"A verifier", "Ne pas archiver"}:
-            plan[row.mail.entry_id] = HierarchicalFolder(
-                company,
-                row.decision.target_relative_folder,
-            )
-        elif interlocutor in {
-            InterlocutorType.CLIENT,
-            InterlocutorType.INTERVENANT_EXTERNE,
-            InterlocutorType.INTERNE,
-            InterlocutorType.INCONNU,
-        }:
-            plan[row.mail.entry_id] = HierarchicalFolder(
-                company,
-                f"{CORRESPONDENCE_FOLDER}/{company}",
-            )
-        elif interlocutor == InterlocutorType.FOURNISSEUR:
-            supplier_groups[(row.mail.project_number, company_key)].append(row)
-        else:
-            plan[row.mail.entry_id] = HierarchicalFolder(
-                company,
-                f"{CORRESPONDENCE_FOLDER}/{company}",
-            )
+        company_groups[(row.mail.project_number, company_key)].append(row)
 
-    for (_project_number, _company_key), supplier_rows in supplier_groups.items():
+    for (_project_number, _company_key), grouped_rows in company_groups.items():
         company = _best_company_display(
-            supplier_rows,
+            grouped_rows,
             organization_directory=organization_directory,
         )
-        plan.update(_supplier_folder_plan(company, supplier_rows))
+        for row in grouped_rows:
+            relative_folder = _standard_relative_folder(
+                row.decision.target_relative_folder,
+                company,
+            )
+            plan[row.mail.entry_id] = HierarchicalFolder(company, relative_folder)
     return plan
 
 
-def _supplier_folder_plan(
-    company: str,
-    rows: Sequence[PreviewRow],
-) -> dict[str, HierarchicalFolder]:
-    result: dict[str, HierarchicalFolder] = {}
-    for segment in _supplier_request_segments(rows):
-        latest_offer_at = max(
-            (
-                row.mail.sent_at
-                for row in segment
-                if row.decision.mail_type == MailType.DEVIS
-            ),
-            default=None,
-        )
-        for row in segment:
-            folder = _supplier_folder_for_row(row, latest_offer_at=latest_offer_at)
-            result[row.mail.entry_id] = HierarchicalFolder(company, f"{folder}/{company}")
-    return result
+def _standard_relative_folder(target_relative_folder: str, company: str) -> str:
+    base_folder = _standard_base_folder(target_relative_folder)
+    return f"{base_folder}/{company}"
 
 
-def _supplier_request_segments(rows: Sequence[PreviewRow]) -> Iterable[list[PreviewRow]]:
-    segment: list[PreviewRow] = []
-    for row in sorted(rows, key=lambda item: (item.mail.sent_at, item.mail.entry_id)):
-        if row.decision.mail_type == MailType.DEMANDE_DE_PRIX and segment:
-            yield segment
-            segment = []
-        segment.append(row)
-    if segment:
-        yield segment
-
-
-def _supplier_folder_for_row(row: PreviewRow, *, latest_offer_at: datetime | None) -> str:
-    if row.decision.mail_type == MailType.DEMANDE_DE_PRIX:
+def _standard_base_folder(target_relative_folder: str) -> str:
+    normalized = _normalized_relative_folder(target_relative_folder)
+    if normalized == SUPPLIER_REQUEST_FOLDER or normalized.startswith(
+        f"{SUPPLIER_REQUEST_FOLDER}/"
+    ):
         return SUPPLIER_REQUEST_FOLDER
-    if latest_offer_at is not None:
-        if row.mail.sent_at <= latest_offer_at:
-            return SUPPLIER_REQUEST_FOLDER
+    if normalized == SUPPLIER_ORDER_FOLDER or normalized.startswith(
+        f"{SUPPLIER_ORDER_FOLDER}/"
+    ):
         return SUPPLIER_ORDER_FOLDER
-    if row.decision.mail_type == MailType.COMMANDE:
-        return SUPPLIER_ORDER_FOLDER
-    return SUPPLIER_REQUEST_FOLDER
+    return CORRESPONDENCE_FOLDER
+
+
+def _normalized_relative_folder(target_relative_folder: str) -> str:
+    return target_relative_folder.replace("\\", "/").strip("/")
 
 
 def _row_with_folder(
@@ -237,7 +208,7 @@ def _row_with_folder(
     project_path = local_project_path(projects_root, row.mail.project_number)
     target_path = (
         project_path
-        if folder.relative_folder in {"A verifier", "Ne pas archiver"}
+        if folder.relative_folder in SPECIAL_FOLDERS
         else project_path.joinpath(*folder.relative_folder.split("/"))
     )
     decision = row.decision.model_copy(

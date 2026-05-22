@@ -4,6 +4,9 @@ from datetime import datetime
 from pathlib import Path
 
 from mailflow.core.correspondence_hierarchy import (
+    CORRESPONDENCE_FOLDER,
+    SUPPLIER_ORDER_FOLDER,
+    SUPPLIER_REQUEST_FOLDER,
     apply_correspondence_hierarchy,
     company_from_mail,
     is_safe_relative_folder,
@@ -32,6 +35,7 @@ def make_row(
     sender_name: str = "Metal Factory",
     sender_email: str = "sales@metal-factory.ch",
     recipients: list[str] | None = None,
+    target_relative_folder: str = CORRESPONDENCE_FOLDER,
 ) -> PreviewRow:
     mail = MailMetadata(
         entry_id=entry_id,
@@ -51,7 +55,7 @@ def make_row(
         requires_review=False,
         mail_type=mail_type,
         interlocutor=interlocutor,
-        target_relative_folder="Correspondance",
+        target_relative_folder=target_relative_folder,
         target_path=tmp_path,
         confidence=0.9,
         duplicate_status="none",
@@ -149,7 +153,9 @@ def test_client_rows_with_multiple_people_are_grouped_by_domain(tmp_path: Path) 
     }
 
 
-def test_supplier_rows_switch_after_latest_offer_until_new_rfq(tmp_path: Path) -> None:
+def test_supplier_rows_follow_decided_destination_without_timeline_switching(
+    tmp_path: Path,
+) -> None:
     rows = [
         make_row(
             tmp_path,
@@ -159,6 +165,7 @@ def test_supplier_rows_switch_after_latest_offer_until_new_rfq(tmp_path: Path) -
             interlocutor=InterlocutorType.FOURNISSEUR,
             direction=Direction.SENT,
             recipients=["sales@metal-factory.ch"],
+            target_relative_folder=SUPPLIER_REQUEST_FOLDER,
         ),
         make_row(
             tmp_path,
@@ -166,6 +173,7 @@ def test_supplier_rows_switch_after_latest_offer_until_new_rfq(tmp_path: Path) -
             sent_at=datetime(2026, 5, 2, 8),
             mail_type=MailType.TECHNIQUE,
             interlocutor=InterlocutorType.FOURNISSEUR,
+            target_relative_folder=CORRESPONDENCE_FOLDER,
         ),
         make_row(
             tmp_path,
@@ -173,13 +181,15 @@ def test_supplier_rows_switch_after_latest_offer_until_new_rfq(tmp_path: Path) -
             sent_at=datetime(2026, 5, 3, 8),
             mail_type=MailType.DEVIS,
             interlocutor=InterlocutorType.FOURNISSEUR,
+            target_relative_folder=SUPPLIER_REQUEST_FOLDER,
         ),
         make_row(
             tmp_path,
             entry_id="ORDER-1",
             sent_at=datetime(2026, 5, 4, 8),
-            mail_type=MailType.TECHNIQUE,
+            mail_type=MailType.COMMANDE,
             interlocutor=InterlocutorType.FOURNISSEUR,
+            target_relative_folder=SUPPLIER_ORDER_FOLDER,
         ),
         make_row(
             tmp_path,
@@ -189,6 +199,7 @@ def test_supplier_rows_switch_after_latest_offer_until_new_rfq(tmp_path: Path) -
             interlocutor=InterlocutorType.FOURNISSEUR,
             direction=Direction.SENT,
             recipients=["sales@metal-factory.ch"],
+            target_relative_folder=SUPPLIER_REQUEST_FOLDER,
         ),
         make_row(
             tmp_path,
@@ -196,6 +207,7 @@ def test_supplier_rows_switch_after_latest_offer_until_new_rfq(tmp_path: Path) -
             sent_at=datetime(2026, 5, 6, 8),
             mail_type=MailType.TECHNIQUE,
             interlocutor=InterlocutorType.FOURNISSEUR,
+            target_relative_folder=CORRESPONDENCE_FOLDER,
         ),
     ]
 
@@ -205,11 +217,11 @@ def test_supplier_rows_switch_after_latest_offer_until_new_rfq(tmp_path: Path) -
     }
 
     assert by_id["RFQ-1"] == "Fournisseurs/Demande de prix/Metal Factory"
-    assert by_id["DISCUSSION-1"] == "Fournisseurs/Demande de prix/Metal Factory"
+    assert by_id["DISCUSSION-1"] == "Correspondance/Metal Factory"
     assert by_id["OFFER-1"] == "Fournisseurs/Demande de prix/Metal Factory"
     assert by_id["ORDER-1"] == "Fournisseurs/Commande/Metal Factory"
     assert by_id["RFQ-2"] == "Fournisseurs/Demande de prix/Metal Factory"
-    assert by_id["DISCUSSION-2"] == "Fournisseurs/Demande de prix/Metal Factory"
+    assert by_id["DISCUSSION-2"] == "Correspondance/Metal Factory"
 
 
 def test_supplier_grouping_uses_email_domain_across_sent_and_received(tmp_path: Path) -> None:
@@ -224,6 +236,7 @@ def test_supplier_grouping_uses_email_domain_across_sent_and_received(tmp_path: 
             sender_name="Lionel",
             sender_email="lionel@balzmetal.ch",
             recipients=["l.dangelo@kohler.ch"],
+            target_relative_folder=SUPPLIER_REQUEST_FOLDER,
         ),
         make_row(
             tmp_path,
@@ -233,6 +246,7 @@ def test_supplier_grouping_uses_email_domain_across_sent_and_received(tmp_path: 
             interlocutor=InterlocutorType.FOURNISSEUR,
             sender_name="Lorenzo D'Angelo (HANS KOHLER AG)",
             sender_email="l.dangelo@kohler.ch",
+            target_relative_folder=SUPPLIER_REQUEST_FOLDER,
         ),
     ]
 
@@ -254,6 +268,7 @@ def test_supplier_folder_prefers_company_domain_over_contact_person(tmp_path: Pa
         interlocutor=InterlocutorType.FOURNISSEUR,
         sender_name="Lorenzo D'Angelo",
         sender_email="l.dangelo@kohler.ch",
+        target_relative_folder=SUPPLIER_REQUEST_FOLDER,
     )
 
     updated = apply_correspondence_hierarchy([row], projects_root=tmp_path)[0]

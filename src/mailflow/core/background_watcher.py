@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from mailflow.models import PreviewRow
+from mailflow.models import PreviewAction, PreviewRow
 
 
 @dataclass(frozen=True)
@@ -30,5 +30,30 @@ class WatchState:
         return WatchChange(new_entry_ids=new_ids, total_count=len(current))
 
 
+@dataclass
+class ReviewQueue:
+    pending_entry_ids: set[str] = field(default_factory=set)
+
+    @property
+    def count(self) -> int:
+        return len(self.pending_entry_ids)
+
+    def clear(self) -> None:
+        self.pending_entry_ids.clear()
+
+    def sync(self, rows: Sequence[PreviewRow]) -> int:
+        previous = set(self.pending_entry_ids)
+        self.pending_entry_ids = review_entry_ids(rows)
+        return len(self.pending_entry_ids - previous)
+
+
 def _entry_ids(rows: Sequence[PreviewRow]) -> set[str]:
     return {row.mail.entry_id for row in rows}
+
+
+def review_entry_ids(rows: Sequence[PreviewRow]) -> set[str]:
+    return {
+        row.mail.entry_id
+        for row in rows
+        if row.action == PreviewAction.REVIEW or row.decision.requires_review
+    }

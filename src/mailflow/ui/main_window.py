@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import re
 import unicodedata
 import webbrowser
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from mailflow.core.archive_actions import rows_to_archive
 from mailflow.core.archive_batch import ArchiveBatchResult
-from mailflow.core.background_watcher import WatchState
+from mailflow.core.background_watcher import ReviewQueue, WatchState
 from mailflow.core.update_installer import download_update_installer, launch_update_installer
 from mailflow.core.updates import UpdateCheckResult, check_for_updates
 from mailflow.models import (
@@ -62,6 +64,7 @@ UI_TEXT = {
 }
 
 WATCH_INTERVAL_MS = 5 * 60 * 1000
+REMINDER_CHECK_INTERVAL_MS = 60 * 1000
 
 @dataclass(frozen=True)
 class ArchiveSelectionSummary:
@@ -89,7 +92,7 @@ def run_desktop_app(settings: AppSettings) -> int:
 
 def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     from PySide6.QtCore import Qt, QTimer
-    from PySide6.QtGui import QAction, QBrush, QColor, QIcon, QPainter, QPen, QPixmap
+    from PySide6.QtGui import QAction, QBrush, QColor, QFont, QIcon, QPainter, QPen, QPixmap
     from PySide6.QtWidgets import (
         QAbstractItemView,
         QApplication,
@@ -128,6 +131,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     from mailflow import __version__
     from mailflow.classifier.ai_classifier import AiClassifier
     from mailflow.config import (
+        AI_MODEL_OPTIONS,
+        DEFAULT_AI_MODEL,
         get_openai_api_key,
         save_settings,
         set_openai_api_key,
@@ -171,6 +176,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     refreshing_outlook_options = False
     watch_paused_logged = False
     watch_state = WatchState()
+    review_queue = ReviewQueue()
+    sent_review_reminders: set[str] = set()
     central = QWidget()
     layout = QVBoxLayout(central)
     layout.setContentsMargins(8, 8, 8, 8)
@@ -354,7 +361,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     set_combo_value_by_data(ai_mode_combo, settings.ai_mode.value)
     grid.addWidget(ai_mode_combo, 1, 1)
     grid.addWidget(QLabel("Modele IA"), 2, 0)
-    ai_model_input = QLineEdit(settings.ai_model)
+    ai_model_input = QComboBox()
+    ai_model_input.setEditable(True)
+    ai_model_input.addItems(list(AI_MODEL_OPTIONS))
+    set_combo_value_by_text(ai_model_input, settings.ai_model)
     grid.addWidget(ai_model_input, 2, 1)
     grid.addWidget(QLabel("Cle API OpenAI"), 3, 0)
     openai_key_widget = QWidget()
@@ -378,7 +388,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     privacy_phone_checkbox = QCheckBox("Masquer les numeros de telephone avant IA")
     privacy_phone_checkbox.setChecked(settings.privacy_mask_phone_numbers)
     grid.addWidget(privacy_phone_checkbox, 5, 1)
-    grid.addWidget(QLabel("Mises a jour"), 6, 0)
+    grid.addWidget(QLabel("Rappels a verifier"), 6, 0)
+    review_reminder_times_input = QLineEdit(format_reminder_times(settings.review_reminder_times))
+    review_reminder_times_input.setPlaceholderText("09:00, 14:00, 16:30")
+    grid.addWidget(review_reminder_times_input, 6, 1)
+    grid.addWidget(QLabel("Mises a jour"), 7, 0)
     update_widget = QWidget()
     update_layout = QHBoxLayout(update_widget)
     update_layout.setContentsMargins(0, 0, 0, 0)
@@ -388,9 +402,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     update_layout.addWidget(check_updates_button)
     update_layout.addWidget(update_status)
     update_layout.addStretch(1)
-    grid.addWidget(update_widget, 6, 1)
+    grid.addWidget(update_widget, 7, 1)
     save_settings_button = QPushButton(UI_TEXT["save_settings"])
-    grid.addWidget(save_settings_button, 7, 1)
+    grid.addWidget(save_settings_button, 8, 1)
     settings_layout.addWidget(config)
     settings_layout.addStretch(1)
     settings_scroll_area = QScrollArea()
@@ -452,9 +466,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     window.setCentralWidget(central)
     watch_timer = QTimer(window)
     watch_timer.setInterval(WATCH_INTERVAL_MS)
+    review_reminder_timer = QTimer(window)
+    review_reminder_timer.setInterval(REMINDER_CHECK_INTERVAL_MS)
     app_icon = QIcon(str(app_icon_path()))
 
-    def tray_status_icon(watch_enabled: bool) -> Any:
+    def tray_status_icon(watch_enabled: bool, review_count: int) -> Any:
         pixmap = app_icon.pixmap(64, 64)
         if pixmap.isNull():
             pixmap = QPixmap(64, 64)
@@ -462,16 +478,25 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(QPen(QColor("#ffffff"), 5))
-        painter.setBrush(
-            QBrush(QColor("#16a34a" if watch_enabled else "#94a3b8"))
-        )
+        painter.setBrush(QBrush(QColor("#16a34a" if watch_enabled else "#94a3b8")))
         painter.drawEllipse(39, 39, 20, 20)
+        if review_count > 0:
+            badge_text = "99+" if review_count > 99 else str(review_count)
+            painter.setPen(QPen(QColor("#ffffff"), 3))
+            painter.setBrush(QBrush(QColor("#dc2626")))
+            painter.drawEllipse(2, 2, 28, 28)
+            painter.setPen(QPen(QColor("#ffffff"), 1))
+            font = QFont()
+            font.setBold(True)
+            font.setPointSize(8 if review_count <= 99 else 7)
+            painter.setFont(font)
+            painter.drawText(2, 2, 28, 28, Qt.AlignmentFlag.AlignCenter, badge_text)
         painter.end()
         return QIcon(pixmap)
 
     window.setWindowIcon(app_icon)
-    tray_icon = QSystemTrayIcon(tray_status_icon(False), window)
-    tray_icon.setToolTip(tray_tooltip_text(False))
+    tray_icon = QSystemTrayIcon(tray_status_icon(False, 0), window)
+    tray_icon.setToolTip(tray_tooltip_text(False, 0))
     tray_menu = QMenu(window)
     tray_open_action = QAction(UI_TEXT["tray_open"], window)
     tray_watch_action = QAction(UI_TEXT["tray_enable_watch"], window)
@@ -530,8 +555,16 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             UI_TEXT["tray_disable_watch"] if enabled else UI_TEXT["tray_enable_watch"]
         )
         tray_watch_action.blockSignals(False)
-        tray_icon.setIcon(tray_status_icon(enabled))
-        tray_icon.setToolTip(tray_tooltip_text(enabled))
+        update_tray_indicator()
+
+    def update_tray_indicator() -> None:
+        tray_icon.setIcon(tray_status_icon(watch_checkbox.isChecked(), review_queue.count))
+        tray_icon.setToolTip(tray_tooltip_text(watch_checkbox.isChecked(), review_queue.count))
+
+    def sync_review_queue_from_preview() -> int:
+        new_pending = review_queue.sync(active_controller.preview_rows)
+        update_tray_indicator()
+        return new_pending
 
     def request_watch_from_tray(enabled: bool) -> None:
         if watch_checkbox.isChecked() != enabled:
@@ -546,7 +579,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         window.hide()
         notify_user(
             "MailFlow en arriere-plan",
-            tray_tooltip_text(watch_checkbox.isChecked()),
+            tray_tooltip_text(watch_checkbox.isChecked(), review_queue.count),
         )
         status = (
             UI_TEXT["tray_watch_active"]
@@ -561,6 +594,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     def quit_application() -> None:
         dynamic_window.mailflow_force_quit = True
         watch_timer.stop()
+        review_reminder_timer.stop()
         tray_icon.hide()
         QApplication.quit()
 
@@ -615,6 +649,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         table.resizeColumnsToContents()
         refreshing_table = False
         refresh_folder_tree()
+        sync_review_queue_from_preview()
         update_mail_preview(table.currentRow())
 
     def refresh_folder_tree() -> None:
@@ -1029,9 +1064,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         settings.outlook_root_folder = current_outlook_root_folder()
         settings.selected_year = clean_optional_text(year_input.text())
         settings.ai_mode = AiMode(str(ai_mode_combo.currentData()))
-        settings.ai_model = clean_optional_text(ai_model_input.text()) or "gpt-5.4-nano"
+        settings.ai_model = clean_optional_text(ai_model_input.currentText()) or DEFAULT_AI_MODEL
         settings.ai_include_body_excerpt = ai_include_body_checkbox.isChecked()
         settings.privacy_mask_phone_numbers = privacy_phone_checkbox.isChecked()
+        settings.review_reminder_times = parse_reminder_times(review_reminder_times_input.text())
 
     def save_current_settings() -> None:
         try:
@@ -1060,7 +1096,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             set_openai_key_status(has_key=False, valid=False)
             append_log("Aucune cle OpenAI a tester.")
             return
-        model = clean_optional_text(ai_model_input.text()) or "gpt-5.4-nano"
+        model = clean_optional_text(ai_model_input.currentText()) or DEFAULT_AI_MODEL
         set_openai_key_status(has_key=True, testing=True)
         test_openai_key_button.setEnabled(False)
         QApplication.processEvents()
@@ -1158,6 +1194,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 watch_checkbox.setChecked(False)
             active_controller.reset_preview()
             watch_state.reset([])
+            review_queue.clear()
             project_input.clear()
             table.clearSelection()
             refresh_table()
@@ -1224,6 +1261,22 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         refresh_table()
         append_log("Toutes les lignes archivables sont remises en Archiver.")
 
+    def archive_new_ready_rows(new_entry_ids: Sequence[str]) -> ArchiveBatchResult:
+        new_ids = set(new_entry_ids)
+        new_rows = [row for row in active_controller.preview_rows if row.mail.entry_id in new_ids]
+        ready_ids = {
+            row.mail.entry_id
+            for row in rows_to_archive(new_rows, include_review=False)
+        }
+        ready_indexes = [
+            index
+            for index, row in enumerate(active_controller.preview_rows)
+            if row.mail.entry_id in ready_ids
+        ]
+        if not ready_indexes:
+            return ArchiveBatchResult()
+        return active_controller.archive_selected(ready_indexes, include_review=False)
+
     def on_watch_toggled(enabled: bool) -> None:
         if not enabled:
             watch_timer.stop()
@@ -1236,6 +1289,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 refresh_table()
                 append_log(f"{len(rows)} mails charges pour initialiser la surveillance.")
             watch_state.reset(active_controller.preview_rows)
+            sync_review_queue_from_preview()
             watch_timer.start()
             sync_tray_watch_action(True)
             notify_user(
@@ -1267,7 +1321,6 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         try:
             rows = scan_current_preview()
             change = watch_state.update(rows)
-            refresh_table()
         except Exception as exc:
             append_log(f"Surveillance Outlook en attente: {exc}")
             notify_user(
@@ -1276,30 +1329,66 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 QSystemTrayIcon.MessageIcon.Warning,
             )
             return
+        archive_result = ArchiveBatchResult()
+        if change.new_count:
+            try:
+                archive_result = archive_new_ready_rows(change.new_entry_ids)
+            except Exception as exc:
+                append_log(f"Erreur archivage automatique: {exc}")
+                notify_user(
+                    "Archivage automatique en erreur",
+                    "Verifier MailFlow pour traiter les nouveaux mails.",
+                    QSystemTrayIcon.MessageIcon.Warning,
+                )
+        new_pending_count = sync_review_queue_from_preview()
+        refresh_table()
         if change.new_count == 0:
             return
         append_log(f"Surveillance Outlook: {change.new_count} nouveau(x) mail(s) detecte(s).")
-        notify_user(
-            "Nouveaux mails detectes",
-            f"{change.new_count} nouveau(x) mail(s) dans Outlook.",
-        )
-        show_window_from_tray()
-        append_log("Previsualisation et arborescence mises a jour pour verification.")
-        if not confirm_watch_html_update(change.new_count, parent=window):
-            append_log(
-                "Mise a jour HTML differee: verifier l'arborescence puis exporter manuellement."
-            )
-            return
-        try:
-            results = active_controller.export_project_html(overwrite_html=True)
-            append_log(format_project_html_export_result(results))
-        except Exception as exc:
-            append_log(f"Erreur mise a jour HTML automatique: {exc}")
+        if archive_result.exported_count:
+            append_log(f"Archivage automatique: {format_archive_result(archive_result)}")
             notify_user(
-                "Erreur export HTML",
-                "La mise a jour du journal HTML a echoue.",
+                "Archivage automatique",
+                f"{archive_result.exported_count} nouveau(x) mail(s) archive(s).",
+            )
+        if archive_result.failure_count:
+            append_log(f"Archivage automatique incomplet: {format_archive_result(archive_result)}")
+            for failure in archive_result.failures[:5]:
+                append_log(f"Echec auto {failure.mail_id}: {failure.reason}")
+            notify_user(
+                "Archivage automatique incomplet",
+                f"{archive_result.failure_count} mail(s) n'ont pas pu etre archives.",
                 QSystemTrayIcon.MessageIcon.Warning,
             )
+        if review_queue.count:
+            append_log(f"File a verifier: {review_queue.count} mail(s) en attente.")
+            notify_user(
+                "Mails a verifier",
+                f"{review_queue.count} mail(s) attendent une validation.",
+                QSystemTrayIcon.MessageIcon.Warning,
+            )
+        if archive_result.exported_count == 0 and new_pending_count == 0:
+            notify_user(
+                "Nouveaux mails detectes",
+                f"{change.new_count} nouveau(x) mail(s), aucun archivage automatique.",
+            )
+
+    def send_review_reminder_if_due() -> None:
+        due_key = review_reminder_due_key(
+            datetime.now(),
+            settings.review_reminder_times,
+            review_queue.count,
+            sent_review_reminders,
+        )
+        if due_key is None:
+            return
+        sent_review_reminders.add(due_key)
+        notify_user(
+            "Mails a verifier",
+            f"{review_queue.count} mail(s) attendent une validation dans MailFlow.",
+            QSystemTrayIcon.MessageIcon.Warning,
+        )
+        append_log(f"Rappel file a verifier: {review_queue.count} mail(s) en attente.")
 
     def selected_table_row_indexes() -> list[int]:
         selection_model = table.selectionModel()
@@ -1381,6 +1470,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         else None
     )
     watch_timer.timeout.connect(run_watch_scan)
+    review_reminder_timer.timeout.connect(send_review_reminder_if_due)
+    review_reminder_timer.start()
     export_html_button.clicked.connect(on_export_project_html)
     archive_button.clicked.connect(on_archive_selection)
     archive_selection_action.triggered.connect(lambda _checked=False: on_archive_selection())
@@ -1439,6 +1530,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_export_html_button = export_html_button
     dynamic_window.mailflow_watch_checkbox = watch_checkbox
     dynamic_window.mailflow_watch_timer = watch_timer
+    dynamic_window.mailflow_review_reminder_timer = review_reminder_timer
+    dynamic_window.mailflow_review_reminder_times_input = review_reminder_times_input
     dynamic_window.mailflow_ai_mode_combo = ai_mode_combo
     dynamic_window.mailflow_ai_model_input = ai_model_input
     dynamic_window.mailflow_openai_key_input = openai_key_input
@@ -1541,6 +1634,16 @@ def set_combo_value_by_data(combo: Any, value: str) -> None:
         combo.setCurrentIndex(0)
 
 
+def set_combo_value_by_text(combo: Any, value: str) -> None:
+    for index in range(combo.count()):
+        if combo.itemText(index) == value:
+            combo.setCurrentIndex(index)
+            return
+    if value:
+        combo.addItem(value)
+        combo.setCurrentText(value)
+
+
 def summarize_archive_selection(
     rows: Sequence[PreviewRow],
     row_indexes: Sequence[int],
@@ -1582,9 +1685,55 @@ def should_pause_watch_scan(*, window_visible: bool, preview_has_rows: bool) -> 
     return window_visible and preview_has_rows
 
 
-def tray_tooltip_text(watch_enabled: bool) -> str:
+def tray_tooltip_text(watch_enabled: bool, review_count: int = 0) -> str:
     status = UI_TEXT["tray_watch_active"] if watch_enabled else UI_TEXT["tray_watch_inactive"]
-    return f"{UI_TEXT['window_title']} - {status}"
+    text = f"{UI_TEXT['window_title']} - {status}"
+    if review_count > 0:
+        text = f"{text} - {review_count} a verifier"
+    return text
+
+
+def parse_reminder_times(value: str) -> list[str]:
+    cleaned = value.strip()
+    if not cleaned:
+        return []
+    result: list[str] = []
+    for part in re.split(r"[,;\s]+", cleaned):
+        if not part:
+            continue
+        match = re.fullmatch(r"(\d{1,2}):(\d{2})", part)
+        if match is None:
+            msg = f"Heure de rappel invalide: {part}"
+            raise ValueError(msg)
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        if hour > 23 or minute > 59:
+            msg = f"Heure de rappel invalide: {part}"
+            raise ValueError(msg)
+        normalized = f"{hour:02d}:{minute:02d}"
+        if normalized not in result:
+            result.append(normalized)
+    return result
+
+
+def format_reminder_times(times: Sequence[str]) -> str:
+    return ", ".join(parse_reminder_times(", ".join(times)))
+
+
+def review_reminder_due_key(
+    now: datetime,
+    reminder_times: Sequence[str],
+    review_count: int,
+    sent_keys: set[str],
+) -> str | None:
+    if review_count <= 0:
+        return None
+    current_time = now.strftime("%H:%M")
+    normalized_times = set(parse_reminder_times(", ".join(reminder_times)))
+    if current_time not in normalized_times:
+        return None
+    key = now.strftime("%Y-%m-%d %H:%M")
+    return None if key in sent_keys else key
 
 
 def confirm_html_overwrite(path: Path, *, parent: Any | None = None) -> bool:

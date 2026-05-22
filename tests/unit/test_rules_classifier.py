@@ -26,6 +26,7 @@ def test_detects_invoice() -> None:
     )
 
     assert result.suggested_type == MailType.FACTURE
+    assert result.suggested_interlocutor == InterlocutorType.FOURNISSEUR
     assert result.likely_archive is True
 
 
@@ -87,7 +88,9 @@ def test_detects_multilingual_delivery_and_invoice_terms() -> None:
     invoice = classify_text(subject="Fattura 123", body_excerpt="", attachment_names=[])
 
     assert delivery.suggested_type == MailType.LIVRAISON
+    assert delivery.suggested_interlocutor == InterlocutorType.FOURNISSEUR
     assert invoice.suggested_type == MailType.FACTURE
+    assert invoice.suggested_interlocutor == InterlocutorType.FOURNISSEUR
 
 
 def test_detects_low_value_mail() -> None:

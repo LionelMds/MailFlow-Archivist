@@ -153,6 +153,14 @@ def test_suggested_manual_destination_moves_corrected_review_rows() -> None:
         InterlocutorType.FOURNISSEUR,
     ) == "Fournisseurs/Commande"
     assert suggested_manual_destination(
+        MailType.FACTURE,
+        InterlocutorType.FOURNISSEUR,
+    ) == "Fournisseurs/Commande"
+    assert suggested_manual_destination(
+        MailType.TECHNIQUE,
+        InterlocutorType.FOURNISSEUR,
+    ) == "A verifier"
+    assert suggested_manual_destination(
         MailType.CORRESPONDANCE_GENERALE,
         InterlocutorType.CLIENT,
     ) == "Correspondance"

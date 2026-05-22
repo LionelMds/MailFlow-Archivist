@@ -325,7 +325,13 @@ def _infer_interlocutor(
     normalized = sender.lower()
     if _is_internal_address(normalized):
         return InterlocutorType.INTERNE
-    if mail_type in {MailType.DEMANDE_DE_PRIX, MailType.DEVIS, MailType.COMMANDE}:
+    if mail_type in {
+        MailType.DEMANDE_DE_PRIX,
+        MailType.DEVIS,
+        MailType.COMMANDE,
+        MailType.FACTURE,
+        MailType.LIVRAISON,
+    }:
         return InterlocutorType.FOURNISSEUR
     return InterlocutorType.INCONNU
 

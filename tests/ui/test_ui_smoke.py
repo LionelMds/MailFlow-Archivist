@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from mailflow.config import AppSettings
+from mailflow.config import AI_MODEL_OPTIONS, AppSettings
 from mailflow.core.contact_directory import DirectoryImportResult, OrganizationDirectoryEntry
 from mailflow.core.folder_tree import FolderPathSummary, FolderTreeNode
 from mailflow.models import (
@@ -29,8 +29,11 @@ from mailflow.ui.main_window import (
     build_manual_classification_update,
     format_outlook_account_label,
     format_project_html_export_result,
+    format_reminder_times,
     openai_key_status_style,
     openai_key_status_text,
+    parse_reminder_times,
+    review_reminder_due_key,
     should_hide_to_tray,
     should_pause_watch_scan,
     summarize_archive_selection,
@@ -353,6 +356,28 @@ def test_should_pause_watch_scan_only_when_preview_is_open() -> None:
 def test_tray_tooltip_shows_watch_state() -> None:
     assert tray_tooltip_text(False) == "MailFlow Archivist - surveillance inactive"
     assert tray_tooltip_text(True) == "MailFlow Archivist - surveillance active"
+    assert tray_tooltip_text(True, 3) == "MailFlow Archivist - surveillance active - 3 a verifier"
+
+
+def test_review_reminder_time_helpers() -> None:
+    assert parse_reminder_times("9:00, 14:30; 14:30") == ["09:00", "14:30"]
+    assert format_reminder_times(["9:00", "14:30"]) == "09:00, 14:30"
+    sent = {"2026-05-21 09:00"}
+    assert (
+        review_reminder_due_key(
+            datetime(2026, 5, 21, 9, 0),
+            ["09:00"],
+            2,
+            sent,
+        )
+        is None
+    )
+    assert review_reminder_due_key(
+        datetime(2026, 5, 21, 14, 0),
+        ["14:00"],
+        2,
+        sent,
+    ) == "2026-05-21 14:00"
 
 
 def test_main_window_instantiates_when_pyside6_is_available() -> None:
@@ -370,7 +395,8 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_outlook_root_combo.currentText() == "Boite de reception"
     assert dynamic_window.mailflow_mail_preview.isReadOnly()
     assert dynamic_window.mailflow_ai_mode_combo.currentData() == AiMode.AMBIGUOUS_ONLY.value
-    assert dynamic_window.mailflow_ai_model_input.text() == "gpt-5.4-nano"
+    assert dynamic_window.mailflow_ai_model_input.currentText() == "gpt-5.4-nano"
+    assert dynamic_window.mailflow_ai_model_input.count() >= len(AI_MODEL_OPTIONS)
     assert dynamic_window.mailflow_openai_key_input.echoMode() == QLineEdit.EchoMode.Password
     assert dynamic_window.mailflow_test_openai_key_button.text() == "Tester IA"
     assert dynamic_window.mailflow_check_updates_button.text() == "Rechercher mise a jour"
@@ -378,6 +404,8 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_ai_include_body_checkbox.isChecked()
     assert dynamic_window.mailflow_watch_checkbox.text() == "Surveillance Outlook"
     assert dynamic_window.mailflow_watch_timer.interval() == 300000
+    assert dynamic_window.mailflow_review_reminder_timer.interval() == 60000
+    assert dynamic_window.mailflow_review_reminder_times_input.text() == "09:00, 14:00"
     assert dynamic_window.mailflow_scan_button.text() == "Scanner Outlook"
     assert dynamic_window.mailflow_reset_button.text() == "Reinitialiser"
     assert not window.windowIcon().isNull()

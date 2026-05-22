@@ -5,7 +5,7 @@ Le code separe les zones a risque des fonctions pures :
 - `core` : chemins, noms de fichiers, nettoyage de corps.
 - `core.background_watcher` : detection pure des nouveaux mails entre deux scans.
 - `core.correspondence_hierarchy` : extraction de l'entreprise d'interlocuteur et
-  calcul des trois dossiers metier selon l'entreprise et la chronologie des offres.
+  normalisation vers les trois dossiers metier, puis ajout du dossier entreprise.
 - `core.contact_directory` : extraction des contacts Outlook et preparation des
   observations pour l'annuaire.
 - `core.folder_tree` : construction de l'arborescence proposee et reecriture

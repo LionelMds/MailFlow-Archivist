@@ -125,9 +125,11 @@ def suggested_manual_destination(
     if mail_type == MailType.A_VERIFIER or interlocutor == InterlocutorType.INCONNU:
         return "A verifier"
     if interlocutor == InterlocutorType.FOURNISSEUR:
-        if mail_type == MailType.COMMANDE:
+        if mail_type in {MailType.COMMANDE, MailType.FACTURE, MailType.LIVRAISON}:
             return SUPPLIER_ORDER_FOLDER
-        return SUPPLIER_REQUEST_FOLDER
+        if mail_type in {MailType.DEMANDE_DE_PRIX, MailType.DEVIS}:
+            return SUPPLIER_REQUEST_FOLDER
+        return "A verifier"
     return CORRESPONDENCE_FOLDER
 
 

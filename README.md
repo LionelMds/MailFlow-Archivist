@@ -59,6 +59,9 @@ jointes deja presentes sont reutilisees et ne sont pas ecrasees.
 Les destinations proposees sont limitees a trois dossiers metier :
 `Correspondance/Entreprise`, `Fournisseurs/Demande de prix/Entreprise` et
 `Fournisseurs/Commande/Entreprise`.
+`Correspondance` est reserve aux clients, intervenants et echanges internes. Un mail
+fournisseur ne part jamais automatiquement en `Correspondance` : il va en demande de
+prix, en commande, ou en `A verifier` si MailFlow ne peut pas choisir avec certitude.
 L'annuaire local peut etre alimente depuis tout l'historique Outlook projet :
 une adresse ou un domaine connu, par exemple `@gva.ch`, prend le pas sur les
 heuristiques de nom et permet de classer directement sous l'entreprise officielle.
@@ -91,7 +94,9 @@ Le mode IA se configure dans le bloc `Configuration` :
 - `tout classifier` : chaque mail est aussi classe par IA.
 
 Le modele par defaut est `gpt-5.4-nano`, choisi pour un usage de classification
-rapide et economique. Il peut etre remplace dans le champ `Modele IA`.
+rapide et economique. Le champ `Modele IA` propose aussi des modeles plus puissants
+comme `gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5`, `gpt-4o-mini` et `gpt-4o`, tout en
+restant editable pour saisir un autre modele compatible Structured Outputs.
 
 La cle OpenAI est enregistree dans le coffre du systeme via `keyring`, jamais dans le
 fichier JSON ni dans les logs. Le bouton `Tester IA` lance un mini appel structure sur

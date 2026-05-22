@@ -23,15 +23,18 @@ Avant tout archivage, l'utilisateur garde la main sur :
 Apres la classification, MailFlow propose une destination par entreprise
 d'interlocuteur, limitee a trois dossiers metier :
 
-- correspondance client, interne ou generale : `Correspondance/Entreprise` ;
-- fournisseur avant ou jusqu'a la derniere offre du cycle :
+- correspondance client, intervenant ou interne : `Correspondance/Entreprise` ;
+- demandes de prix, demandes d'offre, RFQ, devis et offres fournisseur :
   `Fournisseurs/Demande de prix/Entreprise` ;
-- fournisseur apres la derniere offre du cycle :
+- commandes, confirmations, factures, livraisons et suivis directement lies a une
+  commande fournisseur :
   `Fournisseurs/Commande/Entreprise`.
 
-Une nouvelle demande d'offre demarre un nouveau cycle fournisseur. Les echanges qui
-suivent cette nouvelle demande restent donc en `Demande de prix` jusqu'a la prochaine
-offre trouvee.
+`Correspondance` n'est pas utilise pour les fournisseurs. Si un mail fournisseur n'est
+pas clairement une demande de prix/offre ou une commande/suivi de commande, la ligne
+reste `A verifier` afin d'etre rangee manuellement dans le bon dossier fournisseur.
+La destination decidee par les regles, l'IA ou la correction manuelle prime, puis
+MailFlow ajoute seulement le dossier de l'entreprise.
 
 L'entreprise est d'abord resolue depuis l'annuaire local. Celui-ci associe les domaines
 et adresses e-mail aux entreprises, par exemple `gva.ch -> AIG`. Si aucun lien n'est
@@ -99,7 +102,9 @@ Dans `Configuration`, choisir le mode IA :
 
 Coller la cle OpenAI dans `Cle API OpenAI`, puis cliquer sur `Enregistrer cle`.
 La cle est stockee dans le coffre du systeme et n'est pas sauvegardee dans le JSON.
-Le modele par defaut est `gpt-5.4-nano`; il peut etre remplace dans `Modele IA`.
+Le modele par defaut est `gpt-5.4-nano`. La liste `Modele IA` propose aussi
+`gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5`, `gpt-4o-mini` et `gpt-4o`; elle reste
+editable pour saisir un autre modele compatible Structured Outputs.
 
 Le bouton `Tester IA` verifie la cle et le modele avec un mail fictif. Le statut
 s'affiche directement a cote du champ : non testee, test en cours, valide ou invalide.

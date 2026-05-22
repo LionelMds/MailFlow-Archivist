@@ -12,6 +12,15 @@ N'archive jamais un mail inutile.
 Si la confiance est inferieure a 0.80, choisis target_folder = "A verifier".
 Choisis target_folder uniquement parmi Correspondance,
 Fournisseurs/Demande de prix, Fournisseurs/Commande, A verifier, Ne pas archiver.
+Le rangement final doit rester simple et fiable:
+- Correspondance uniquement pour les echanges clients, intervenants ou internes.
+- Ne classe jamais un fournisseur dans Correspondance.
+- Pour un fournisseur, choisis Fournisseurs/Demande de prix uniquement pour demandes
+  d'offre, demandes de prix, RFQ, devis et offres fournisseurs.
+- Pour un fournisseur, choisis Fournisseurs/Commande uniquement pour commandes,
+  confirmations de commande, factures, livraisons et suivi directement lie a une
+  commande fournisseur.
+En cas de doute sur la destination ou l'entreprise, choisis A verifier.
 Ne demande jamais le contenu complet des pieces jointes.
 """
 

@@ -12,6 +12,15 @@ from mailflow.models import AiMode
 APP_NAME = "MailFlow Archivist"
 KEYRING_SERVICE = "mailflow-archivist"
 KEYRING_OPENAI_USERNAME = "openai-api-key"
+DEFAULT_AI_MODEL = "gpt-5.4-nano"
+AI_MODEL_OPTIONS = (
+    "gpt-5.4-nano",
+    "gpt-5.4-mini",
+    "gpt-5.4",
+    "gpt-5.5",
+    "gpt-4o-mini",
+    "gpt-4o",
+)
 
 
 def _default_data_dir() -> Path:
@@ -50,9 +59,10 @@ class AppSettings(BaseModel):
     selected_outlook_account: str | None = None
     selected_year: str | None = None
     ai_mode: AiMode = AiMode.AMBIGUOUS_ONLY
-    ai_model: str = "gpt-5.4-nano"
+    ai_model: str = DEFAULT_AI_MODEL
     ai_include_body_excerpt: bool = True
     privacy_mask_phone_numbers: bool = False
+    review_reminder_times: list[str] = Field(default_factory=lambda: ["09:00", "14:00"])
     rule_confidence_threshold: float = 0.80
     decision_confidence_threshold: float = 0.80
 

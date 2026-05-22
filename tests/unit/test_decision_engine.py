@@ -6,6 +6,7 @@ from pathlib import Path
 from mailflow.classifier.decision_engine import decide_archive, destination_for
 from mailflow.core.mail_file_plan import planned_msg_path
 from mailflow.models import (
+    AiMailClassification,
     Direction,
     InterlocutorType,
     MailMetadata,
@@ -51,6 +52,23 @@ def confident_rule() -> RuleClassification:
 def test_destination_mapping_for_supplier_quote() -> None:
     assert destination_for(MailType.DEVIS, InterlocutorType.FOURNISSEUR) == (
         "Fournisseurs/Demande de prix"
+    )
+
+
+def test_destination_mapping_keeps_client_quote_in_correspondence() -> None:
+    assert destination_for(MailType.DEVIS, InterlocutorType.CLIENT) == "Correspondance"
+    assert destination_for(MailType.COMMANDE, InterlocutorType.CLIENT) == "Correspondance"
+
+
+def test_destination_mapping_never_sends_supplier_to_correspondence() -> None:
+    assert destination_for(MailType.TECHNIQUE, InterlocutorType.FOURNISSEUR) == (
+        "A verifier"
+    )
+    assert destination_for(MailType.FACTURE, InterlocutorType.FOURNISSEUR) == (
+        "Fournisseurs/Commande"
+    )
+    assert destination_for(MailType.LIVRAISON, InterlocutorType.FOURNISSEUR) == (
+        "Fournisseurs/Commande"
     )
 
 
@@ -115,6 +133,104 @@ def test_decision_requires_review_for_low_confidence(tmp_path: Path) -> None:
 
     assert decision.archive is False
     assert decision.requires_review is True
+
+
+def test_decision_requires_review_for_ai_target_a_verifier(tmp_path: Path) -> None:
+    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
+    ai = AiMailClassification(
+        archive=True,
+        usefulness="normal",
+        mail_type="devis",
+        interlocutor="fournisseur",
+        target_folder="A verifier",
+        confidence=0.95,
+        short_summary="Offre fournisseur",
+        reason="Ambigu malgre confiance.",
+    )
+
+    decision = decide_archive(
+        sample_mail(),
+        projects_root=tmp_path,
+        rule=confident_rule(),
+        ai=ai,
+    )
+
+    assert decision.archive is False
+    assert decision.requires_review is True
+    assert decision.target_relative_folder == "A verifier"
+
+
+def test_decision_requires_review_for_ai_supplier_folder_without_supplier(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
+    ai = AiMailClassification(
+        archive=True,
+        usefulness="important",
+        mail_type="devis",
+        interlocutor="client",
+        target_folder="Fournisseurs/Demande de prix",
+        confidence=0.95,
+        short_summary="Demande client",
+        reason="Client et demande de prix.",
+    )
+
+    decision = decide_archive(
+        sample_mail(),
+        projects_root=tmp_path,
+        rule=confident_rule(),
+        ai=ai,
+    )
+
+    assert decision.archive is False
+    assert decision.requires_review is True
+    assert decision.target_relative_folder == "A verifier"
+
+
+def test_decision_requires_review_for_ai_correspondence_with_supplier(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
+    ai = AiMailClassification(
+        archive=True,
+        usefulness="normal",
+        mail_type="technique",
+        interlocutor="fournisseur",
+        target_folder="Correspondance",
+        confidence=0.95,
+        short_summary="Echange fournisseur",
+        reason="Echange technique.",
+    )
+
+    decision = decide_archive(
+        sample_mail(),
+        projects_root=tmp_path,
+        rule=confident_rule(),
+        ai=ai,
+    )
+
+    assert decision.archive is False
+    assert decision.requires_review is True
+    assert decision.target_relative_folder == "A verifier"
+
+
+def test_decision_requires_review_for_supplier_without_ddp_or_order(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
+    rule = RuleClassification(
+        suggested_type=MailType.TECHNIQUE,
+        suggested_interlocutor=InterlocutorType.FOURNISSEUR,
+        likely_archive=True,
+        confidence=0.95,
+        matched_rules=["technical"],
+    )
+
+    decision = decide_archive(sample_mail(), projects_root=tmp_path, rule=rule)
+
+    assert decision.archive is False
+    assert decision.requires_review is True
+    assert decision.target_relative_folder == "A verifier"
 
 
 def test_decision_detects_candidate_file_conflict(tmp_path: Path) -> None:
