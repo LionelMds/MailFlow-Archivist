@@ -62,6 +62,7 @@ class FakeController:
             )
         ]
         self.project_role = InterlocutorType.CLIENT
+        self.project_role_project: str | None = None
 
     def scan_and_preview(
         self,
@@ -106,6 +107,38 @@ class FakeController:
     def directory_entries(self) -> list[OrganizationDirectoryEntry]:
         return self.directory_entries_list
 
+    def directory_project_numbers(self) -> list[str]:
+        return ["2025-4893", "2024-4788"]
+
+    def add_directory_organization(
+        self,
+        name: str,
+        *,
+        domain: str | None = None,
+        project_number: str | None = None,
+        role: InterlocutorType = InterlocutorType.INCONNU,
+    ) -> int:
+        organization_id = 2
+        self.directory_entries_list.append(
+            OrganizationDirectoryEntry(
+                organization_id=organization_id,
+                name=name,
+                domains=() if domain is None else (domain,),
+                contacts=(),
+                project_count=int(project_number is not None),
+            )
+        )
+        self.project_role = role
+        self.project_role_project = project_number
+        return organization_id
+
+    def delete_directory_organization(self, organization_id: int) -> None:
+        self.directory_entries_list = [
+            entry
+            for entry in self.directory_entries_list
+            if entry.organization_id != organization_id
+        ]
+
     def project_participant_entries(
         self,
         project_number: str | None = None,
@@ -129,6 +162,7 @@ class FakeController:
         project_number: str | None = None,
     ) -> list[object]:
         self.project_role = role
+        self.project_role_project = project_number
         return self.preview_rows
 
     def current_project_number(self) -> str | None:
@@ -485,12 +519,18 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     )
     assert dynamic_window.mailflow_import_directory_button.text() == "Importer annuaire Outlook"
     assert dynamic_window.mailflow_refresh_directory_button.text() == "Rafraichir"
+    assert dynamic_window.mailflow_add_directory_button.text() == "Ajouter entreprise"
+    assert dynamic_window.mailflow_delete_directory_button.text() == "Supprimer entreprise"
     assert dynamic_window.mailflow_rename_directory_button.text() == "Renommer entreprise"
     assert dynamic_window.mailflow_merge_directory_button.text() == "Fusionner entreprise"
+    assert dynamic_window.mailflow_directory_project_combo.currentText() == "2025-4893"
     assert dynamic_window.mailflow_directory_table.rowCount() == 1
     assert dynamic_window.mailflow_directory_table.item(0, 0).text() == "AIG"
     assert dynamic_window.mailflow_directory_table.item(0, 1).text() == "gva.ch"
     assert dynamic_window.mailflow_directory_table.cellWidget(0, 3).currentText() == "client"
+    dynamic_window.mailflow_directory_table.cellWidget(0, 3).setCurrentText("fournisseur")
+    assert controller.project_role == InterlocutorType.FOURNISSEUR
+    assert controller.project_role_project == "2025-4893"
     assert dynamic_window.mailflow_navigation.count() == 4
     assert dynamic_window.mailflow_navigation.item(0).text() == "Mails"
     assert dynamic_window.mailflow_navigation.item(1).text() == "Arborescence"

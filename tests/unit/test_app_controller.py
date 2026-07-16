@@ -112,6 +112,7 @@ class FakeDirectoryStore:
         ]
         self.renamed: tuple[int, str] | None = None
         self.merged: tuple[int, int] | None = None
+        self.deleted: int | None = None
         self.roles: dict[tuple[str, int], InterlocutorType] = {}
 
     def record_observation(self, observation: ContactObservation) -> DirectoryUpsertOutcome:
@@ -133,6 +134,38 @@ class FakeDirectoryStore:
 
     def list_organizations(self) -> list[OrganizationDirectoryEntry]:
         return self.entries
+
+    def list_project_numbers(self) -> list[str]:
+        return sorted({project for project, _organization_id in self.roles}, reverse=True)
+
+    def add_organization(
+        self,
+        name: str,
+        *,
+        domain: str | None = None,
+        project_number: str | None = None,
+        role: InterlocutorType = InterlocutorType.INCONNU,
+    ) -> int:
+        organization_id = max((entry.organization_id for entry in self.entries), default=0) + 1
+        domains = () if domain is None else (domain.removeprefix("@").casefold(),)
+        self.entries.append(
+            OrganizationDirectoryEntry(
+                organization_id=organization_id,
+                name=name,
+                domains=domains,
+                contacts=(),
+                project_count=int(project_number is not None),
+            )
+        )
+        if project_number is not None:
+            self.roles[(project_number, organization_id)] = role
+        return organization_id
+
+    def delete_organization(self, organization_id: int) -> None:
+        self.deleted = organization_id
+        self.entries = [
+            entry for entry in self.entries if entry.organization_id != organization_id
+        ]
 
     def rename_organization(self, organization_id: int, name: str) -> None:
         self.renamed = (organization_id, name)
@@ -584,6 +617,31 @@ def test_controller_exposes_directory_entries_and_edits(tmp_path: Path) -> None:
 
     assert directory_store.renamed == (1, "Aeroport International Geneve")
     assert directory_store.merged == (2, 1)
+
+
+def test_controller_adds_and_deletes_directory_organization(tmp_path: Path) -> None:
+    directory_store = FakeDirectoryStore()
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+        directory_store=directory_store,
+    )
+
+    organization_id = controller.add_directory_organization(
+        "Metal Factory",
+        domain="metalfactory.ch",
+        project_number="2025-4893",
+        role=InterlocutorType.FOURNISSEUR,
+    )
+
+    assert controller.directory_project_numbers() == ["2025-4893"]
+    assert directory_store.roles[("2025-4893", organization_id)] == (
+        InterlocutorType.FOURNISSEUR
+    )
+    controller.delete_directory_organization(organization_id)
+    assert directory_store.deleted == organization_id
 
 
 def test_controller_applies_project_role_to_all_preview_rows(tmp_path: Path) -> None:

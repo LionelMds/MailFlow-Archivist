@@ -201,6 +201,126 @@ class SQLiteDirectoryStore:
                 for row in organization_rows
             ]
 
+    def list_project_numbers(self) -> list[str]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT project_number
+                FROM project_participants
+                WHERE TRIM(project_number) <> ''
+                ORDER BY project_number DESC
+                """
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def add_organization(
+        self,
+        name: str,
+        *,
+        domain: str | None = None,
+        project_number: str | None = None,
+        role: InterlocutorType = InterlocutorType.INCONNU,
+    ) -> int:
+        cleaned_name = safe_folder_name(name.strip())
+        if not cleaned_name:
+            msg = "Le nom d'entreprise est obligatoire"
+            raise ValueError(msg)
+        normalized_name = _normalize_organization_name(cleaned_name)
+        normalized_domain = _normalize_directory_domain(domain)
+        project = "" if project_number is None else project_number.strip()
+        if role != InterlocutorType.INCONNU and not project:
+            msg = "Un projet est obligatoire pour attribuer un role projet"
+            raise ValueError(msg)
+
+        self.initialize()
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT id FROM organizations WHERE normalized_name = ? LIMIT 1",
+                (normalized_name,),
+            ).fetchone()
+            if existing is not None:
+                msg = (
+                    "Une entreprise avec ce nom existe deja. "
+                    "Utiliser la fusion pour regrouper les doublons."
+                )
+                raise ValueError(msg)
+            if normalized_domain is not None:
+                domain_owner = connection.execute(
+                    "SELECT organization_id FROM organization_domains WHERE domain = ? LIMIT 1",
+                    (normalized_domain,),
+                ).fetchone()
+                if domain_owner is not None:
+                    msg = f"Le domaine {normalized_domain} appartient deja a une entreprise"
+                    raise ValueError(msg)
+
+            cursor = connection.execute(
+                """
+                INSERT INTO organizations(name, normalized_name, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (cleaned_name, normalized_name, now, now),
+            )
+            lastrowid = cursor.lastrowid
+            if lastrowid is None:
+                msg = "Impossible de creer l'entreprise"
+                raise RuntimeError(msg)
+            organization_id = int(lastrowid)
+            if normalized_domain is not None:
+                connection.execute(
+                    """
+                    INSERT INTO organization_domains(
+                        organization_id,
+                        domain,
+                        source,
+                        confidence,
+                        first_seen_at,
+                        last_seen_at,
+                        observation_count
+                    )
+                    VALUES (?, ?, 'manual', 1.0, ?, ?, 0)
+                    """,
+                    (organization_id, normalized_domain, now, now),
+                )
+            if project:
+                connection.execute(
+                    """
+                    INSERT INTO project_participants(
+                        project_number,
+                        organization_id,
+                        role,
+                        first_seen_at,
+                        last_seen_at,
+                        observation_count
+                    )
+                    VALUES (?, ?, ?, ?, ?, 0)
+                    """,
+                    (project, organization_id, role.value, now, now),
+                )
+        return organization_id
+
+    def delete_organization(self, organization_id: int) -> None:
+        self.initialize()
+        with self._connect() as connection:
+            _ensure_organization_exists(connection, organization_id)
+            connection.execute(
+                "DELETE FROM project_participants WHERE organization_id = ?",
+                (organization_id,),
+            )
+            connection.execute(
+                "DELETE FROM contacts WHERE organization_id = ?",
+                (organization_id,),
+            )
+            connection.execute(
+                "DELETE FROM organization_domains WHERE organization_id = ?",
+                (organization_id,),
+            )
+            connection.execute(
+                "DELETE FROM organizations WHERE id = ?",
+                (organization_id,),
+            )
+
     def list_project_participants(self, project_number: str) -> list[ProjectParticipantEntry]:
         project = project_number.strip()
         if not project:
@@ -518,7 +638,9 @@ class SQLiteDirectoryStore:
         return False
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+        connection = sqlite3.connect(self.db_path)
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
 
 
 def _organization_id_for_contact(connection: sqlite3.Connection, email: str) -> int | None:
@@ -527,6 +649,26 @@ def _organization_id_for_contact(connection: sqlite3.Connection, email: str) -> 
         (email,),
     ).fetchone()
     return None if row is None else int(row[0])
+
+
+def _normalize_directory_domain(domain: str | None) -> str | None:
+    if domain is None:
+        return None
+    normalized = domain.strip().casefold()
+    if normalized.startswith("@"):
+        normalized = normalized[1:]
+    normalized = normalized.strip(". ")
+    if not normalized:
+        return None
+    if (
+        len(normalized) > 253
+        or "." not in normalized
+        or not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", normalized)
+        or any(not label or len(label) > 63 for label in normalized.split("."))
+    ):
+        msg = f"Domaine invalide: {domain.strip()}"
+        raise ValueError(msg)
+    return normalized
 
 
 def _organization_id_for_email(connection: sqlite3.Connection, email: str) -> int | None:

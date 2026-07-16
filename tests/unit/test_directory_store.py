@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from mailflow.core.contact_directory import ContactObservation
 from mailflow.models import InterlocutorType
 from mailflow.storage.directory_store import SQLiteDirectoryStore
@@ -140,3 +142,77 @@ def test_directory_store_sets_project_participant_role(tmp_path: Path) -> None:
     participants = store.list_project_participants("2025-4893")
     assert participants[0].name == "AIG"
     assert participants[0].role == InterlocutorType.CLIENT
+
+
+def test_directory_store_adds_manual_organization_with_project_role(tmp_path: Path) -> None:
+    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
+
+    organization_id = store.add_organization(
+        "Metal Factory",
+        domain="@MetalFactory.ch",
+        project_number="2025-4893",
+        role=InterlocutorType.FOURNISSEUR,
+    )
+
+    assert organization_id > 0
+    assert store.organization_name_for_email("vente@metalfactory.ch") == "Metal Factory"
+    assert store.interlocutor_for_email("2025-4893", "vente@metalfactory.ch") == (
+        InterlocutorType.FOURNISSEUR
+    )
+    assert store.list_project_numbers() == ["2025-4893"]
+
+
+def test_directory_store_keeps_roles_independent_for_each_supplier(tmp_path: Path) -> None:
+    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
+    metal_factory_id = store.add_organization(
+        "Metal Factory",
+        domain="metalfactory.ch",
+        project_number="2025-4893",
+    )
+    kohler_id = store.add_organization(
+        "Hans Kohler",
+        domain="kohler.ch",
+        project_number="2025-4893",
+    )
+
+    store.set_project_participant_role(
+        "2025-4893",
+        metal_factory_id,
+        InterlocutorType.FOURNISSEUR,
+    )
+    store.set_project_participant_role(
+        "2025-4893",
+        kohler_id,
+        InterlocutorType.INTERVENANT_EXTERNE,
+    )
+
+    roles = {
+        entry.name: entry.role
+        for entry in store.list_project_participants("2025-4893")
+    }
+    assert roles == {
+        "Hans Kohler": InterlocutorType.INTERVENANT_EXTERNE,
+        "Metal Factory": InterlocutorType.FOURNISSEUR,
+    }
+
+
+def test_directory_store_rejects_duplicate_manual_domain(tmp_path: Path) -> None:
+    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
+    store.add_organization("AIG", domain="gva.ch")
+
+    with pytest.raises(ValueError, match="appartient deja"):
+        store.add_organization("Geneve Aeroport", domain="@GVA.CH")
+
+
+def test_directory_store_deletes_organization_and_related_records(tmp_path: Path) -> None:
+    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
+    store.record_observation(observation("contact@gva.ch"))
+    organization_id = store.list_organizations()[0].organization_id
+
+    store.delete_organization(organization_id)
+
+    assert store.list_organizations() == []
+    assert store.list_project_participants("2025-4893") == []
+    assert store.organization_name_for_email("contact@gva.ch") is None
+    assert store.count_domains() == 0
+    assert store.count_contacts() == 0

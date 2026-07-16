@@ -1,5 +1,16 @@
 # Release
 
+## Version 0.8.2
+
+- correction de l'attribution des roles projet dans l'annuaire grace a un projet
+  selectionne explicitement ;
+- conservation independante du role de chaque entreprise pour chaque projet ;
+- affichage de toutes les entreprises, y compris celles qui ne sont pas encore
+  rattachees au projet selectionne ;
+- ajout manuel d'une entreprise avec domaine e-mail et role projet facultatifs ;
+- suppression confirmee d'une entreprise et de ses donnees d'annuaire, sans supprimer
+  les e-mails Outlook ni les fichiers archives.
+
 ## Version 0.8.1
 
 - le passage manuel d'une entreprise en `fournisseur` est memorise meme lorsque la

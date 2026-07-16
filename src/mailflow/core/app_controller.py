@@ -119,6 +119,22 @@ class DirectoryStoreProtocol(
     def list_organizations(self) -> list[OrganizationDirectoryEntry]:
         ...
 
+    def list_project_numbers(self) -> list[str]:
+        ...
+
+    def add_organization(
+        self,
+        name: str,
+        *,
+        domain: str | None = None,
+        project_number: str | None = None,
+        role: InterlocutorType = InterlocutorType.INCONNU,
+    ) -> int:
+        ...
+
+    def delete_organization(self, organization_id: int) -> None:
+        ...
+
     def rename_organization(self, organization_id: int, name: str) -> None:
         ...
 
@@ -407,6 +423,43 @@ class AppController:
             msg = "Aucun annuaire n'est configure"
             raise RuntimeError(msg)
         return self.directory_store.list_organizations()
+
+    def directory_project_numbers(self) -> list[str]:
+        if self.directory_store is None:
+            return []
+        return self.directory_store.list_project_numbers()
+
+    def add_directory_organization(
+        self,
+        name: str,
+        *,
+        domain: str | None = None,
+        project_number: str | None = None,
+        role: InterlocutorType = InterlocutorType.INCONNU,
+    ) -> int:
+        if self.directory_store is None:
+            msg = "Aucun annuaire n'est configure"
+            raise RuntimeError(msg)
+        project = project_number or self.current_project_number()
+        organization_id = self.directory_store.add_organization(
+            name,
+            domain=domain,
+            project_number=project,
+            role=role,
+        )
+        if project is not None and role != InterlocutorType.INCONNU:
+            self.preview_rows = apply_project_roles_to_rows(
+                self.preview_rows,
+                self.directory_store,
+                self.projects_root,
+            )
+        return organization_id
+
+    def delete_directory_organization(self, organization_id: int) -> None:
+        if self.directory_store is None:
+            msg = "Aucun annuaire n'est configure"
+            raise RuntimeError(msg)
+        self.directory_store.delete_organization(organization_id)
 
     def rename_directory_organization(self, organization_id: int, name: str) -> None:
         if self.directory_store is None:
