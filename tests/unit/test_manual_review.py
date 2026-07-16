@@ -105,18 +105,25 @@ def test_manual_supplier_correction_has_only_two_destinations(
     assert row.decision.target_relative_folder == expected
 
 
-def test_manual_supplier_cannot_be_correspondence(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="fournisseur"):
-        apply_manual_classification(
-            make_row(tmp_path, email="sales@metal.test"),
-            ManualClassificationUpdate(
-                mail_type=MailType.CORRESPONDANCE_GENERALE,
-                interlocutor=InterlocutorType.FOURNISSEUR,
-                target_relative_folder="Correspondance",
-            ),
-            projects_root=tmp_path,
-            organization_directory=Directory(),
-        )
+def test_manual_supplier_role_is_kept_when_business_category_is_missing(
+    tmp_path: Path,
+) -> None:
+    row, signal = apply_manual_classification(
+        make_row(tmp_path, email="sales@metal.test"),
+        ManualClassificationUpdate(
+            mail_type=MailType.CORRESPONDANCE_GENERALE,
+            interlocutor=InterlocutorType.FOURNISSEUR,
+            target_relative_folder="Correspondance",
+        ),
+        projects_root=tmp_path,
+        organization_directory=Directory(),
+    )
+
+    assert row.action == PreviewAction.REVIEW
+    assert row.decision.interlocutor == InterlocutorType.FOURNISSEUR
+    assert row.decision.mail_type == MailType.A_VERIFIER
+    assert row.decision.target_relative_folder == "A verifier"
+    assert signal.selected_interlocutor == InterlocutorType.FOURNISSEUR
 
 
 def test_unknown_role_remains_in_review(tmp_path: Path) -> None:

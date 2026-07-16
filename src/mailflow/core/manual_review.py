@@ -103,8 +103,12 @@ def _normalized_business_update(
         elif update.mail_type == MailType.COMMANDE:
             target = SUPPLIER_ORDER_FOLDER
         else:
-            msg = "Un fournisseur doit etre classe en Demande de prix ou Commande"
-            raise ValueError(msg)
+            return update.model_copy(
+                update={
+                    "mail_type": MailType.A_VERIFIER,
+                    "target_relative_folder": "A verifier",
+                }
+            )
         return update.model_copy(update={"target_relative_folder": target})
     return update
 
@@ -144,10 +148,14 @@ def suggested_manual_destination(
 def verified_example_from_signal(
     signal: ManualLearningSignal,
 ) -> VerifiedRoutingExample | None:
-    if not signal.organization_name or signal.selected_interlocutor not in {
+    if (
+        not signal.organization_name
+        or signal.selected_mail_type == MailType.A_VERIFIER
+        or signal.selected_interlocutor not in {
         InterlocutorType.CLIENT,
         InterlocutorType.FOURNISSEUR,
-    }:
+        }
+    ):
         return None
     return VerifiedRoutingExample(
         project_number=signal.project_number,

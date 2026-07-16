@@ -346,6 +346,18 @@ def test_build_manual_classification_update_can_mark_manual_required() -> None:
     assert update.manual_required
 
 
+def test_build_manual_classification_update_keeps_supplier_role_without_category() -> None:
+    update = build_manual_classification_update(
+        mail_type_value="",
+        interlocutor_value="fournisseur",
+        destination_value="A verifier",
+    )
+
+    assert update.mail_type == MailType.A_VERIFIER
+    assert update.interlocutor == InterlocutorType.FOURNISSEUR
+    assert update.target_relative_folder == "A verifier"
+
+
 def test_format_project_html_export_result_lists_paths(tmp_path: Path) -> None:
     result = type(
         "ProjectHtmlResult",

@@ -1,5 +1,13 @@
 # Release
 
+## Version 0.8.1
+
+- le passage manuel d'une entreprise en `fournisseur` est memorise meme lorsque la
+  categorie commerciale n'est pas encore choisie ;
+- la ligne reste explicitement `A choisir / A verifier` jusqu'au choix entre
+  `Demande de prix` et `Commande` ;
+- une correction fournisseur incomplete n'est jamais reutilisee comme exemple IA.
+
 ## Version 0.8.0
 
 - classification semantique IA limitee a `Correspondance`, `Demande de prix` et

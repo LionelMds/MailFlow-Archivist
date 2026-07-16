@@ -1057,11 +1057,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
         mail_type_combo = QComboBox()
         mail_type_combo.addItems(list(MAIL_TYPE_OPTIONS))
-        set_combo_value(
-            mail_type_combo,
-            combo_text(row_index, TYPE_COLUMN) or preview_row_to_cells(row)[TYPE_COLUMN],
-            MAIL_TYPE_OPTIONS,
+        mail_type_combo.setPlaceholderText("Choisir le classement")
+        initial_mail_type = (
+            combo_text(row_index, TYPE_COLUMN) or preview_row_to_cells(row)[TYPE_COLUMN]
         )
+        if initial_mail_type in MAIL_TYPE_OPTIONS:
+            mail_type_combo.setCurrentText(initial_mail_type)
+        else:
+            mail_type_combo.setCurrentIndex(-1)
         interlocutor_combo = QComboBox()
         interlocutor_combo.addItems(list(INTERLOCUTOR_OPTIONS))
         set_combo_value(
@@ -1081,22 +1084,56 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             DESTINATION_OPTIONS,
         )
         auto_destination = True
+        routing_warning = QLabel("")
+        routing_warning.setWordWrap(True)
+        routing_warning.setStyleSheet("QLabel { color: #9a6700; font-weight: 600; }")
 
         def sync_suggested_destination(_value: str = "") -> None:
             if not auto_destination:
                 return
             try:
-                selected_type = {
+                selected_role = InterlocutorType(interlocutor_combo.currentText())
+                type_by_label = {
                     RoutingCategory.CORRESPONDANCE.value: MailType.CORRESPONDANCE_GENERALE,
                     RoutingCategory.DEMANDE_DE_PRIX.value: MailType.DEMANDE_DE_PRIX,
                     RoutingCategory.COMMANDE.value: MailType.COMMANDE,
-                }[mail_type_combo.currentText()]
-                suggested = suggested_manual_destination(
-                    selected_type,
-                    InterlocutorType(interlocutor_combo.currentText()),
+                }
+                selected_type = type_by_label.get(
+                    mail_type_combo.currentText(),
+                    MailType.A_VERIFIER,
                 )
             except ValueError:
                 return
+            if selected_role == InterlocutorType.CLIENT:
+                selected_type = MailType.CORRESPONDANCE_GENERALE
+                if mail_type_combo.currentText() != RoutingCategory.CORRESPONDANCE.value:
+                    mail_type_combo.blockSignals(True)
+                    mail_type_combo.setCurrentText(RoutingCategory.CORRESPONDANCE.value)
+                    mail_type_combo.blockSignals(False)
+                routing_warning.clear()
+            elif (
+                selected_role == InterlocutorType.FOURNISSEUR
+                and selected_type == MailType.CORRESPONDANCE_GENERALE
+            ):
+                selected_type = MailType.A_VERIFIER
+                mail_type_combo.blockSignals(True)
+                mail_type_combo.setCurrentIndex(-1)
+                mail_type_combo.blockSignals(False)
+                routing_warning.setText(
+                    "Role fournisseur enregistre. Choisissez Demande de prix ou "
+                    "Commande, ou utilisez ensuite Reclassifier avec l'IA."
+                )
+            elif (
+                selected_role == InterlocutorType.FOURNISSEUR
+                and selected_type == MailType.A_VERIFIER
+            ):
+                routing_warning.setText(
+                    "Role fournisseur enregistre. Le classement restera A verifier "
+                    "jusqu'au choix Demande de prix ou Commande."
+                )
+            else:
+                routing_warning.clear()
+            suggested = suggested_manual_destination(selected_type, selected_role)
             destination_combo.blockSignals(True)
             set_combo_value(destination_combo, suggested, DESTINATION_OPTIONS)
             destination_combo.blockSignals(False)
@@ -1107,10 +1144,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         form.addRow("Classement", mail_type_combo)
         form.addRow("Role de l'entreprise", interlocutor_combo)
         form.addRow("Destination finale", destination_combo)
+        form.addRow("", routing_warning)
 
         learning_note = QLabel(
-            "Cette correction sera memorisee comme exemple verifie pour ce projet "
-            "et cette entreprise. Aucun mot-cle n'est cree."
+            "Le role est memorise pour toute l'entreprise dans ce projet. Un classement "
+            "complet devient aussi un exemple verifie, sans creer de mot-cle."
         )
         learning_note.setWordWrap(True)
         form.addRow("Apprentissage", learning_note)
@@ -2005,7 +2043,7 @@ def build_manual_classification_update(
         RoutingCategory.COMMANDE.value: MailType.COMMANDE,
     }.get(mail_type_value)
     if mail_type is None:
-        mail_type = MailType(mail_type_value)
+        mail_type = MailType.A_VERIFIER if not mail_type_value else MailType(mail_type_value)
     return ManualClassificationUpdate(
         mail_type=mail_type,
         interlocutor=InterlocutorType(interlocutor_value),

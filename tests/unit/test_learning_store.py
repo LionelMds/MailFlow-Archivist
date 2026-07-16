@@ -65,3 +65,20 @@ def test_unknown_role_is_not_used_as_verified_ai_example(tmp_path: Path) -> None
 
     assert store.count() == 1
     assert store.verified_examples() == []
+
+
+def test_unresolved_supplier_category_is_not_used_as_verified_example(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteLearningStore(tmp_path / "mailflow.sqlite")
+    unresolved = signal().model_copy(
+        update={
+            "selected_mail_type": MailType.A_VERIFIER,
+            "selected_target_folder": "A verifier",
+        }
+    )
+
+    store.record(unresolved)
+
+    assert store.count() == 1
+    assert store.verified_examples() == []

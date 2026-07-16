@@ -85,7 +85,11 @@ def preview_row_to_cells(row: PreviewRow) -> list[str]:
         "Envoye" if mail.direction.value == "sent" else "Recu",
         mail.sender_name or mail.sender_email,
         mail.subject,
-        routing_category_for_mail_type(decision.mail_type).value,
+        (
+            "A choisir"
+            if decision.mail_type == MailType.A_VERIFIER
+            else routing_category_for_mail_type(decision.mail_type).value
+        ),
         decision.interlocutor.value,
         decision.target_relative_folder,
         f"{decision.confidence:.0%}",

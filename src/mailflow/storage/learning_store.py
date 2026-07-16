@@ -5,6 +5,7 @@ from pathlib import Path
 
 from mailflow.models import (
     InterlocutorType,
+    MailType,
     ManualLearningSignal,
     RoutingCategory,
     VerifiedRoutingExample,
@@ -96,6 +97,7 @@ class SQLiteLearningStore:
             )
             if (
                 signal.organization_name
+                and signal.selected_mail_type != MailType.A_VERIFIER
                 and signal.selected_interlocutor
                 in {InterlocutorType.CLIENT, InterlocutorType.FOURNISSEUR}
             ):

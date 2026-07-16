@@ -821,6 +821,45 @@ def test_controller_manual_update_uses_directory_for_company_folder(tmp_path: Pa
     assert updated.decision.target_relative_folder == "Correspondance/AIG"
 
 
+def test_controller_persists_supplier_role_before_business_category_is_known(
+    tmp_path: Path,
+) -> None:
+    row = make_row(tmp_path, PreviewAction.REVIEW).model_copy(
+        update={
+            "mail": make_row(tmp_path, PreviewAction.REVIEW).mail.model_copy(
+                update={
+                    "sender_name": "Jean Dupont",
+                    "sender_email": "jean.dupont@gva.ch",
+                }
+            )
+        }
+    )
+    directory_store = FakeDirectoryStore()
+    directory_store.domain_map["gva.ch"] = "AIG"
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+        directory_store=directory_store,
+    )
+    controller.preview_rows = [row]
+
+    updated = controller.apply_manual_update(
+        0,
+        ManualClassificationUpdate(
+            mail_type=MailType.CORRESPONDANCE_GENERALE,
+            interlocutor=InterlocutorType.FOURNISSEUR,
+            target_relative_folder="Correspondance",
+        ),
+    )
+
+    assert directory_store.roles[("2025-4893", 1)] == InterlocutorType.FOURNISSEUR
+    assert updated.decision.interlocutor == InterlocutorType.FOURNISSEUR
+    assert updated.decision.mail_type == MailType.A_VERIFIER
+    assert updated.decision.target_relative_folder == "A verifier"
+
+
 def test_selected_rows_ignores_invalid_indexes(tmp_path: Path) -> None:
     rows = [make_row(tmp_path), make_row(tmp_path, PreviewAction.IGNORE)]
 
