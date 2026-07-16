@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -13,7 +14,6 @@ from mailflow.core.contact_directory import (
     OrganizationDirectoryEntry,
     ProjectParticipantEntry,
 )
-from mailflow.core.manual_review import LearnedClassificationRule, LearnedMisleadingTerm
 from mailflow.core.scan_service import DirectoryScanRequest, ScanRequest
 from mailflow.models import (
     ArchiveDecision,
@@ -27,6 +27,7 @@ from mailflow.models import (
     PreviewAction,
     PreviewRow,
     RuleClassification,
+    VerifiedRoutingExample,
 )
 from mailflow.outlook.exporter import ExportResult
 from mailflow.outlook.scanner import ScannedMail
@@ -92,10 +93,7 @@ class FakeLearningStore:
     def record(self, signal: ManualLearningSignal) -> None:
         self.signals.append(signal)
 
-    def learned_rules(self) -> list[LearnedClassificationRule]:
-        return []
-
-    def misleading_terms(self) -> list[LearnedMisleadingTerm]:
+    def verified_examples(self) -> list[VerifiedRoutingExample]:
         return []
 
 
@@ -129,6 +127,9 @@ class FakeDirectoryStore:
     def organization_name_for_email(self, email: str) -> str | None:
         domain = email.rsplit("@", maxsplit=1)[-1].casefold()
         return self.domain_map.get(domain)
+
+    def organization_id_for_email(self, email: str) -> int | None:
+        return 1 if self.organization_name_for_email(email) else None
 
     def list_organizations(self) -> list[OrganizationDirectoryEntry]:
         return self.entries
@@ -182,9 +183,21 @@ class FakePreviewPipeline:
     def __init__(self, rows: list[PreviewRow]) -> None:
         self.rows = rows
         self.mails: list[MailMetadata] = []
+        self.examples: list[VerifiedRoutingExample] = []
 
-    def preview(self, mails: list[MailMetadata]) -> list[PreviewRow]:
+    def add_verified_example(self, example: VerifiedRoutingExample) -> None:
+        self.examples.append(example)
+
+    def preview(
+        self,
+        mails: list[MailMetadata],
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> list[PreviewRow]:
         self.mails = mails
+        if progress_callback is not None:
+            for index, _mail in enumerate(mails, start=1):
+                progress_callback(index, len(mails))
         return self.rows
 
 
@@ -275,6 +288,35 @@ def test_controller_scans_and_builds_preview_rows(tmp_path: Path) -> None:
     ]
 
 
+def test_controller_reports_scan_progress(tmp_path: Path) -> None:
+    mail = make_mail()
+    row = make_row(tmp_path)
+    controller = AppController(
+        scan_service=FakeScanService([mail]),
+        preview_pipeline=FakePreviewPipeline([row]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+    messages: list[str] = []
+
+    controller.scan_and_preview(
+        PreviewRequest(
+            account_identifier="Balz",
+            outlook_root_folder="Boite de reception",
+            year="2025",
+            project_number="4893",
+        ),
+        progress_callback=messages.append,
+    )
+
+    assert messages == [
+        "Lecture Outlook en cours...",
+        "1 mail(s) lus. Classification en cours...",
+        "Classification 1/1...",
+        "1 mail(s) prets.",
+    ]
+
+
 def test_controller_reset_preview_clears_rows_and_outlook_items(tmp_path: Path) -> None:
     row = make_row(tmp_path)
     controller = AppController(
@@ -291,6 +333,26 @@ def test_controller_reset_preview_clears_rows_and_outlook_items(tmp_path: Path) 
     assert rows == []
     assert controller.preview_rows == []
     assert controller.outlook_items == {}
+
+
+def test_controller_reclassifies_loaded_mails_without_rescanning_outlook(tmp_path: Path) -> None:
+    original = make_row(tmp_path, PreviewAction.REVIEW)
+    reclassified = make_row(tmp_path, PreviewAction.ARCHIVE)
+    pipeline = FakePreviewPipeline([reclassified])
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=pipeline,
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+    controller.preview_rows = [original]
+    messages: list[str] = []
+
+    rows = controller.reclassify_preview(progress_callback=messages.append)
+
+    assert rows == [reclassified]
+    assert pipeline.mails == [original.mail]
+    assert messages == ["Reclassification 1/1..."]
 
 
 def test_controller_rejects_missing_year(tmp_path: Path) -> None:
@@ -697,12 +759,13 @@ def test_controller_refuses_archive_when_project_folder_is_missing(tmp_path: Pat
     assert "Dossier projet local absent" in result.failures[0].reason
 
 
-def test_controller_applies_manual_update_and_records_learning(tmp_path: Path) -> None:
+def test_controller_applies_manual_update_and_records_verified_example(tmp_path: Path) -> None:
     row = make_row(tmp_path, PreviewAction.REVIEW)
     learning_store = FakeLearningStore()
+    pipeline = FakePreviewPipeline([])
     controller = AppController(
         scan_service=FakeScanService([]),
-        preview_pipeline=FakePreviewPipeline([]),
+        preview_pipeline=pipeline,
         projects_root=tmp_path,
         report_dir=tmp_path,
         learning_store=learning_store,
@@ -712,16 +775,16 @@ def test_controller_applies_manual_update_and_records_learning(tmp_path: Path) -
     updated = controller.apply_manual_update(
         0,
         ManualClassificationUpdate(
-            mail_type=MailType.DEVIS,
+            mail_type=MailType.DEMANDE_DE_PRIX,
             interlocutor=InterlocutorType.FOURNISSEUR,
             target_relative_folder="Fournisseurs/Demande de prix",
-            learning_term="Offerte",
         ),
     )
 
     assert updated.action == PreviewAction.ARCHIVE
-    assert controller.preview_rows[0].decision.mail_type == MailType.DEVIS
-    assert learning_store.signals[0].learning_term == "Offerte"
+    assert controller.preview_rows[0].decision.mail_type == MailType.DEMANDE_DE_PRIX
+    assert learning_store.signals[0].learning_term is None
+    assert pipeline.examples[0].category.value == "Demande de prix"
 
 
 def test_controller_manual_update_uses_directory_for_company_folder(tmp_path: Path) -> None:

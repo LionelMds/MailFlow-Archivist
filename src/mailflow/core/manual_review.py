@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import unicodedata
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from mailflow.classifier.routing_context import primary_external_email
 from mailflow.core.correspondence_hierarchy import (
     CORRESPONDENCE_FOLDER,
     SUPPLIER_ORDER_FOLDER,
@@ -17,37 +16,21 @@ from mailflow.core.project_paths import local_project_path
 from mailflow.models import (
     ArchiveDecision,
     InterlocutorType,
-    MailMetadata,
     MailType,
     ManualClassificationUpdate,
     ManualLearningSignal,
     PreviewAction,
     PreviewRow,
-    RuleClassification,
+    VerifiedRoutingExample,
+    routing_category_for_mail_type,
 )
 
 MANUAL_DESTINATIONS = (
     CORRESPONDENCE_FOLDER,
     SUPPLIER_REQUEST_FOLDER,
     SUPPLIER_ORDER_FOLDER,
-    "A verifier",
-    "Ne pas archiver",
 )
 SPECIAL_MANUAL_DESTINATIONS = {"A verifier", "Ne pas archiver"}
-
-
-@dataclass(frozen=True)
-class LearnedClassificationRule:
-    term: str
-    mail_type: MailType
-    interlocutor: InterlocutorType
-    target_relative_folder: str
-    confidence: float = 0.97
-
-
-@dataclass(frozen=True)
-class LearnedMisleadingTerm:
-    term: str
 
 
 def apply_manual_classification(
@@ -58,6 +41,7 @@ def apply_manual_classification(
     organization_directory: OrganizationDirectoryProtocol | None = None,
     now: datetime | None = None,
 ) -> tuple[PreviewRow, ManualLearningSignal]:
+    update = _normalized_business_update(update)
     if not is_safe_relative_folder(update.target_relative_folder):
         msg = f"Destination manuelle invalide: {update.target_relative_folder}"
         raise ValueError(msg)
@@ -93,12 +77,36 @@ def apply_manual_classification(
         selected_mail_type=update.mail_type,
         selected_interlocutor=update.interlocutor,
         selected_target_folder=target_relative_folder,
-        learning_term=None if update.manual_required else update.learning_term,
-        misleading_term=update.misleading_term,
-        manual_required=update.manual_required,
+        learning_term=None,
+        misleading_term=None,
+        manual_required=False,
         created_at=now or datetime.now(UTC),
+        organization_name=company_folder_for_row(row, organization_directory),
+        primary_email=primary_external_email(row.mail),
     )
     return updated_row, signal
+
+
+def _normalized_business_update(
+    update: ManualClassificationUpdate,
+) -> ManualClassificationUpdate:
+    if update.interlocutor == InterlocutorType.CLIENT:
+        return update.model_copy(
+            update={
+                "mail_type": MailType.CORRESPONDANCE_GENERALE,
+                "target_relative_folder": CORRESPONDENCE_FOLDER,
+            }
+        )
+    if update.interlocutor == InterlocutorType.FOURNISSEUR:
+        if update.mail_type == MailType.DEMANDE_DE_PRIX:
+            target = SUPPLIER_REQUEST_FOLDER
+        elif update.mail_type == MailType.COMMANDE:
+            target = SUPPLIER_ORDER_FOLDER
+        else:
+            msg = "Un fournisseur doit etre classe en Demande de prix ou Commande"
+            raise ValueError(msg)
+        return update.model_copy(update={"target_relative_folder": target})
+    return update
 
 
 def resolve_manual_target_folder(
@@ -120,59 +128,37 @@ def suggested_manual_destination(
     mail_type: MailType,
     interlocutor: InterlocutorType,
 ) -> str:
-    if mail_type == MailType.INUTILE_OU_FAIBLE_VALEUR:
-        return "Ne pas archiver"
-    if mail_type == MailType.A_VERIFIER or interlocutor == InterlocutorType.INCONNU:
+    if interlocutor == InterlocutorType.INCONNU:
         return "A verifier"
     if interlocutor == InterlocutorType.FOURNISSEUR:
-        if mail_type in {MailType.COMMANDE, MailType.FACTURE, MailType.LIVRAISON}:
+        if mail_type == MailType.COMMANDE:
             return SUPPLIER_ORDER_FOLDER
-        if mail_type in {MailType.DEMANDE_DE_PRIX, MailType.DEVIS}:
+        if mail_type == MailType.DEMANDE_DE_PRIX:
             return SUPPLIER_REQUEST_FOLDER
         return "A verifier"
-    return CORRESPONDENCE_FOLDER
+    if interlocutor == InterlocutorType.CLIENT:
+        return CORRESPONDENCE_FOLDER
+    return "A verifier"
 
 
-def classify_with_learned_terms(
-    mail: MailMetadata,
-    learned_rules: list[LearnedClassificationRule],
-) -> RuleClassification | None:
-    corpus = _normalize_learning_text(
-        " ".join([mail.subject, mail.body_excerpt, " ".join(mail.attachment_names)])
-    )
-    for rule in learned_rules:
-        if _normalize_learning_text(rule.term) in corpus:
-            return RuleClassification(
-                suggested_type=rule.mail_type,
-                suggested_interlocutor=rule.interlocutor,
-                likely_archive=rule.target_relative_folder != "Ne pas archiver",
-                confidence=rule.confidence,
-                matched_rules=[f"apprentissage:{rule.term}"],
-                matched_terms=[rule.term],
-            )
-    return None
-
-
-def learned_rule_from_signal(signal: ManualLearningSignal) -> LearnedClassificationRule | None:
-    if signal.manual_required or not signal.learning_term:
+def verified_example_from_signal(
+    signal: ManualLearningSignal,
+) -> VerifiedRoutingExample | None:
+    if not signal.organization_name or signal.selected_interlocutor not in {
+        InterlocutorType.CLIENT,
+        InterlocutorType.FOURNISSEUR,
+    }:
         return None
-    return LearnedClassificationRule(
-        term=signal.learning_term,
-        mail_type=signal.selected_mail_type,
-        interlocutor=signal.selected_interlocutor,
-        target_relative_folder=signal.selected_target_folder,
+    return VerifiedRoutingExample(
+        project_number=signal.project_number,
+        subject=signal.subject,
+        organization_name=signal.organization_name,
+        organization_role=signal.selected_interlocutor,
+        category=routing_category_for_mail_type(signal.selected_mail_type),
     )
-
-
-def misleading_term_from_signal(signal: ManualLearningSignal) -> LearnedMisleadingTerm | None:
-    if not signal.misleading_term:
-        return None
-    return LearnedMisleadingTerm(term=signal.misleading_term)
 
 
 def _should_archive(target_relative_folder: str, mail_type: MailType) -> bool:
-    if mail_type == MailType.INUTILE_OU_FAIBLE_VALEUR:
-        return False
     return target_relative_folder not in {"A verifier", "Ne pas archiver"}
 
 
@@ -181,8 +167,7 @@ def _requires_review(
     update: ManualClassificationUpdate,
 ) -> bool:
     return (
-        update.mail_type == MailType.A_VERIFIER
-        or update.interlocutor == InterlocutorType.INCONNU
+        update.interlocutor == InterlocutorType.INCONNU
         or target_relative_folder == "A verifier"
     )
 
@@ -199,9 +184,3 @@ def _action_from_manual_decision(*, archive: bool, requires_review: bool) -> Pre
     if archive:
         return PreviewAction.ARCHIVE
     return PreviewAction.IGNORE
-
-
-def _normalize_learning_text(value: str) -> str:
-    normalized = value.replace("\u2019", "'").lower()
-    decomposed = unicodedata.normalize("NFKD", normalized)
-    return "".join(char for char in decomposed if not unicodedata.combining(char))

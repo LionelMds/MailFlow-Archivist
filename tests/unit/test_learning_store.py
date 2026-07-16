@@ -3,64 +3,65 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from mailflow.models import InterlocutorType, MailType, ManualLearningSignal
+from mailflow.models import InterlocutorType, MailType, ManualLearningSignal, RoutingCategory
 from mailflow.storage.learning_store import SQLiteLearningStore
 
 
-def test_learning_store_records_manual_signal(tmp_path: Path) -> None:
-    store = SQLiteLearningStore(tmp_path / "mailflow.sqlite")
-    signal = ManualLearningSignal(
-        mail_id="ENTRY-1",
+def signal(*, mail_id: str = "ENTRY-1") -> ManualLearningSignal:
+    return ManualLearningSignal(
+        mail_id=mail_id,
         project_number="2025-4893",
-        subject="Offerte",
-        selected_mail_type=MailType.DEVIS,
+        subject="Validation de la phase commerciale",
+        selected_mail_type=MailType.DEMANDE_DE_PRIX,
         selected_interlocutor=InterlocutorType.FOURNISSEUR,
-        selected_target_folder="Fournisseurs/Demande de prix",
-        learning_term="Offerte",
-        misleading_term="newsletter",
+        selected_target_folder="Fournisseurs/Demande de prix/Metal Factory",
+        learning_term=None,
+        misleading_term=None,
         manual_required=False,
         created_at=datetime(2026, 5, 6, 10, 30),
+        organization_name="Metal Factory",
+        primary_email="sales@metal.test",
     )
 
-    store.record(signal)
+
+def test_learning_store_records_verified_routing_example(tmp_path: Path) -> None:
+    store = SQLiteLearningStore(tmp_path / "mailflow.sqlite")
+
+    store.record(signal())
 
     assert store.count() == 1
-    assert store.misleading_terms()[0].term == "newsletter"
+    examples = store.verified_examples()
+    assert len(examples) == 1
+    assert examples[0].organization_name == "Metal Factory"
+    assert examples[0].organization_role == InterlocutorType.FOURNISSEUR
+    assert examples[0].category == RoutingCategory.DEMANDE_DE_PRIX
 
 
-def test_learning_store_returns_learned_rules_and_ignores_manual_required(tmp_path: Path) -> None:
+def test_verified_example_is_idempotent_by_mail_id(tmp_path: Path) -> None:
     store = SQLiteLearningStore(tmp_path / "mailflow.sqlite")
-    store.record(
-        ManualLearningSignal(
-            mail_id="ENTRY-1",
-            project_number="2025-4893",
-            subject="Offerte",
-            selected_mail_type=MailType.DEVIS,
-            selected_interlocutor=InterlocutorType.FOURNISSEUR,
-            selected_target_folder="Fournisseurs/Demande de prix",
-            learning_term="Offerte",
-            misleading_term=None,
-            manual_required=False,
-            created_at=datetime(2026, 5, 6, 10, 30),
-        )
-    )
-    store.record(
-        ManualLearningSignal(
-            mail_id="ENTRY-2",
-            project_number="2025-4893",
-            subject="Cas humain",
-            selected_mail_type=MailType.A_VERIFIER,
-            selected_interlocutor=InterlocutorType.INCONNU,
-            selected_target_folder="A verifier",
-            learning_term=None,
-            misleading_term="offre",
-            manual_required=True,
-            created_at=datetime(2026, 5, 6, 10, 31),
-        )
+    store.record(signal())
+    corrected = signal().model_copy(
+        update={
+            "selected_mail_type": MailType.COMMANDE,
+            "selected_target_folder": "Fournisseurs/Commande/Metal Factory",
+        }
     )
 
-    learned_rules = store.learned_rules()
+    store.record(corrected)
 
-    assert len(learned_rules) == 1
-    assert learned_rules[0].term == "Offerte"
-    assert store.misleading_terms()[0].term == "offre"
+    assert store.count() == 2
+    examples = store.verified_examples()
+    assert len(examples) == 1
+    assert examples[0].category == RoutingCategory.COMMANDE
+
+
+def test_unknown_role_is_not_used_as_verified_ai_example(tmp_path: Path) -> None:
+    store = SQLiteLearningStore(tmp_path / "mailflow.sqlite")
+    unknown = signal().model_copy(
+        update={"selected_interlocutor": InterlocutorType.INCONNU}
+    )
+
+    store.record(unknown)
+
+    assert store.count() == 1
+    assert store.verified_examples() == []

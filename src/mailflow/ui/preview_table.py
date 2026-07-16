@@ -4,7 +4,14 @@ from collections.abc import Callable
 from typing import Protocol
 
 from mailflow.core.manual_review import MANUAL_DESTINATIONS
-from mailflow.models import InterlocutorType, MailType, PreviewAction, PreviewRow
+from mailflow.models import (
+    InterlocutorType,
+    MailType,
+    PreviewAction,
+    PreviewRow,
+    RoutingCategory,
+    routing_category_for_mail_type,
+)
 
 PREVIEW_COLUMNS = (
     "Projet",
@@ -27,14 +34,15 @@ ACTION_LABELS = {
 }
 
 MAIL_TYPE_OPTIONS = (
-    MailType.CORRESPONDANCE_GENERALE.value,
-    MailType.DEMANDE_DE_PRIX.value,
-    MailType.DEVIS.value,
-    MailType.COMMANDE.value,
-    MailType.INUTILE_OU_FAIBLE_VALEUR.value,
-    MailType.A_VERIFIER.value,
+    RoutingCategory.CORRESPONDANCE.value,
+    RoutingCategory.DEMANDE_DE_PRIX.value,
+    RoutingCategory.COMMANDE.value,
 )
-INTERLOCUTOR_OPTIONS = tuple(interlocutor.value for interlocutor in InterlocutorType)
+INTERLOCUTOR_OPTIONS = (
+    InterlocutorType.CLIENT.value,
+    InterlocutorType.FOURNISSEUR.value,
+    InterlocutorType.INCONNU.value,
+)
 DESTINATION_OPTIONS = MANUAL_DESTINATIONS
 
 TYPE_COLUMN = PREVIEW_COLUMNS.index("Type detecte")
@@ -77,7 +85,7 @@ def preview_row_to_cells(row: PreviewRow) -> list[str]:
         "Envoye" if mail.direction.value == "sent" else "Recu",
         mail.sender_name or mail.sender_email,
         mail.subject,
-        standard_mail_type_for_display(decision.mail_type).value,
+        routing_category_for_mail_type(decision.mail_type).value,
         decision.interlocutor.value,
         decision.target_relative_folder,
         f"{decision.confidence:.0%}",
@@ -97,6 +105,14 @@ def standard_mail_type_for_display(mail_type: MailType) -> MailType:
     }:
         return MailType.CORRESPONDANCE_GENERALE
     return mail_type
+
+
+def mail_type_from_display(value: str) -> MailType:
+    return {
+        RoutingCategory.CORRESPONDANCE.value: MailType.CORRESPONDANCE_GENERALE,
+        RoutingCategory.DEMANDE_DE_PRIX.value: MailType.DEMANDE_DE_PRIX,
+        RoutingCategory.COMMANDE.value: MailType.COMMANDE,
+    }[value]
 
 
 class PreviewTableProtocol(Protocol):

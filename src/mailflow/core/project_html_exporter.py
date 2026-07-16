@@ -822,11 +822,11 @@ def _render_ai_meta(row: PreviewRow) -> str:
     ai = row.classification.ai
     if ai is None:
         return ""
-    action = "archiver" if ai.archive else "ne pas archiver"
+    action = "a verifier" if ai.requires_review else "archiver"
     return (
         '<div class="meta ai-meta">'
-        f"<b>Decision IA:</b> {_e(action)} - {_e(ai.mail_type)} - "
-        f"{_e(ai.interlocutor)} - {_e(ai.target_folder)} - {ai.confidence:.0%}<br>"
+        f"<b>Decision IA:</b> {_e(action)} - {_e(ai.category)} - "
+        f"{_e(ai.organization_role)} - {_e(ai.target_folder)} - {ai.confidence:.0%}<br>"
         f"<b>Resume IA:</b> {_e(ai.short_summary)}<br>"
         f"<b>Pourquoi:</b> {_e(ai.reason)}"
         "</div>"
@@ -839,8 +839,8 @@ def _ai_search_text(row: PreviewRow) -> str:
         return ""
     return " ".join(
         [
-            ai.mail_type,
-            ai.interlocutor,
+            ai.category,
+            ai.organization_role,
             ai.target_folder,
             ai.short_summary,
             ai.reason,

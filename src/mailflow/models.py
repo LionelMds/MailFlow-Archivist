@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -20,6 +20,12 @@ class MailType(StrEnum):
     ADMINISTRATIF = "administratif"
     INUTILE_OU_FAIBLE_VALEUR = "inutile_ou_faible_valeur"
     A_VERIFIER = "a_verifier"
+
+
+class RoutingCategory(StrEnum):
+    CORRESPONDANCE = "Correspondance"
+    DEMANDE_DE_PRIX = "Demande de prix"
+    COMMANDE = "Commande"
 
 
 class InterlocutorType(StrEnum):
@@ -101,56 +107,79 @@ class RuleClassification(BaseModel):
     matched_terms: list[str] = Field(default_factory=list)
 
 
-Usefulness = Literal["important", "normal", "faible", "inutile", "a_verifier"]
-AiTargetFolder = Literal[
-    "Correspondance",
-    "Fournisseurs/Demande de prix",
-    "Fournisseurs/Commande",
-    "A verifier",
-    "Ne pas archiver",
-]
 DuplicateStatus = Literal["none", "same_file_exists", "already_archived"]
 
 
 class AiMailClassification(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    archive: bool
-    usefulness: Usefulness
-    mail_type: Literal[
-        "demande_de_prix",
-        "devis",
-        "commande",
-        "facture",
-        "correspondance_generale",
-        "technique",
-        "plan",
-        "livraison",
-        "administratif",
-        "inutile_ou_faible_valeur",
-        "a_verifier",
-    ]
-    interlocutor: Literal[
-        "client",
-        "fournisseur",
-        "intervenant_externe",
-        "interne",
-        "inconnu",
-    ]
-    target_folder: AiTargetFolder
+    category: Literal["Correspondance", "Demande de prix", "Commande"]
+    organization_role: Literal["client", "fournisseur", "inconnu"]
+    organization_name: str | None = Field(max_length=80)
     confidence: float = Field(ge=0.0, le=1.0)
+    requires_review: bool
     short_summary: str = Field(max_length=120)
     reason: str = Field(max_length=200)
+    evidence: list[str] = Field(max_length=3)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_output(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "category" in value:
+            return value
+        legacy = dict(value)
+        mail_type = str(legacy.pop("mail_type", "a_verifier"))
+        target = str(legacy.pop("target_folder", "A verifier"))
+        interlocutor = str(legacy.pop("interlocutor", "inconnu"))
+        archive = bool(legacy.pop("archive", False))
+        legacy.pop("usefulness", None)
+        category = _routing_category_from_legacy(mail_type, target)
+        return {
+            **legacy,
+            "category": category.value,
+            "organization_role": (
+                interlocutor if interlocutor in {"client", "fournisseur"} else "inconnu"
+            ),
+            "organization_name": None,
+            "requires_review": target == "A verifier" or not archive,
+            "evidence": [],
+        }
+
+    @field_validator("evidence")
+    @classmethod
+    def normalize_evidence(cls, value: list[str]) -> list[str]:
+        return [item.strip()[:120] for item in value if item.strip()][:3]
 
     @model_validator(mode="after")
-    def enforce_business_constraints(self) -> AiMailClassification:
-        if self.confidence < 0.80 and self.target_folder != "A verifier":
-            msg = "target_folder must be 'A verifier' when confidence is below 0.80"
-            raise ValueError(msg)
-        if self.usefulness == "inutile" and self.archive:
-            msg = "archive must be false when usefulness is 'inutile'"
-            raise ValueError(msg)
+    def enforce_review_constraints(self) -> AiMailClassification:
+        if self.confidence < 0.80 or self.organization_role == "inconnu":
+            self.requires_review = True
         return self
+
+    @property
+    def mail_type(self) -> str:
+        return mail_type_for_routing_category(RoutingCategory(self.category)).value
+
+    @property
+    def interlocutor(self) -> str:
+        return self.organization_role
+
+    @property
+    def target_folder(self) -> str:
+        if self.requires_review:
+            return "A verifier"
+        return target_folder_for_routing_category(
+            RoutingCategory(self.category),
+            InterlocutorType(self.organization_role),
+        )
+
+    @property
+    def archive(self) -> bool:
+        return not self.requires_review and self.target_folder != "A verifier"
+
+    @property
+    def usefulness(self) -> str:
+        return "a_verifier" if self.requires_review else "normal"
 
 
 class ArchiveDecision(BaseModel):
@@ -252,3 +281,70 @@ class ManualLearningSignal(BaseModel):
     misleading_term: str | None = None
     manual_required: bool
     created_at: datetime
+    organization_name: str | None = None
+    primary_email: str | None = None
+
+
+class VerifiedRoutingExample(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_number: str
+    subject: str
+    organization_name: str
+    organization_role: InterlocutorType
+    category: RoutingCategory
+
+    @model_validator(mode="after")
+    def validate_business_role(self) -> VerifiedRoutingExample:
+        if self.organization_role not in {
+            InterlocutorType.CLIENT,
+            InterlocutorType.FOURNISSEUR,
+        }:
+            msg = "A verified routing example requires a client or supplier role"
+            raise ValueError(msg)
+        return self
+
+
+def mail_type_for_routing_category(category: RoutingCategory) -> MailType:
+    return {
+        RoutingCategory.CORRESPONDANCE: MailType.CORRESPONDANCE_GENERALE,
+        RoutingCategory.DEMANDE_DE_PRIX: MailType.DEMANDE_DE_PRIX,
+        RoutingCategory.COMMANDE: MailType.COMMANDE,
+    }[category]
+
+
+def routing_category_for_mail_type(mail_type: MailType) -> RoutingCategory:
+    if mail_type in {MailType.DEMANDE_DE_PRIX, MailType.DEVIS}:
+        return RoutingCategory.DEMANDE_DE_PRIX
+    if mail_type in {MailType.COMMANDE, MailType.FACTURE, MailType.LIVRAISON}:
+        return RoutingCategory.COMMANDE
+    return RoutingCategory.CORRESPONDANCE
+
+
+def target_folder_for_routing_category(
+    category: RoutingCategory,
+    interlocutor: InterlocutorType,
+) -> str:
+    if interlocutor == InterlocutorType.CLIENT and category == RoutingCategory.CORRESPONDANCE:
+        return "Correspondance"
+    if interlocutor == InterlocutorType.FOURNISSEUR:
+        if category == RoutingCategory.DEMANDE_DE_PRIX:
+            return "Fournisseurs/Demande de prix"
+        if category == RoutingCategory.COMMANDE:
+            return "Fournisseurs/Commande"
+    return "A verifier"
+
+
+def _routing_category_from_legacy(mail_type: str, target: str) -> RoutingCategory:
+    if target.startswith("Fournisseurs/Commande") or mail_type in {
+        MailType.COMMANDE.value,
+        MailType.FACTURE.value,
+        MailType.LIVRAISON.value,
+    }:
+        return RoutingCategory.COMMANDE
+    if target.startswith("Fournisseurs/Demande de prix") or mail_type in {
+        MailType.DEMANDE_DE_PRIX.value,
+        MailType.DEVIS.value,
+    }:
+        return RoutingCategory.DEMANDE_DE_PRIX
+    return RoutingCategory.CORRESPONDANCE

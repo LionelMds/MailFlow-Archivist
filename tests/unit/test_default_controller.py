@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from mailflow.core.app_controller import OutlookAppController
@@ -35,7 +36,15 @@ class FakeScanService:
 
 
 class FakePreviewPipeline:
-    def preview(self, mails: list[MailMetadata]) -> list[PreviewRow]:
+    def preview(
+        self,
+        mails: list[MailMetadata],
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> list[PreviewRow]:
+        if progress_callback is not None:
+            for index, _mail in enumerate(mails, start=1):
+                progress_callback(index, len(mails))
         return []
 
 

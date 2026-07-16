@@ -138,14 +138,14 @@ def test_decision_requires_review_for_low_confidence(tmp_path: Path) -> None:
 def test_decision_requires_review_for_ai_target_a_verifier(tmp_path: Path) -> None:
     (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
     ai = AiMailClassification(
-        archive=True,
-        usefulness="normal",
-        mail_type="devis",
-        interlocutor="fournisseur",
-        target_folder="A verifier",
+        category="Demande de prix",
+        organization_role="fournisseur",
+        organization_name="Dupont",
         confidence=0.95,
+        requires_review=True,
         short_summary="Offre fournisseur",
         reason="Ambigu malgre confiance.",
+        evidence=[],
     )
 
     decision = decide_archive(
@@ -165,14 +165,14 @@ def test_decision_requires_review_for_ai_supplier_folder_without_supplier(
 ) -> None:
     (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
     ai = AiMailClassification(
-        archive=True,
-        usefulness="important",
-        mail_type="devis",
-        interlocutor="client",
-        target_folder="Fournisseurs/Demande de prix",
+        category="Demande de prix",
+        organization_role="client",
+        organization_name="Dupont",
         confidence=0.95,
+        requires_review=False,
         short_summary="Demande client",
         reason="Client et demande de prix.",
+        evidence=[],
     )
 
     decision = decide_archive(
@@ -192,14 +192,14 @@ def test_decision_requires_review_for_ai_correspondence_with_supplier(
 ) -> None:
     (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
     ai = AiMailClassification(
-        archive=True,
-        usefulness="normal",
-        mail_type="technique",
-        interlocutor="fournisseur",
-        target_folder="Correspondance",
+        category="Correspondance",
+        organization_role="fournisseur",
+        organization_name="Dupont",
         confidence=0.95,
+        requires_review=False,
         short_summary="Echange fournisseur",
         reason="Echange technique.",
+        evidence=[],
     )
 
     decision = decide_archive(

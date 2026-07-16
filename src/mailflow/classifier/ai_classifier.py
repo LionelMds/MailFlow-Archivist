@@ -32,10 +32,12 @@ class AiClassifier:
         *,
         api_key: str,
         model: str = DEFAULT_AI_MODEL,
+        timeout_seconds: float = 25.0,
         client: OpenAiClient | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
+        self._timeout_seconds = timeout_seconds
         self._client: Any = client
 
     def classify(
@@ -44,7 +46,7 @@ class AiClassifier:
         *,
         include_body: bool = True,
         privacy_mask_phone_numbers: bool = False,
-        known_context: dict[str, str] | None = None,
+        known_context: dict[str, Any] | None = None,
     ) -> AiMailClassification:
         payload = build_ai_payload(
             mail,
@@ -81,7 +83,7 @@ class AiClassifier:
             ok=True,
             message=(
                 "Connexion OpenAI OK "
-                f"({classification.mail_type}, {classification.confidence:.0%})."
+                f"({classification.category}, {classification.confidence:.0%})."
             ),
             classification=classification,
         )
@@ -94,7 +96,11 @@ class AiClassifier:
         except Exception as exc:
             msg = "The openai package is required when AI classification is enabled"
             raise RuntimeError(msg) from exc
-        self._client = OpenAI(api_key=self._api_key)
+        self._client = OpenAI(
+            api_key=self._api_key,
+            timeout=self._timeout_seconds,
+            max_retries=1,
+        )
         return self._client
 
 

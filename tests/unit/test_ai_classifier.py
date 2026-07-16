@@ -20,14 +20,14 @@ class FakeResponses:
 
 def test_ai_classifier_uses_structured_output_and_metadata_only() -> None:
     parsed = AiMailClassification(
-        archive=True,
-        usefulness="normal",
-        mail_type="devis",
-        interlocutor="fournisseur",
-        target_folder="Fournisseurs/Demande de prix",
+        category="Demande de prix",
+        organization_role="fournisseur",
+        organization_name="Dupont",
         confidence=0.88,
+        requires_review=False,
         short_summary="Offre fournisseur.",
         reason="Le sujet et les pieces jointes indiquent une offre.",
+        evidence=["offre fournisseur"],
     )
     responses = FakeResponses(parsed)
     client = SimpleNamespace(responses=responses)
@@ -62,14 +62,14 @@ def test_ai_classifier_uses_structured_output_and_metadata_only() -> None:
 
 def test_ai_classifier_connection_check_uses_synthetic_structured_request() -> None:
     parsed = AiMailClassification(
-        archive=True,
-        usefulness="normal",
-        mail_type="demande_de_prix",
-        interlocutor="fournisseur",
-        target_folder="Fournisseurs/Demande de prix",
+        category="Demande de prix",
+        organization_role="fournisseur",
+        organization_name="MailFlow Test",
         confidence=0.91,
+        requires_review=False,
         short_summary="Test OK.",
         reason="Le test retourne une classification structuree.",
+        evidence=["test"],
     )
     responses = FakeResponses(parsed)
     classifier = AiClassifier(api_key="sk-test-secret", client=SimpleNamespace(responses=responses))

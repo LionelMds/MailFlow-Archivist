@@ -111,7 +111,7 @@ def test_preview_rows_to_matrix_formats_cells(tmp_path: Path) -> None:
         "Recu",
         "Dupont",
         "Offre",
-        "demande_de_prix",
+        "Demande de prix",
         "fournisseur",
         "Fournisseurs/Demande de prix",
         "90%",
@@ -131,8 +131,7 @@ def test_render_preview_rows_sets_headers_and_items(tmp_path: Path) -> None:
 
 
 def test_editable_options_for_manual_columns() -> None:
-    assert "devis" in MAIL_TYPE_OPTIONS
-    assert "facture" not in MAIL_TYPE_OPTIONS
+    assert MAIL_TYPE_OPTIONS == ("Correspondance", "Demande de prix", "Commande")
     assert "fournisseur" in INTERLOCUTOR_OPTIONS
     assert "Fournisseurs/Demande de prix" in DESTINATION_OPTIONS
     assert editable_options_for_column(TYPE_COLUMN) == MAIL_TYPE_OPTIONS

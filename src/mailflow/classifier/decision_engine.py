@@ -220,7 +220,7 @@ def _classification_choice(
         rule.suggested_interlocutor or InterlocutorType.INCONNU,
         bool(rule.likely_archive),
         rule.confidence,
-        "Decision issue des regles locales.",
+        "IA indisponible ou desactivee; aucun classement par mots-cles n'est applique.",
     )
 
 

@@ -21,6 +21,7 @@ from mailflow.models import (
     ManualClassificationUpdate,
     OutlookAccount,
     PreviewRow,
+    RoutingCategory,
 )
 
 if TYPE_CHECKING:
@@ -46,6 +47,7 @@ UI_TEXT = {
     "archive_all_except_review": "Tout archiver sauf a verifier",
     "mark_ignored": "Ignorer selection",
     "restore_archivable": "Tout remettre a archiver",
+    "reclassify": "Reclassifier avec l'IA",
     "background_mode": "Passer en arriere-plan",
     "open_project_folder": "Ouvrir dossier projet",
     "export_project_html": "Exporter HTML projet",
@@ -138,10 +140,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         set_openai_api_key,
     )
     from mailflow.core.app_controller import PreviewRequest, build_default_controller
-    from mailflow.core.manual_review import (
-        SPECIAL_MANUAL_DESTINATIONS,
-        suggested_manual_destination,
-    )
+    from mailflow.core.manual_review import suggested_manual_destination
     from mailflow.core.project_digest import build_project_digest
     from mailflow.resources import app_icon_path
     from mailflow.ui.mail_preview import preview_row_to_html
@@ -209,6 +208,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     scan_button = QPushButton(UI_TEXT["scan_button"])
     reset_button = QPushButton(UI_TEXT["reset_workspace"])
     watch_checkbox = QCheckBox(UI_TEXT["watch_outlook"])
+    scan_status_label = QLabel("")
+    scan_status_label.setMinimumWidth(180)
+    scan_status_label.setStyleSheet("QLabel { color: #64748b; }")
     top_layout.addWidget(app_title)
     top_layout.addSpacing(8)
     top_layout.addWidget(QLabel("Compte"))
@@ -222,6 +224,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     top_layout.addWidget(scan_button)
     top_layout.addWidget(reset_button)
     top_layout.addWidget(watch_checkbox)
+    top_layout.addWidget(scan_status_label, 1)
     layout.addWidget(top_bar)
 
     content_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -259,11 +262,13 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     more_actions_menu = QMenu(more_actions_button)
     ignore_action = QAction(UI_TEXT["mark_ignored"], window)
     restore_archivable_action = QAction(UI_TEXT["restore_archivable"], window)
+    reclassify_action = QAction(UI_TEXT["reclassify"], window)
     background_action = QAction(UI_TEXT["background_mode"], window)
     open_folder_action = QAction(UI_TEXT["open_project_folder"], window)
     report_action = QAction(UI_TEXT["export_report"], window)
     more_actions_menu.addAction(ignore_action)
     more_actions_menu.addAction(restore_archivable_action)
+    more_actions_menu.addAction(reclassify_action)
     more_actions_menu.addSeparator()
     more_actions_menu.addAction(background_action)
     more_actions_menu.addSeparator()
@@ -365,9 +370,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     grid.addWidget(projects_root_picker, 0, 1)
     grid.addWidget(QLabel("Mode IA"), 1, 0)
     ai_mode_combo = QComboBox()
-    for mode in AiMode:
+    for mode in (AiMode.DISABLED, AiMode.ALL):
         ai_mode_combo.addItem(ai_mode_label(mode), mode.value)
-    set_combo_value_by_data(ai_mode_combo, settings.ai_mode.value)
+    selected_ai_mode = (
+        AiMode.ALL if settings.ai_mode == AiMode.AMBIGUOUS_ONLY else settings.ai_mode
+    )
+    set_combo_value_by_data(ai_mode_combo, selected_ai_mode.value)
     grid.addWidget(ai_mode_combo, 1, 1)
     grid.addWidget(QLabel("Modele IA"), 2, 0)
     ai_model_input = QComboBox()
@@ -530,6 +538,20 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     def append_log(message: str) -> None:
         logs.append(message)
+
+    def set_scan_status(message: str, *, success: bool | None = None) -> None:
+        if success is True:
+            color = "#166534"
+        elif success is False:
+            color = "#9f1239"
+        else:
+            color = "#475569"
+        scan_status_label.setText(message)
+        scan_status_label.setStyleSheet(f"QLabel {{ color: {color}; }}")
+
+    def expand_logs() -> None:
+        if not logs.isVisible():
+            toggle_logs()
 
     def has_openai_api_key() -> bool:
         return get_openai_api_key() is not None
@@ -1037,7 +1059,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         mail_type_combo.addItems(list(MAIL_TYPE_OPTIONS))
         set_combo_value(
             mail_type_combo,
-            combo_text(row_index, TYPE_COLUMN) or row.decision.mail_type.value,
+            combo_text(row_index, TYPE_COLUMN) or preview_row_to_cells(row)[TYPE_COLUMN],
             MAIL_TYPE_OPTIONS,
         )
         interlocutor_combo = QComboBox()
@@ -1048,7 +1070,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             INTERLOCUTOR_OPTIONS,
         )
         destination_combo = QComboBox()
-        destination_combo.setEditable(True)
+        destination_combo.setEditable(False)
         destination_combo.addItems(list(DESTINATION_OPTIONS))
         initial_destination = (
             combo_text(row_index, DESTINATION_COLUMN) or row.decision.target_relative_folder
@@ -1058,14 +1080,19 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             initial_destination,
             DESTINATION_OPTIONS,
         )
-        auto_destination = initial_destination in SPECIAL_MANUAL_DESTINATIONS
+        auto_destination = True
 
         def sync_suggested_destination(_value: str = "") -> None:
             if not auto_destination:
                 return
             try:
+                selected_type = {
+                    RoutingCategory.CORRESPONDANCE.value: MailType.CORRESPONDANCE_GENERALE,
+                    RoutingCategory.DEMANDE_DE_PRIX.value: MailType.DEMANDE_DE_PRIX,
+                    RoutingCategory.COMMANDE.value: MailType.COMMANDE,
+                }[mail_type_combo.currentText()]
                 suggested = suggested_manual_destination(
-                    MailType(mail_type_combo.currentText()),
+                    selected_type,
                     InterlocutorType(interlocutor_combo.currentText()),
                 )
             except ValueError:
@@ -1074,48 +1101,30 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             set_combo_value(destination_combo, suggested, DESTINATION_OPTIONS)
             destination_combo.blockSignals(False)
 
-        def disable_auto_destination(_value: str = "") -> None:
-            nonlocal auto_destination
-            auto_destination = False
-
         mail_type_combo.currentTextChanged.connect(sync_suggested_destination)
         interlocutor_combo.currentTextChanged.connect(sync_suggested_destination)
-        destination_combo.currentTextChanged.connect(disable_auto_destination)
         sync_suggested_destination()
-        form.addRow("Type detecte", mail_type_combo)
-        form.addRow("Interlocuteur", interlocutor_combo)
-        form.addRow("Destination proposee", destination_combo)
+        form.addRow("Classement", mail_type_combo)
+        form.addRow("Role de l'entreprise", interlocutor_combo)
+        form.addRow("Destination finale", destination_combo)
 
-        term_input = QLineEdit()
-        misleading_term_input = QLineEdit()
-        none_checkbox = QCheckBox("Aucun terme: classement manuel necessaire")
-        form.addRow("Terme qui identifie le classement", term_input)
-        form.addRow("Terme trompeur / mauvais indice", misleading_term_input)
-        form.addRow("", none_checkbox)
+        learning_note = QLabel(
+            "Cette correction sera memorisee comme exemple verifie pour ce projet "
+            "et cette entreprise. Aucun mot-cle n'est cree."
+        )
+        learning_note.setWordWrap(True)
+        form.addRow("Apprentissage", learning_note)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
         form.addRow(buttons)
-        none_checkbox.toggled.connect(term_input.setDisabled)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
-        if none_checkbox.isChecked():
-            return build_manual_classification_update(
-                mail_type_value=mail_type_combo.currentText(),
-                interlocutor_value=interlocutor_combo.currentText(),
-                destination_value=destination_combo.currentText(),
-                learning_term=None,
-                misleading_term=clean_optional_text(misleading_term_input.text()),
-                manual_required=True,
-            )
         return build_manual_classification_update(
             mail_type_value=mail_type_combo.currentText(),
             interlocutor_value=interlocutor_combo.currentText(),
             destination_value=destination_combo.currentText(),
-            learning_term=clean_optional_text(term_input.text()),
-            misleading_term=clean_optional_text(misleading_term_input.text()),
-            manual_required=False,
         )
 
     def set_combo_value(combo: Any, value: str, options: tuple[str, ...]) -> None:
@@ -1229,11 +1238,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             set_update_status("Installation impossible", success=False)
             append_log(f"Erreur lancement installateur: {exc}")
 
-    def scan_current_preview() -> list[PreviewRow]:
+    def scan_current_preview(
+        *,
+        progress_callback: Any | None = None,
+    ) -> list[PreviewRow]:
         nonlocal active_controller
         update_projects_root()
         if settings.ai_mode != AiMode.DISABLED and not has_openai_api_key():
-            append_log("Mode IA actif sans cle OpenAI: classement par regles uniquement.")
+            append_log("Mode IA actif sans cle OpenAI: les lignes resteront a verifier.")
         if not controller_was_injected:
             active_controller = build_default_controller(settings)
             dynamic_window.mailflow_controller = active_controller
@@ -1243,18 +1255,34 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 outlook_root_folder=current_outlook_root_folder(),
                 year=year_input.text(),
                 project_number=project_input.text(),
-            )
+            ),
+            progress_callback=progress_callback,
         )
 
     def on_scan() -> None:
+        scan_button.setEnabled(False)
+        set_scan_status("Scan Outlook en cours...")
+        append_log("Scan Outlook en cours...")
+        QApplication.processEvents()
+
+        def progress(message: str) -> None:
+            set_scan_status(message)
+            QApplication.processEvents()
+
         try:
-            rows = scan_current_preview()
+            rows = scan_current_preview(progress_callback=progress)
             watch_state.reset(rows)
             refresh_table()
             navigation.setCurrentRow(0)
+            set_scan_status(f"{len(rows)} mail(s) charges.", success=True)
             append_log(f"{len(rows)} mails charges en previsualisation.")
         except Exception as exc:
+            set_scan_status("Erreur scan Outlook", success=False)
+            expand_logs()
             append_log(f"Erreur scan: {exc}")
+            QMessageBox.warning(window, "Erreur scan Outlook", str(exc))
+        finally:
+            scan_button.setEnabled(True)
 
     def on_reset_workspace() -> None:
         try:
@@ -1328,6 +1356,28 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         active_controller.mark_all_archivable()
         refresh_table()
         append_log("Toutes les lignes archivables sont remises en Archiver.")
+
+    def on_reclassify() -> None:
+        if not active_controller.preview_rows:
+            append_log("Aucun mail a reclassifier.")
+            return
+        try:
+            scan_status_label.setText("Reclassification IA...")
+
+            def reclassify_progress(message: str) -> None:
+                scan_status_label.setText(message)
+                QApplication.processEvents()
+
+            active_controller.reclassify_preview(
+                progress_callback=reclassify_progress
+            )
+            refresh_table()
+            refresh_directory_table()
+            scan_status_label.setText("Reclassification terminee")
+            append_log("Projet reclasse avec l'IA et les roles actuels de l'annuaire.")
+        except Exception as exc:
+            scan_status_label.setText("Echec reclassification")
+            append_log(f"Erreur reclassification: {exc}")
 
     def archive_new_ready_rows(new_entry_ids: Sequence[str]) -> ArchiveBatchResult:
         new_ids = set(new_entry_ids)
@@ -1546,6 +1596,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     archive_all_action.triggered.connect(lambda _checked=False: on_archive_all_except_review())
     ignore_action.triggered.connect(lambda _checked=False: on_mark_ignored())
     restore_archivable_action.triggered.connect(lambda _checked=False: on_restore_archivable())
+    reclassify_action.triggered.connect(lambda _checked=False: on_reclassify())
     open_folder_action.triggered.connect(
         lambda _checked=False: append_log(str(settings.local_projects_root))
     )
@@ -1571,6 +1622,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     dynamic_window.mailflow_controller = active_controller
     dynamic_window.mailflow_scan_button = scan_button
+    dynamic_window.mailflow_scan_status_label = scan_status_label
     dynamic_window.mailflow_reset_button = reset_button
     dynamic_window.mailflow_preview_table = table
     dynamic_window.mailflow_folder_tree = folder_tree
@@ -1584,6 +1636,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_more_actions_menu = more_actions_menu
     dynamic_window.mailflow_ignore_action = ignore_action
     dynamic_window.mailflow_restore_archivable_action = restore_archivable_action
+    dynamic_window.mailflow_reclassify_action = reclassify_action
     dynamic_window.mailflow_background_action = background_action
     dynamic_window.mailflow_open_folder_action = open_folder_action
     dynamic_window.mailflow_report_action = report_action
@@ -1646,8 +1699,8 @@ def format_outlook_account_label(account: OutlookAccount) -> str:
 def ai_mode_label(mode: AiMode) -> str:
     labels = {
         AiMode.DISABLED: "desactivee",
-        AiMode.AMBIGUOUS_ONLY: "ambigu seulement",
-        AiMode.ALL: "tout classifier",
+        AiMode.AMBIGUOUS_ONLY: "activee",
+        AiMode.ALL: "activee",
     }
     return labels[mode]
 
@@ -1942,12 +1995,19 @@ def build_manual_classification_update(
     mail_type_value: str,
     interlocutor_value: str,
     destination_value: str,
-    learning_term: str | None,
+    learning_term: str | None = None,
     misleading_term: str | None = None,
     manual_required: bool = False,
 ) -> ManualClassificationUpdate:
+    mail_type = {
+        RoutingCategory.CORRESPONDANCE.value: MailType.CORRESPONDANCE_GENERALE,
+        RoutingCategory.DEMANDE_DE_PRIX.value: MailType.DEMANDE_DE_PRIX,
+        RoutingCategory.COMMANDE.value: MailType.COMMANDE,
+    }.get(mail_type_value)
+    if mail_type is None:
+        mail_type = MailType(mail_type_value)
     return ManualClassificationUpdate(
-        mail_type=MailType(mail_type_value),
+        mail_type=mail_type,
         interlocutor=InterlocutorType(interlocutor_value),
         target_relative_folder=destination_value,
         learning_term=learning_term,

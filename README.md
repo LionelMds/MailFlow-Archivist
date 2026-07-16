@@ -19,12 +19,12 @@ Cette premiere tranche met en place :
 - modeles metier typés avec `pydantic` ;
 - parseur de numeros projet ;
 - configuration JSON et stockage securise de cle OpenAI via `keyring` ;
-- classification locale par regles ;
+- classification semantique IA strictement limitee a trois categories ;
 - moteur de decision ;
 - stockage SQLite ;
 - scanner et exporteur Outlook mockables ;
 - service de scan Outlook par compte, racine, annee et projet optionnel ;
-- pipeline de previsualisation regles + IA + decision ;
+- pipeline IA + annuaire + garde-fous metier + decision ;
 - hierarchie limitee a `Correspondance`, `Fournisseurs/Demande de prix`, `Fournisseurs/Commande`,
   puis entreprise ;
 - annuaire SQLite evolutif alimente par les domaines et contacts Outlook ;
@@ -67,9 +67,9 @@ disponibles ; elle ne declenche pas d'envoi supplementaire a l'IA.
 Les destinations proposees sont limitees a trois dossiers metier :
 `Correspondance/Entreprise`, `Fournisseurs/Demande de prix/Entreprise` et
 `Fournisseurs/Commande/Entreprise`.
-`Correspondance` est reserve aux clients, intervenants et echanges internes. Un mail
-fournisseur ne part jamais automatiquement en `Correspondance` : il va en demande de
-prix, en commande, ou en `A verifier` si MailFlow ne peut pas choisir avec certitude.
+`Correspondance` est reserve aux clients. Un mail fournisseur ne part jamais en
+`Correspondance` : il va en demande de prix, en commande, ou en `A verifier` si
+MailFlow ne peut pas choisir avec certitude.
 L'annuaire local peut etre alimente depuis tout l'historique Outlook projet :
 une adresse ou un domaine connu, par exemple `@gva.ch`, prend le pas sur les
 heuristiques de nom et permet de classer directement sous l'entreprise officielle.
@@ -97,11 +97,14 @@ d'activer ou desactiver la surveillance, ou de quitter completement.
 
 ## Mode IA
 
-Le mode IA se configure dans le bloc `Configuration` :
+Le mode IA se configure dans le bloc `Configuration` : `activee` classe chaque mail
+avec l'IA, tandis que `desactivee` place les lignes en verification manuelle. Il
+n'existe aucun classement de secours par mots-cles.
 
-- `desactivee` : seules les regles locales sont utilisees ;
-- `ambigu seulement` : l'IA intervient lorsque les regles manquent de confiance ;
-- `tout classifier` : chaque mail est aussi classe par IA.
+L'annuaire fixe l'entreprise et son role pour le projet. L'IA choisit uniquement entre
+`Correspondance`, `Demande de prix` et `Commande`. L'historique recent de l'entreprise
+et les corrections manuelles verifiees lui sont transmis comme contexte. Une
+correction apprend une decision complete, jamais un terme isole.
 
 Le modele par defaut est `gpt-5.4-nano`, choisi pour un usage de classification
 rapide et economique. Le champ `Modele IA` propose aussi des modeles plus puissants

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any, Literal
 
 from mailflow.classifier.pipeline import ClassificationPipeline, should_call_ai
-from mailflow.core.manual_review import LearnedClassificationRule, LearnedMisleadingTerm
 from mailflow.models import (
     AiMailClassification,
     AiMode,
@@ -13,13 +13,38 @@ from mailflow.models import (
     MailMetadata,
     MailType,
     PreviewAction,
-    RuleClassification,
+    RoutingCategory,
+    VerifiedRoutingExample,
 )
 
 
-class FakeAiClassifier:
+class FakeDirectory:
     def __init__(self) -> None:
-        self.calls: list[MailMetadata] = []
+        self.organizations = {
+            "contact@gva.ch": "AIG",
+            "sales@metal.test": "Metal Factory",
+        }
+        self.roles = {
+            "contact@gva.ch": InterlocutorType.CLIENT,
+            "sales@metal.test": InterlocutorType.FOURNISSEUR,
+        }
+
+    def organization_name_for_email(self, email: str) -> str | None:
+        return self.organizations.get(email)
+
+    def interlocutor_for_email(
+        self,
+        project_number: str,
+        email: str,
+    ) -> InterlocutorType | None:
+        assert project_number == "2025-4893"
+        return self.roles.get(email)
+
+
+class FakeAiClassifier:
+    def __init__(self, responses: list[AiMailClassification]) -> None:
+        self.responses = responses
+        self.contexts: list[dict[str, Any]] = []
 
     def classify(
         self,
@@ -27,19 +52,11 @@ class FakeAiClassifier:
         *,
         include_body: bool = True,
         privacy_mask_phone_numbers: bool = False,
-        known_context: dict[str, str] | None = None,
+        known_context: dict[str, Any] | None = None,
     ) -> AiMailClassification:
-        self.calls.append(mail)
-        return AiMailClassification(
-            archive=True,
-            usefulness="normal",
-            mail_type="correspondance_generale",
-            interlocutor="client",
-            target_folder="Correspondance",
-            confidence=0.85,
-            short_summary="Question projet.",
-            reason="Mail utile mais ambigu, classe par IA.",
-        )
+        del mail, include_body, privacy_mask_phone_numbers
+        self.contexts.append(known_context or {})
+        return self.responses[len(self.contexts) - 1]
 
 
 class FailingAiClassifier:
@@ -49,308 +66,230 @@ class FailingAiClassifier:
         *,
         include_body: bool = True,
         privacy_mask_phone_numbers: bool = False,
-        known_context: dict[str, str] | None = None,
+        known_context: dict[str, Any] | None = None,
     ) -> AiMailClassification:
+        del mail, include_body, privacy_mask_phone_numbers, known_context
         raise RuntimeError("OpenAI indisponible")
 
 
-class InternalAiClassifier:
-    def classify(
-        self,
-        mail: MailMetadata,
-        *,
-        include_body: bool = True,
-        privacy_mask_phone_numbers: bool = False,
-        known_context: dict[str, str] | None = None,
-    ) -> AiMailClassification:
-        return AiMailClassification(
-            archive=True,
-            usefulness="normal",
-            mail_type="plan",
-            interlocutor="interne",
-            target_folder="Correspondance",
-            confidence=0.84,
-            short_summary="Plan actualise.",
-            reason="Signature et copie internes.",
-        )
+def ai_result(
+    category: Literal["Correspondance", "Demande de prix", "Commande"],
+    role: Literal["client", "fournisseur", "inconnu"],
+    *,
+    company: str | None = None,
+    confidence: float = 0.92,
+) -> AiMailClassification:
+    return AiMailClassification(
+        category=category,
+        organization_role=role,
+        organization_name=company,
+        confidence=confidence,
+        requires_review=False,
+        short_summary="Decision semantique.",
+        reason="Le sens global de l'echange determine sa phase commerciale.",
+        evidence=["decision confirmee dans le message"],
+    )
 
 
-class SupplierAiClassifier:
-    def classify(
-        self,
-        mail: MailMetadata,
-        *,
-        include_body: bool = True,
-        privacy_mask_phone_numbers: bool = False,
-        known_context: dict[str, str] | None = None,
-    ) -> AiMailClassification:
-        return AiMailClassification(
-            archive=True,
-            usefulness="important",
-            mail_type="commande",
-            interlocutor="fournisseur",
-            target_folder="Fournisseurs/Commande",
-            confidence=0.92,
-            short_summary="Commande detectee.",
-            reason="Le mot commande a ete detecte.",
-        )
-
-
-def sample_mail(*, subject: str, body: str = "") -> MailMetadata:
+def mail(
+    *,
+    entry_id: str = "ENTRY-1",
+    direction: Direction = Direction.SENT,
+    sender_email: str = "lionel@balzmetal.ch",
+    recipients: list[str] | None = None,
+    sent_at: datetime | None = None,
+    subject: str = "Suivi du projet",
+) -> MailMetadata:
     return MailMetadata(
-        entry_id=f"ENTRY-{subject}",
+        entry_id=entry_id,
         project_number="2025-4893",
         outlook_folder="Boite de reception/2025/2025-4893",
-        direction=Direction.RECEIVED,
+        direction=direction,
         subject=subject,
-        sender_name="Dupont SA",
-        sender_email="sales@dupont.test",
-        recipients=["lionel@balzmetal.test"],
-        sent_at=datetime(2026, 5, 6, 10, 30),
-        body_excerpt=body,
+        sender_name="Lionel",
+        sender_email=sender_email,
+        recipients=recipients or ["contact@gva.ch", "andre@balzmetal.ch"],
+        sent_at=sent_at or datetime(2026, 5, 6, 10, 30),
+        body_excerpt="Contenu metier complet sans decision par mot-cle.",
     )
 
 
-def test_should_call_ai_for_ambiguous_rule() -> None:
-    rule = RuleClassification(
-        suggested_type=None,
-        suggested_interlocutor=None,
-        likely_archive=None,
-        confidence=0,
-        matched_rules=[],
+def create_project(tmp_path: Path) -> None:
+    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
+
+
+def test_ai_is_the_only_classifier_when_enabled() -> None:
+    assert should_call_ai(ai_mode=AiMode.ALL)
+    assert should_call_ai(ai_mode=AiMode.AMBIGUOUS_ONLY)
+    assert not should_call_ai(ai_mode=AiMode.DISABLED)
+
+
+def test_known_client_role_overrides_ai_and_routes_to_correspondence(tmp_path: Path) -> None:
+    create_project(tmp_path)
+    ai = FakeAiClassifier([ai_result("Commande", "fournisseur")])
+    pipeline = ClassificationPipeline(
+        projects_root=tmp_path,
+        ai_mode=AiMode.ALL,
+        ai_classifier=ai,
+        organization_directory=FakeDirectory(),
     )
 
-    assert should_call_ai(rule, ai_mode=AiMode.AMBIGUOUS_ONLY, threshold=0.8)
+    row = pipeline.preview_one(mail())
 
-
-def test_should_not_call_ai_for_confident_rule_in_ambiguous_mode() -> None:
-    rule = RuleClassification(
-        suggested_type=MailType.DEVIS,
-        suggested_interlocutor=None,
-        likely_archive=True,
-        confidence=0.9,
-        matched_rules=["devis"],
-    )
-
-    assert not should_call_ai(rule, ai_mode=AiMode.AMBIGUOUS_ONLY, threshold=0.8)
-
-
-def test_pipeline_uses_rules_without_ai_for_confident_mail(tmp_path: Path) -> None:
-    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
-    ai = FakeAiClassifier()
-    pipeline = ClassificationPipeline(projects_root=tmp_path, ai_classifier=ai)
-
-    row = pipeline.preview_one(sample_mail(subject="Invoice", body="Please find attached invoice."))
-
-    assert row.classification.ai is None
-    assert ai.calls == []
-    assert row.action == PreviewAction.ARCHIVE
-    assert row.decision.mail_type == MailType.FACTURE
-
-
-def test_pipeline_preview_applies_company_hierarchy(tmp_path: Path) -> None:
-    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
-    pipeline = ClassificationPipeline(projects_root=tmp_path, ai_mode=AiMode.DISABLED)
-
-    rows = pipeline.preview([sample_mail(subject="Offerte", body="Voici notre offre.")])
-
-    assert rows[0].decision.target_relative_folder == "Fournisseurs/Demande de prix/Dupont SA"
-
-
-def test_pipeline_calls_ai_for_ambiguous_mail(tmp_path: Path) -> None:
-    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
-    ai = FakeAiClassifier()
-    pipeline = ClassificationPipeline(projects_root=tmp_path, ai_classifier=ai)
-
-    row = pipeline.preview_one(sample_mail(subject="Question", body="Pouvez-vous regarder ?"))
-
-    assert len(ai.calls) == 1
-    assert row.classification.ai is not None
+    assert row.decision.mail_type == MailType.CORRESPONDANCE_GENERALE
+    assert row.decision.interlocutor == InterlocutorType.CLIENT
     assert row.decision.target_relative_folder == "Correspondance"
-    assert row.action == PreviewAction.ARCHIVE
+    assert row.classification.ai is not None
+    assert row.classification.ai.category == "Correspondance"
 
 
-def test_pipeline_corrects_ai_internal_when_sent_mail_primary_recipient_is_external(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
-    mail = MailMetadata(
-        entry_id="ENTRY-SENT-PLAN",
-        project_number="2025-4893",
-        outlook_folder="Boite de reception/2025/2025-4893",
-        direction=Direction.SENT,
-        subject="RE: Approbation du plan de la cloison",
-        sender_name="Lionel",
-        sender_email="lionel@balzmetal.ch",
-        recipients=["blaise.riva@gva.ch", "andre@balzmetal.ch"],
-        sent_at=datetime(2026, 5, 6, 10, 30),
-        attachment_names=["2025-4788-ENS-100_B.pdf"],
-        body_excerpt="Veuillez trouver ci-joint le plan actualise.",
-    )
+def test_supplier_is_routed_to_company_subfolder(tmp_path: Path) -> None:
+    create_project(tmp_path)
+    ai = FakeAiClassifier([ai_result("Demande de prix", "fournisseur")])
     pipeline = ClassificationPipeline(
         projects_root=tmp_path,
         ai_mode=AiMode.ALL,
-        ai_classifier=InternalAiClassifier(),
+        ai_classifier=ai,
+        organization_directory=FakeDirectory(),
     )
-
-    row = pipeline.preview([mail])[0]
-
-    assert row.classification.ai is not None
-    assert row.classification.ai.interlocutor == "client"
-    assert row.decision.interlocutor == InterlocutorType.CLIENT
-    assert row.decision.target_relative_folder == "Correspondance/GVA"
-    assert row.action == PreviewAction.ARCHIVE
-
-
-def test_pipeline_corrects_received_gva_mail_to_client_even_when_ai_says_external(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
-    mail = MailMetadata(
-        entry_id="ENTRY-RECEIVED-GVA",
-        project_number="2025-4893",
-        outlook_folder="Boite de reception/2025/2025-4893",
+    supplier_mail = mail(
         direction=Direction.RECEIVED,
-        subject="TR: Approbation du plan de la cloison",
-        sender_name="RIVA Blaise",
-        sender_email="",
-        recipients=["lionel@balzmetal.ch", "andre@balzmetal.ch"],
-        sent_at=datetime(2026, 4, 7, 15, 10),
-        body_excerpt=(
-            "Geneve Aeroport\n"
-            "Blaise RIVA - Technicien architecte\n"
-            "blaise.riva@gva.ch"
-        ),
+        sender_email="sales@metal.test",
+        recipients=["lionel@balzmetal.ch"],
     )
+
+    row = pipeline.preview([supplier_mail])[0]
+
+    assert row.action == PreviewAction.ARCHIVE
+    assert row.decision.target_relative_folder == (
+        "Fournisseurs/Demande de prix/Metal Factory"
+    )
+
+
+def test_supplier_correspondence_result_is_sent_to_review(tmp_path: Path) -> None:
+    create_project(tmp_path)
     pipeline = ClassificationPipeline(
         projects_root=tmp_path,
         ai_mode=AiMode.ALL,
-        ai_classifier=InternalAiClassifier(),
+        ai_classifier=FakeAiClassifier([ai_result("Correspondance", "client")]),
+        organization_directory=FakeDirectory(),
     )
 
-    row = pipeline.preview([mail])[0]
-
-    assert row.classification.ai is not None
-    assert row.classification.ai.interlocutor == "client"
-    assert row.decision.interlocutor == InterlocutorType.CLIENT
-    assert row.decision.target_relative_folder == "Correspondance/GVA"
-    assert row.action == PreviewAction.ARCHIVE
-
-
-def test_pipeline_known_client_domain_overrides_supplier_rule_keywords(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
-    mail = MailMetadata(
-        entry_id="ENTRY-SENT-GVA-COMMANDE",
-        project_number="2025-4893",
-        outlook_folder="Boite de reception/2025/2025-4893",
-        direction=Direction.SENT,
-        subject="TR: Commande et approbation du plan",
-        sender_name="Lionel",
-        sender_email="lionel@balzmetal.ch",
-        recipients=["damien.pasquier@gva.ch"],
-        sent_at=datetime(2026, 4, 23, 13, 46),
-        attachment_names=["2025-4788-ENS-100_B.pdf"],
-        body_excerpt="Veuillez trouver ci-joint les plans pour approbation.",
-    )
-    pipeline = ClassificationPipeline(projects_root=tmp_path, ai_mode=AiMode.DISABLED)
-
-    row = pipeline.preview([mail])[0]
-
-    assert row.classification.rule.suggested_interlocutor == InterlocutorType.CLIENT
-    assert row.decision.mail_type == MailType.COMMANDE
-    assert row.decision.interlocutor == InterlocutorType.CLIENT
-    assert row.decision.target_relative_folder == "Correspondance/GVA"
-    assert row.action == PreviewAction.ARCHIVE
-
-
-def test_pipeline_known_client_domain_overrides_ai_supplier_decision(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
-    mail = MailMetadata(
-        entry_id="ENTRY-SENT-GVA-AI-SUPPLIER",
-        project_number="2025-4893",
-        outlook_folder="Boite de reception/2025/2025-4893",
-        direction=Direction.SENT,
-        subject="TR: Commande et approbation du plan",
-        sender_name="Lionel",
-        sender_email="lionel@balzmetal.ch",
-        recipients=["damien.pasquier@gva.ch"],
-        sent_at=datetime(2026, 4, 23, 13, 46),
-        attachment_names=["2025-4788-ENS-100_B.pdf"],
-        body_excerpt="Veuillez trouver ci-joint les plans pour approbation.",
-    )
-    pipeline = ClassificationPipeline(
-        projects_root=tmp_path,
-        ai_mode=AiMode.ALL,
-        ai_classifier=SupplierAiClassifier(),
+    row = pipeline.preview_one(
+        mail(
+            direction=Direction.RECEIVED,
+            sender_email="sales@metal.test",
+            recipients=["lionel@balzmetal.ch"],
+        )
     )
 
-    row = pipeline.preview([mail])[0]
-
-    assert row.classification.ai is not None
-    assert row.classification.ai.interlocutor == "client"
-    assert row.classification.ai.target_folder == "Correspondance"
-    assert row.decision.interlocutor == InterlocutorType.CLIENT
-    assert row.decision.target_relative_folder == "Correspondance/GVA"
-    assert row.action == PreviewAction.ARCHIVE
-
-
-def test_pipeline_disabled_ai_keeps_ambiguous_mail_for_review(tmp_path: Path) -> None:
-    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
-    pipeline = ClassificationPipeline(projects_root=tmp_path, ai_mode=AiMode.DISABLED)
-
-    row = pipeline.preview_one(sample_mail(subject="Question", body="Pouvez-vous regarder ?"))
-
-    assert row.classification.ai is None
     assert row.action == PreviewAction.REVIEW
+    assert row.decision.target_relative_folder == "A verifier"
 
 
-def test_pipeline_falls_back_to_rules_when_ai_fails(tmp_path: Path) -> None:
-    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
+def test_unknown_directory_role_is_never_silently_archived(tmp_path: Path) -> None:
+    create_project(tmp_path)
     pipeline = ClassificationPipeline(
         projects_root=tmp_path,
+        ai_mode=AiMode.ALL,
+        ai_classifier=FakeAiClassifier([ai_result("Correspondance", "client", company="GVA")]),
+        organization_directory=FakeDirectory(),
+    )
+
+    row = pipeline.preview_one(mail(recipients=["unknown@example.test"]))
+
+    assert row.action == PreviewAction.REVIEW
+    assert row.decision.interlocutor == InterlocutorType.INCONNU
+    assert "annuaire" in row.classification.ai.reason if row.classification.ai else False
+
+
+def test_disabled_or_failed_ai_has_no_keyword_fallback(tmp_path: Path) -> None:
+    create_project(tmp_path)
+    explicit_subject = "COMMANDE FERME ET CONFIRMEE"
+    disabled = ClassificationPipeline(projects_root=tmp_path, ai_mode=AiMode.DISABLED)
+    failing = ClassificationPipeline(
+        projects_root=tmp_path,
+        ai_mode=AiMode.ALL,
         ai_classifier=FailingAiClassifier(),
     )
 
-    row = pipeline.preview_one(sample_mail(subject="Question", body="Pouvez-vous regarder ?"))
+    disabled_row = disabled.preview_one(mail(subject=explicit_subject))
+    failing_row = failing.preview_one(mail(subject=explicit_subject))
 
-    assert row.classification.ai is None
-    assert row.action == PreviewAction.REVIEW
+    assert disabled_row.action == PreviewAction.REVIEW
+    assert failing_row.action == PreviewAction.REVIEW
+    assert disabled_row.classification.rule.matched_rules == []
+    assert failing_row.classification.rule.matched_terms == []
 
 
-def test_pipeline_uses_learned_terms_before_regular_rules(tmp_path: Path) -> None:
-    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
+def test_first_external_recipient_and_history_are_sent_to_ai(tmp_path: Path) -> None:
+    create_project(tmp_path)
+    start = datetime(2026, 5, 6, 9, 0)
+    classifier = FakeAiClassifier(
+        [
+            ai_result("Correspondance", "client"),
+            ai_result("Correspondance", "client"),
+        ]
+    )
     pipeline = ClassificationPipeline(
         projects_root=tmp_path,
-        ai_mode=AiMode.DISABLED,
-        learned_rules=[
-            LearnedClassificationRule(
-                term="mot appris",
-                mail_type=MailType.ADMINISTRATIF,
-                interlocutor=InterlocutorType.CLIENT,
-                target_relative_folder="Correspondance",
-            )
-        ],
+        ai_mode=AiMode.ALL,
+        ai_classifier=classifier,
+        organization_directory=FakeDirectory(),
     )
+    later = mail(entry_id="LATER", sent_at=start + timedelta(hours=1))
+    earlier = mail(entry_id="EARLIER", sent_at=start)
 
-    row = pipeline.preview_one(sample_mail(subject="Mot appris", body=""))
+    rows = pipeline.preview([later, earlier])
 
-    assert row.decision.mail_type == MailType.ADMINISTRATIF
-    assert row.classification.rule.matched_rules == ["apprentissage:mot appris"]
+    assert [row.mail.entry_id for row in rows] == ["LATER", "EARLIER"]
+    first_context = classifier.contexts[0]
+    second_context = classifier.contexts[1]
+    assert first_context["counterparty"]["primary_email"] == "contact@gva.ch"
+    assert first_context["counterparty"]["organization_name"] == "AIG"
+    assert second_context["recent_company_history"][0]["subject"] == earlier.subject
 
 
-def test_pipeline_ignores_learned_misleading_terms(tmp_path: Path) -> None:
-    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
+def test_verified_manual_examples_are_included_in_context(tmp_path: Path) -> None:
+    create_project(tmp_path)
+    classifier = FakeAiClassifier([ai_result("Correspondance", "client")])
+    example = VerifiedRoutingExample(
+        project_number="2025-4893",
+        subject="Validation manuelle precedente",
+        organization_name="AIG",
+        organization_role=InterlocutorType.CLIENT,
+        category=RoutingCategory.CORRESPONDANCE,
+    )
     pipeline = ClassificationPipeline(
         projects_root=tmp_path,
-        ai_mode=AiMode.DISABLED,
-        misleading_terms=[LearnedMisleadingTerm(term="offre")],
+        ai_mode=AiMode.ALL,
+        ai_classifier=classifier,
+        organization_directory=FakeDirectory(),
+        verified_examples=[example],
     )
 
-    row = pipeline.preview_one(sample_mail(subject="Offre spéciale", body="Annonce"))
+    pipeline.preview_one(mail())
 
-    assert row.decision.mail_type == MailType.A_VERIFIER
-    assert row.classification.rule.matched_terms == []
+    examples = classifier.contexts[0]["verified_manual_examples"]
+    assert examples[0]["subject"] == "Validation manuelle precedente"
+
+
+def test_preview_reports_progress_for_every_ai_decision(tmp_path: Path) -> None:
+    create_project(tmp_path)
+    classifier = FakeAiClassifier(
+        [ai_result("Correspondance", "client"), ai_result("Correspondance", "client")]
+    )
+    pipeline = ClassificationPipeline(
+        projects_root=tmp_path,
+        ai_mode=AiMode.ALL,
+        ai_classifier=classifier,
+        organization_directory=FakeDirectory(),
+    )
+    progress: list[tuple[int, int]] = []
+
+    pipeline.preview(
+        [mail(entry_id="1"), mail(entry_id="2")],
+        progress_callback=lambda index, total: progress.append((index, total)),
+    )
+
+    assert progress == [(1, 2), (2, 2)]

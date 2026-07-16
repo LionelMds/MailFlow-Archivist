@@ -58,8 +58,9 @@ class AppSettings(BaseModel):
     outlook_root_folder: str = "Boite de reception"
     selected_outlook_account: str | None = None
     selected_year: str | None = None
-    ai_mode: AiMode = AiMode.AMBIGUOUS_ONLY
+    ai_mode: AiMode = AiMode.ALL
     ai_model: str = DEFAULT_AI_MODEL
+    openai_timeout_seconds: float = 25.0
     ai_include_body_excerpt: bool = True
     privacy_mask_phone_numbers: bool = False
     review_reminder_times: list[str] = Field(default_factory=lambda: ["09:00", "14:00"])
@@ -75,6 +76,8 @@ def load_settings(path: Path | None = None) -> AppSettings:
         return base
     raw = json.loads(config_path.read_text(encoding="utf-8"))
     raw.pop("openai_api_key", None)
+    if raw.get("ai_mode") == AiMode.AMBIGUOUS_ONLY.value:
+        raw["ai_mode"] = AiMode.ALL.value
     return AppSettings.model_validate(raw)
 
 

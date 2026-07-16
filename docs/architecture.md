@@ -12,9 +12,11 @@ Le code separe les zones a risque des fonctions pures :
   non destructive des destinations lors des renommages ou fusions.
 - `core.project_html_exporter` : generation du journal HTML projet et export des
   pieces jointes liees.
-- `classifier` : regles, IA et fusion de decision.
+- `classifier.routing_context` : interlocuteur principal, autorite de l'annuaire,
+  historique commercial et exemples manuels verifies.
+- `classifier` : sortie IA structuree a trois categories, garde-fous metier et decision.
 - `outlook` : adaptateurs `pywin32`, scanner et exporteur mockables.
-- `storage` : journal SQLite, apprentissage manuel et annuaire entreprises/domaines.
+- `storage` : journal SQLite, exemples de routage verifies et annuaire entreprises/domaines.
 - `ui` : interface PySide6.
 
 Les tests unitaires ciblent d'abord les fonctions pures. Outlook et OpenAI sont accessibles par injection de dependances afin de pouvoir les mocker.

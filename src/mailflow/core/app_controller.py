@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +9,7 @@ from typing import Protocol, cast
 from mailflow.classifier.ai_classifier import AiClassifier
 from mailflow.classifier.decision_engine import destination_for
 from mailflow.classifier.pipeline import ClassificationPipeline, action_from_decision
+from mailflow.classifier.routing_context import primary_external_email
 from mailflow.config import AppSettings, get_openai_api_key
 from mailflow.core.archive_actions import (
     mark_rows_archivable,
@@ -28,9 +28,7 @@ from mailflow.core.contact_directory import (
     DirectoryImportResult,
     OrganizationDirectoryEntry,
     ProjectParticipantEntry,
-    email_domain,
     import_contact_directory_from_mails,
-    split_contact,
 )
 from mailflow.core.correspondence_hierarchy import (
     OrganizationDirectoryProtocol,
@@ -44,11 +42,7 @@ from mailflow.core.folder_tree import (
     merge_folder,
     rename_folder_leaf,
 )
-from mailflow.core.manual_review import (
-    LearnedClassificationRule,
-    LearnedMisleadingTerm,
-    apply_manual_classification,
-)
+from mailflow.core.manual_review import apply_manual_classification, verified_example_from_signal
 from mailflow.core.project_html_exporter import (
     ProjectHtmlExportResult,
     export_project_correspondence_html,
@@ -58,7 +52,6 @@ from mailflow.core.reporting import export_preview_report
 from mailflow.core.scan_service import DirectoryScanRequest, OutlookScanService, ScanRequest
 from mailflow.models import (
     AiMode,
-    Direction,
     InterlocutorType,
     MailMetadata,
     ManualClassificationUpdate,
@@ -66,6 +59,7 @@ from mailflow.models import (
     OutlookAccount,
     PreviewAction,
     PreviewRow,
+    VerifiedRoutingExample,
 )
 from mailflow.outlook.client import OutlookClient
 from mailflow.outlook.exporter import OutlookExporter
@@ -73,6 +67,8 @@ from mailflow.outlook.scanner import OutlookScanner, ScannedMail
 from mailflow.storage.directory_store import SQLiteDirectoryStore
 from mailflow.storage.learning_store import SQLiteLearningStore
 from mailflow.storage.sqlite_store import SQLiteArchiveStore
+
+ScanProgressCallback = Callable[[str], None]
 
 
 class ScanServiceProtocol(Protocol):
@@ -90,7 +86,12 @@ class ScanServiceProtocol(Protocol):
 
 
 class PreviewPipelineProtocol(Protocol):
-    def preview(self, mails: list[MailMetadata]) -> list[PreviewRow]:
+    def preview(
+        self,
+        mails: list[MailMetadata],
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> list[PreviewRow]:
         ...
 
 
@@ -106,10 +107,7 @@ class LearningStoreProtocol(Protocol):
     def record(self, signal: ManualLearningSignal) -> None:
         ...
 
-    def learned_rules(self) -> list[LearnedClassificationRule]:
-        ...
-
-    def misleading_terms(self) -> list[LearnedMisleadingTerm]:
+    def verified_examples(self) -> list[VerifiedRoutingExample]:
         ...
 
 
@@ -149,6 +147,9 @@ class DirectoryStoreProtocol(
     ) -> InterlocutorType | None:
         ...
 
+    def organization_id_for_email(self, email: str) -> int | None:
+        ...
+
 
 @dataclass(frozen=True)
 class PreviewRequest:
@@ -180,8 +181,15 @@ class AppController:
         self.preview_rows: list[PreviewRow] = []
         self.outlook_items: dict[str, object] = {}
 
-    def scan_and_preview(self, request: PreviewRequest) -> list[PreviewRow]:
+    def scan_and_preview(
+        self,
+        request: PreviewRequest,
+        *,
+        progress_callback: ScanProgressCallback | None = None,
+    ) -> list[PreviewRow]:
         normalized = _normalize_preview_request(request)
+        if progress_callback is not None:
+            progress_callback("Lecture Outlook en cours...")
         scanned = self.scan_service.scan_with_items(
             ScanRequest(
                 account_identifier=normalized.account_identifier,
@@ -192,12 +200,45 @@ class AppController:
         )
         mails = [item.metadata for item in scanned]
         self.outlook_items = {item.metadata.entry_id: item.item for item in scanned}
-        self.preview_rows = self.preview_pipeline.preview(mails)
+        if progress_callback is not None:
+            progress_callback(f"{len(mails)} mail(s) lus. Classification en cours...")
+        self.preview_rows = self.preview_pipeline.preview(
+            mails,
+            progress_callback=(
+                None
+                if progress_callback is None
+                else lambda index, total: progress_callback(
+                    f"Classification {index}/{total}..."
+                )
+            ),
+        )
+        if progress_callback is not None:
+            progress_callback(f"{len(self.preview_rows)} mail(s) prets.")
         return self.preview_rows
 
     def reset_preview(self) -> list[PreviewRow]:
         self.preview_rows = []
         self.outlook_items = {}
+        return self.preview_rows
+
+    def reclassify_preview(
+        self,
+        *,
+        progress_callback: ScanProgressCallback | None = None,
+    ) -> list[PreviewRow]:
+        mails = [row.mail for row in self.preview_rows]
+        if not mails:
+            return self.preview_rows
+        self.preview_rows = self.preview_pipeline.preview(
+            mails,
+            progress_callback=(
+                None
+                if progress_callback is None
+                else lambda index, total: progress_callback(
+                    f"Reclassification {index}/{total}..."
+                )
+            ),
+        )
         return self.preview_rows
 
     def rows_ready_for_archive(self, *, include_review: bool = False) -> list[PreviewRow]:
@@ -291,7 +332,39 @@ class AppController:
         self.preview_rows[row_index] = updated_row
         if self.learning_store is not None:
             self.learning_store.record(signal)
-        return updated_row
+        example = verified_example_from_signal(signal)
+        add_example = getattr(self.preview_pipeline, "add_verified_example", None)
+        if example is not None and callable(add_example):
+            add_example(example)
+        self._remember_manual_project_role(updated_row, update.interlocutor)
+        return self.preview_rows[row_index]
+
+    def _remember_manual_project_role(
+        self,
+        row: PreviewRow,
+        role: InterlocutorType,
+    ) -> None:
+        if self.directory_store is None or role not in {
+            InterlocutorType.CLIENT,
+            InterlocutorType.FOURNISSEUR,
+        }:
+            return
+        email = primary_external_email(row.mail)
+        if email is None:
+            return
+        organization_id = self.directory_store.organization_id_for_email(email)
+        if organization_id is None:
+            return
+        self.directory_store.set_project_participant_role(
+            row.mail.project_number,
+            organization_id,
+            role,
+        )
+        self.preview_rows = apply_project_roles_to_rows(
+            self.preview_rows,
+            self.directory_store,
+            self.projects_root,
+        )
 
     def suggested_account_identifier(self) -> str | None:
         return None
@@ -476,14 +549,11 @@ def build_default_controller(settings: AppSettings) -> AppController:
             archive_state=store,
             ai_mode=settings.ai_mode,
             ai_classifier=ai_classifier,
-            rule_confidence_threshold=settings.rule_confidence_threshold,
             decision_confidence_threshold=settings.decision_confidence_threshold,
             include_body_for_ai=settings.ai_include_body_excerpt,
             privacy_mask_phone_numbers=settings.privacy_mask_phone_numbers,
-            learned_rules=learning_store.learned_rules(),
-            misleading_terms=learning_store.misleading_terms(),
             organization_directory=directory_store,
-            client_email_domains=settings.client_email_domains,
+            verified_examples=learning_store.verified_examples(),
         ),
         outlook_client=outlook_client,
         projects_root=settings.local_projects_root,
@@ -545,7 +615,11 @@ def _build_ai_classifier(settings: AppSettings) -> AiClassifier | None:
     api_key = get_openai_api_key()
     if not api_key:
         return None
-    return AiClassifier(api_key=api_key, model=settings.ai_model)
+    return AiClassifier(
+        api_key=api_key,
+        model=settings.ai_model,
+        timeout_seconds=settings.openai_timeout_seconds,
+    )
 
 
 def _normalize_preview_request(request: PreviewRequest) -> PreviewRequest:
@@ -633,22 +707,8 @@ def _project_role_for_row(
 
 
 def _participant_emails(mail: MailMetadata) -> list[str]:
-    contacts = (
-        [mail.recipients[0] if mail.recipients else ""]
-        if mail.direction == Direction.SENT
-        else [mail.sender_email, mail.sender_name, mail.body_excerpt]
-    )
-    emails: list[str] = []
-    for contact in contacts:
-        _display_name, parsed_email = split_contact(contact)
-        if parsed_email and parsed_email not in emails:
-            emails.append(parsed_email)
-        for match in re.finditer(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", contact):
-            email = match.group(0).casefold()
-            domain = email_domain(email)
-            if domain is not None and email not in emails:
-                emails.append(email)
-    return emails
+    email = primary_external_email(mail)
+    return [] if email is None else [email]
 
 
 def _append_project_role_reason(reason: str, role: InterlocutorType) -> str:

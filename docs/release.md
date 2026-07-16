@@ -1,5 +1,16 @@
 # Release
 
+## Version 0.8.0
+
+- classification semantique IA limitee a `Correspondance`, `Demande de prix` et
+  `Commande` ;
+- suppression complete du classement et de l'apprentissage par mots-cles ;
+- entreprise et role verrouilles par l'annuaire et le destinataire externe prioritaire ;
+- contexte chronologique fournisseur et exemples manuels verifies transmis a l'IA ;
+- correction manuelle simplifiee et reclassification IA du projet depuis l'interface ;
+- nouveau logo et nouvelles icones multi-resolution Windows/macOS ;
+- progression de scan plus visible et delai OpenAI borne.
+
 Les releases sont construites par GitHub Actions depuis un tag `v*`.
 
 ## Publier une release
@@ -18,9 +29,11 @@ propres a chaque plateforme. Il ne collecte pas tout PySide6 : les modules Qt lo
 utilises, comme WebEngine, QML, Quick, Multimedia, Designer et PDF, sont exclus pour
 garder des artefacts raisonnables.
 
-Le logo officiel est embarque depuis `src/mailflow/assets`. PyInstaller applique
-`mailflow-icon.ico` sous Windows et `mailflow-icon.icns` sous macOS, et l'installateur
-Windows Inno Setup reprend la meme icone.
+Le logo officiel est embarque depuis `src/mailflow/assets` sous forme de PNG source
+transparent 1024 px. Les icones plateforme sont generees en multi-resolution :
+`mailflow-icon.ico` pour Windows et `mailflow-icon.icns` pour macOS. PyInstaller
+applique l'icone adaptee a chaque OS, et l'installateur Windows Inno Setup reprend la
+meme icone `.ico`.
 
 ## Artefacts
 

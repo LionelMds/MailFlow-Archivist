@@ -28,7 +28,7 @@ Avant tout archivage, l'utilisateur garde la main sur :
 Apres la classification, MailFlow propose une destination par entreprise
 d'interlocuteur, limitee a trois dossiers metier :
 
-- correspondance client, intervenant ou interne : `Correspondance/Entreprise` ;
+- correspondance client : `Correspondance/Entreprise` ;
 - demandes de prix, demandes d'offre, RFQ, devis et offres fournisseur :
   `Fournisseurs/Demande de prix/Entreprise` ;
 - commandes, confirmations, factures, livraisons et suivis directement lies a une
@@ -38,8 +38,8 @@ d'interlocuteur, limitee a trois dossiers metier :
 `Correspondance` n'est pas utilise pour les fournisseurs. Si un mail fournisseur n'est
 pas clairement une demande de prix/offre ou une commande/suivi de commande, la ligne
 reste `A verifier` afin d'etre rangee manuellement dans le bon dossier fournisseur.
-La destination decidee par les regles, l'IA ou la correction manuelle prime, puis
-MailFlow ajoute seulement le dossier de l'entreprise.
+L'annuaire decide de l'entreprise et de son role. L'IA decide uniquement de la phase
+metier parmi les trois categories, puis MailFlow ajoute le dossier de l'entreprise.
 
 L'entreprise est d'abord resolue depuis l'annuaire local. Celui-ci associe les domaines
 et adresses e-mail aux entreprises, par exemple `gva.ch -> AIG`. Si aucun lien n'est
@@ -50,11 +50,11 @@ La destination reste modifiable manuellement dans la previsualisation. Les sous-
 de destination sont crees si le dossier projet existe deja ; le dossier projet lui-meme
 n'est jamais cree automatiquement.
 
-Le role d'une entreprise peut aussi etre fixe par projet dans l'onglet `Annuaire` :
-`client`, `fournisseur`, `intervenant_externe`, `interne` ou `inconnu`. Ce role prime
-sur la reponse IA pour toutes les lignes du projet scanne. Par defaut, `gva.ch` est
-traite comme domaine client, ce qui evite de classer les echanges AIG/GVA comme
-`interne` ou simple intervenant lorsque des collegues Balz Metal sont en copie.
+Le role d'une entreprise peut etre fixe par projet dans l'onglet `Annuaire`. Seuls les
+roles `client` et `fournisseur` permettent l'archivage automatique; les autres restent
+a verifier. Ce role prime sur la reponse IA pour toutes les lignes du projet scanne.
+Pour un mail envoye, le premier destinataire externe prime sur les collegues Balz Metal
+places ensuite en copie.
 
 ## Arborescence proposee
 
@@ -105,11 +105,9 @@ python -m mailflow --import-contact-directory --account "lionel@balzmetal.ch" --
 
 ## Mode IA
 
-Dans `Configuration`, choisir le mode IA :
-
-- `desactivee` pour rester en regles locales uniquement ;
-- `ambigu seulement` pour appeler l'IA seulement quand les regles sont incertaines ;
-- `tout classifier` pour demander une classification IA sur tous les mails.
+Dans `Configuration`, choisir `activee` pour demander une classification IA sur tous
+les mails. Le mode `desactivee` ne tente aucune classification locale : les lignes
+restent a verifier manuellement.
 
 Coller la cle OpenAI dans `Cle API OpenAI`, puis cliquer sur `Enregistrer cle`.
 La cle est stockee dans le coffre du systeme et n'est pas sauvegardee dans le JSON.
@@ -130,8 +128,8 @@ Options de confidentialite :
 - `Envoyer l'extrait nettoye du corps a l'IA` peut etre decoche ;
 - `Masquer les numeros de telephone avant IA` remplace les numeros detectes.
 
-Si le mode IA est actif mais qu'aucune cle n'est disponible, MailFlow continue avec
-les regles locales et affiche un avertissement dans les logs.
+Si le mode IA est actif mais qu'aucune cle n'est disponible, MailFlow conserve les
+lignes en verification et affiche un avertissement dans les logs.
 
 ## Mises a jour
 

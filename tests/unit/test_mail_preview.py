@@ -51,13 +51,18 @@ def make_row(tmp_path: Path) -> PreviewRow:
         mail=mail,
         classification=ClassificationResult(
             rule=RuleClassification(
-                suggested_type=MailType.DEVIS,
-                suggested_interlocutor=InterlocutorType.FOURNISSEUR,
-                likely_archive=True,
+                confidence=0.0,
+            ),
+            ai=AiMailClassification(
+                category="Demande de prix",
+                organization_role="fournisseur",
+                organization_name="Dupont",
                 confidence=0.9,
-                matched_rules=["devis"],
-                matched_terms=["offre"],
-            )
+                requires_review=False,
+                short_summary="Offre fournisseur.",
+                reason="Le sens de l'echange correspond a la consultation.",
+                evidence=["offre"],
+            ),
         ),
         decision=decision,
         action=PreviewAction.ARCHIVE,
@@ -77,11 +82,9 @@ def test_classification_highlight_terms_deduplicates_terms(tmp_path: Path) -> No
     row = row.model_copy(
         update={
             "classification": row.classification.model_copy(
-                update={
-                    "rule": row.classification.rule.model_copy(
-                        update={"matched_terms": ["offre", "Offre", "offerte"]}
-                    )
-                }
+                    update={"ai": row.classification.ai.model_copy(
+                        update={"evidence": ["offre", "Offre", "offerte"]}
+                    ) if row.classification.ai else None}
             )
         }
     )
@@ -92,14 +95,14 @@ def test_classification_highlight_terms_deduplicates_terms(tmp_path: Path) -> No
 def test_preview_row_to_html_shows_ai_decision_when_available(tmp_path: Path) -> None:
     row = make_row(tmp_path)
     ai = AiMailClassification(
-        archive=True,
-        usefulness="normal",
-        mail_type="devis",
-        interlocutor="fournisseur",
-        target_folder="Fournisseurs/Demande de prix",
+        category="Demande de prix",
+        organization_role="fournisseur",
+        organization_name="Dupont",
         confidence=0.88,
+        requires_review=False,
         short_summary="Offre fournisseur.",
         reason="Le sujet indique une offre.",
+        evidence=["offre"],
     )
     row = row.model_copy(
         update={"classification": row.classification.model_copy(update={"ai": ai})}
@@ -113,4 +116,9 @@ def test_preview_row_to_html_shows_ai_decision_when_available(tmp_path: Path) ->
 
 
 def test_ai_decision_html_says_when_ai_was_not_called(tmp_path: Path) -> None:
-    assert "IA non appelee" in ai_decision_html(make_row(tmp_path))
+    row = make_row(tmp_path)
+    without_ai = row.model_copy(
+        update={"classification": row.classification.model_copy(update={"ai": None})}
+    )
+
+    assert "IA non appelee" in ai_decision_html(without_ai)

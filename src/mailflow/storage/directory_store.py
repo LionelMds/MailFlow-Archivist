@@ -134,6 +134,14 @@ class SQLiteDirectoryStore:
             ).fetchone()
         return None if row is None else str(row[0])
 
+    def organization_id_for_email(self, email: str) -> int | None:
+        normalized_email = email.strip().casefold()
+        if not normalized_email:
+            return None
+        self.initialize()
+        with self._connect() as connection:
+            return _organization_id_for_email(connection, normalized_email)
+
     def interlocutor_for_email(
         self,
         project_number: str,

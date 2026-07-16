@@ -63,7 +63,14 @@ class FakeController:
         ]
         self.project_role = InterlocutorType.CLIENT
 
-    def scan_and_preview(self, _request: object) -> list[object]:
+    def scan_and_preview(
+        self,
+        _request: object,
+        *,
+        progress_callback: object | None = None,
+    ) -> list[object]:
+        if callable(progress_callback):
+            progress_callback("0 mail(s) prets.")
         self.preview_rows = []
         return []
 
@@ -281,8 +288,8 @@ def test_outlook_account_label_includes_smtp_address() -> None:
 
 def test_ai_settings_labels_are_french() -> None:
     assert ai_mode_label(AiMode.DISABLED) == "desactivee"
-    assert ai_mode_label(AiMode.AMBIGUOUS_ONLY) == "ambigu seulement"
-    assert ai_mode_label(AiMode.ALL) == "tout classifier"
+    assert ai_mode_label(AiMode.AMBIGUOUS_ONLY) == "activee"
+    assert ai_mode_label(AiMode.ALL) == "activee"
     assert openai_key_status_text(True) == "Cle enregistree (non testee)"
     assert openai_key_status_text(True, valid=True) == "Cle valide - IA OK"
     assert openai_key_status_text(True, valid=False) == "Cle invalide ou indisponible"
@@ -429,7 +436,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_project_digest_preview.isReadOnly()
     assert "Aucun projet scanne" in dynamic_window.mailflow_project_digest_preview.toPlainText()
     assert dynamic_window.mailflow_mail_preview.isReadOnly()
-    assert dynamic_window.mailflow_ai_mode_combo.currentData() == AiMode.AMBIGUOUS_ONLY.value
+    assert dynamic_window.mailflow_ai_mode_combo.currentData() == AiMode.ALL.value
     assert dynamic_window.mailflow_ai_model_input.currentText() == "gpt-5.4-nano"
     assert dynamic_window.mailflow_ai_model_input.count() >= len(AI_MODEL_OPTIONS)
     assert dynamic_window.mailflow_openai_key_input.echoMode() == QLineEdit.EchoMode.Password
@@ -442,6 +449,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_review_reminder_timer.interval() == 60000
     assert dynamic_window.mailflow_review_reminder_times_input.text() == "09:00, 14:00"
     assert dynamic_window.mailflow_scan_button.text() == "Scanner Outlook"
+    assert dynamic_window.mailflow_scan_status_label.text() == ""
     assert dynamic_window.mailflow_reset_button.text() == "Reinitialiser"
     assert not window.windowIcon().isNull()
     assert not dynamic_window.mailflow_tray_icon.icon().isNull()

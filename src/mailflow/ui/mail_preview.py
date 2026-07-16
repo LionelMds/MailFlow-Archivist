@@ -51,7 +51,8 @@ def preview_row_to_text(row: PreviewRow) -> str:
 
 
 def classification_highlight_terms(row: PreviewRow) -> list[str]:
-    return _dedupe_terms(list(row.classification.rule.matched_terms))
+    ai = row.classification.ai
+    return [] if ai is None else _dedupe_terms(list(ai.evidence))
 
 
 def ai_decision_html(row: PreviewRow) -> str:
@@ -62,9 +63,9 @@ def ai_decision_html(row: PreviewRow) -> str:
             "<b>Decision IA:</b> IA non appelee pour cette ligne."
             "</p>"
         )
-    action = "archiver" if ai.archive else "ne pas archiver"
+    action = "a verifier" if ai.requires_review else "archiver"
     summary = html.escape(
-        f"{action} | {ai.mail_type} | {ai.interlocutor} | "
+        f"{action} | {ai.category} | {ai.organization_role} | "
         f"{ai.target_folder} | {ai.confidence:.0%}"
     )
     short_summary = html.escape(ai.short_summary)

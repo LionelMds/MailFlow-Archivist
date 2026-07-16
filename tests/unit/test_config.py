@@ -26,6 +26,7 @@ def test_settings_round_trip_without_api_key(tmp_path: Path) -> None:
 
 def test_settings_default_ai_model_is_fast_low_cost() -> None:
     assert AppSettings().ai_model == "gpt-5.4-nano"
+    assert AppSettings().openai_timeout_seconds == 25.0
     assert "gpt-5.4-mini" in AI_MODEL_OPTIONS
     assert "gpt-5.5" in AI_MODEL_OPTIONS
 
