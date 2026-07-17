@@ -48,7 +48,12 @@ from mailflow.core.project_html_exporter import (
 )
 from mailflow.core.project_paths import local_project_path
 from mailflow.core.reporting import export_preview_report
-from mailflow.core.scan_service import DirectoryScanRequest, OutlookScanService, ScanRequest
+from mailflow.core.scan_service import (
+    DirectoryScanRequest,
+    OutlookScanService,
+    ProjectFolderOption,
+    ScanRequest,
+)
 from mailflow.models import (
     AiMode,
     InterlocutorType,
@@ -81,6 +86,12 @@ class ScanServiceProtocol(Protocol):
         self,
         request: DirectoryScanRequest,
     ) -> list[ScannedMail]:
+        ...
+
+    def list_project_folders(self, request: ScanRequest) -> list[ProjectFolderOption]:
+        ...
+
+    def scan_entry_ids(self, request: ScanRequest) -> set[str]:
         ...
 
 
@@ -161,6 +172,7 @@ class PreviewRequest:
     outlook_root_folder: str
     year: str
     project_number: str | None = None
+    project_numbers: tuple[str, ...] | None = None
 
 
 class AppController:
@@ -200,6 +212,7 @@ class AppController:
                 outlook_root_folder=normalized.outlook_root_folder,
                 year=normalized.year,
                 project_number=normalized.project_number,
+                project_numbers=normalized.project_numbers,
             )
         )
         mails = [item.metadata for item in scanned]
@@ -219,6 +232,74 @@ class AppController:
         if progress_callback is not None:
             progress_callback(f"{len(self.preview_rows)} mail(s) prets.")
         return self.preview_rows
+
+    def available_project_folders(
+        self,
+        request: PreviewRequest,
+    ) -> list[ProjectFolderOption]:
+        normalized = _normalize_preview_request(request)
+        return self.scan_service.list_project_folders(
+            ScanRequest(
+                account_identifier=normalized.account_identifier,
+                outlook_root_folder=normalized.outlook_root_folder,
+                year=normalized.year,
+            )
+        )
+
+    def scan_entry_ids(self, request: PreviewRequest) -> set[str]:
+        normalized = _normalize_preview_request(request)
+        return self.scan_service.scan_entry_ids(
+            ScanRequest(
+                account_identifier=normalized.account_identifier,
+                outlook_root_folder=normalized.outlook_root_folder,
+                year=normalized.year,
+                project_number=normalized.project_number,
+                project_numbers=normalized.project_numbers,
+            )
+        )
+
+    def scan_incremental_preview(
+        self,
+        request: PreviewRequest,
+        entry_ids: Sequence[str],
+        *,
+        progress_callback: ScanProgressCallback | None = None,
+    ) -> list[PreviewRow]:
+        wanted_ids = frozenset(entry_id for entry_id in entry_ids if entry_id)
+        if not wanted_ids:
+            return []
+        normalized = _normalize_preview_request(request)
+        if progress_callback is not None:
+            progress_callback("Lecture des nouveaux mails Outlook...")
+        scanned = self.scan_service.scan_with_items(
+            ScanRequest(
+                account_identifier=normalized.account_identifier,
+                outlook_root_folder=normalized.outlook_root_folder,
+                year=normalized.year,
+                project_number=normalized.project_number,
+                project_numbers=normalized.project_numbers,
+                entry_ids=wanted_ids,
+            )
+        )
+        mails = [item.metadata for item in scanned]
+        new_rows = self.preview_pipeline.preview(
+            mails,
+            progress_callback=(
+                None
+                if progress_callback is None
+                else lambda index, total: progress_callback(
+                    f"Classification des nouveaux mails {index}/{total}..."
+                )
+            ),
+        )
+        current_ids = {row.mail.entry_id for row in self.preview_rows}
+        self.preview_rows.extend(
+            row for row in new_rows if row.mail.entry_id not in current_ids
+        )
+        self.outlook_items.update(
+            {item.metadata.entry_id: item.item for item in scanned}
+        )
+        return new_rows
 
     def reset_preview(self) -> list[PreviewRow]:
         self.preview_rows = []
@@ -623,6 +704,15 @@ def _normalize_preview_request(request: PreviewRequest) -> PreviewRequest:
         outlook_root_folder=root,
         year=year,
         project_number=_clean_optional(request.project_number),
+        project_numbers=(
+            None
+            if request.project_numbers is None
+            else tuple(
+                project
+                for value in request.project_numbers
+                if (project := _clean_optional(value)) is not None
+            )
+        ),
     )
 
 

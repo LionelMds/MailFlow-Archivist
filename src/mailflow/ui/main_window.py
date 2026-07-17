@@ -70,6 +70,20 @@ UI_TEXT = {
 WATCH_INTERVAL_MS = 5 * 60 * 1000
 REMINDER_CHECK_INTERVAL_MS = 60 * 1000
 
+
+def project_folder_selected_by_default(
+    project_number: str,
+    project_filter: str,
+) -> bool:
+    cleaned_filter = project_filter.strip()
+    if not cleaned_filter:
+        return True
+    return (
+        project_number == cleaned_filter
+        or project_number.endswith(f"-{cleaned_filter}")
+    )
+
+
 @dataclass(frozen=True)
 class ArchiveSelectionSummary:
     selected_count: int
@@ -114,6 +128,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QLabel,
         QLineEdit,
         QListWidget,
+        QListWidgetItem,
         QMainWindow,
         QMenu,
         QMessageBox,
@@ -1363,8 +1378,24 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             set_update_status("Installation impossible", success=False)
             append_log(f"Erreur lancement installateur: {exc}")
 
+    def preview_request(
+        *,
+        project_numbers: Sequence[str] | None = None,
+        all_projects: bool = False,
+    ) -> PreviewRequest:
+        return PreviewRequest(
+            account_identifier=selected_account_identifier(),
+            outlook_root_folder=current_outlook_root_folder(),
+            year=year_input.text(),
+            project_number=None if all_projects else project_input.text(),
+            project_numbers=(
+                None if project_numbers is None else tuple(project_numbers)
+            ),
+        )
+
     def scan_current_preview(
         *,
+        project_numbers: Sequence[str] | None = None,
         progress_callback: Any | None = None,
     ) -> list[PreviewRow]:
         nonlocal active_controller
@@ -1375,19 +1406,71 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             active_controller = build_default_controller(settings)
             dynamic_window.mailflow_controller = active_controller
         return active_controller.scan_and_preview(
-            PreviewRequest(
-                account_identifier=selected_account_identifier(),
-                outlook_root_folder=current_outlook_root_folder(),
-                year=year_input.text(),
-                project_number=project_input.text(),
-            ),
+            preview_request(project_numbers=project_numbers),
             progress_callback=progress_callback,
         )
 
+    def choose_project_folders(options: Sequence[Any]) -> list[str] | None:
+        dialog = QDialog(window)
+        dialog.setWindowTitle("Dossiers Outlook a scanner")
+        dialog.resize(620, 520)
+        dialog_layout = QVBoxLayout(dialog)
+        folder_list = QListWidget()
+        preferred = project_input.text().strip()
+        for option in options:
+            item = QListWidgetItem(str(option.folder_name))
+            item.setData(Qt.ItemDataRole.UserRole, str(option.project_number))
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            checked = project_folder_selected_by_default(
+                str(option.project_number),
+                preferred,
+            )
+            item.setCheckState(
+                Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+            )
+            folder_list.addItem(item)
+        dialog_layout.addWidget(folder_list, 1)
+
+        selection_actions = QWidget()
+        selection_layout = QHBoxLayout(selection_actions)
+        selection_layout.setContentsMargins(0, 0, 0, 0)
+        select_all_button = QPushButton("Tout selectionner")
+        select_none_button = QPushButton("Tout deselectionner")
+        selection_layout.addWidget(select_all_button)
+        selection_layout.addWidget(select_none_button)
+        selection_layout.addStretch(1)
+        dialog_layout.addWidget(selection_actions)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        dialog_layout.addWidget(buttons)
+
+        def set_all_folders(check_state: Qt.CheckState) -> None:
+            for index in range(folder_list.count()):
+                folder_list.item(index).setCheckState(check_state)
+
+        select_all_button.clicked.connect(
+            lambda: set_all_folders(Qt.CheckState.Checked)
+        )
+        select_none_button.clicked.connect(
+            lambda: set_all_folders(Qt.CheckState.Unchecked)
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return [
+            str(folder_list.item(index).data(Qt.ItemDataRole.UserRole))
+            for index in range(folder_list.count())
+            if folder_list.item(index).checkState() == Qt.CheckState.Checked
+        ]
+
     def on_scan() -> None:
         scan_button.setEnabled(False)
-        set_scan_status("Scan Outlook en cours...")
-        append_log("Scan Outlook en cours...")
+        set_scan_status("Lecture des dossiers Outlook...")
+        append_log("Lecture des dossiers Outlook...")
         QApplication.processEvents()
 
         def progress(message: str) -> None:
@@ -1395,8 +1478,38 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             QApplication.processEvents()
 
         try:
-            rows = scan_current_preview(progress_callback=progress)
-            watch_state.reset(rows)
+            folders = active_controller.available_project_folders(
+                preview_request(all_projects=True)
+            )
+            if not folders:
+                set_scan_status("Aucun dossier projet trouve", success=False)
+                append_log("Aucun dossier projet Outlook trouve pour cette annee.")
+                return
+            selected_projects = choose_project_folders(folders)
+            if selected_projects is None:
+                set_scan_status("Scan annule")
+                append_log("Scan Outlook annule avant classification.")
+                return
+            if not selected_projects:
+                set_scan_status("Aucun dossier selectionne", success=False)
+                append_log("Selectionner au moins un dossier projet a scanner.")
+                return
+            set_scan_status("Scan Outlook en cours...")
+            append_log(
+                f"Scan Outlook: {len(selected_projects)} dossier(s) selectionne(s)."
+            )
+            rows = scan_current_preview(
+                project_numbers=selected_projects,
+                progress_callback=progress,
+            )
+            if watch_checkbox.isChecked():
+                watch_state.reset_entry_ids(
+                    active_controller.scan_entry_ids(
+                        preview_request(all_projects=True)
+                    )
+                )
+            else:
+                watch_state.reset(rows)
             refresh_table()
             refresh_directory_table()
             navigation.setCurrentRow(0)
@@ -1528,19 +1641,21 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log("Surveillance Outlook desactivee.")
             return
         try:
-            if not active_controller.preview_rows:
-                rows = scan_current_preview()
-                refresh_table()
-                append_log(f"{len(rows)} mails charges pour initialiser la surveillance.")
-            watch_state.reset(active_controller.preview_rows)
+            entry_ids = active_controller.scan_entry_ids(
+                preview_request(all_projects=True)
+            )
+            watch_state.reset_entry_ids(entry_ids)
             sync_review_queue_from_preview()
             watch_timer.start()
             sync_tray_watch_action(True)
             notify_user(
                 "Surveillance activee",
-                "MailFlow surveille Outlook toutes les 5 minutes.",
+                "MailFlow surveille tous les dossiers projet toutes les 5 minutes.",
             )
-            append_log("Surveillance Outlook activee: scan toutes les 5 minutes.")
+            append_log(
+                "Surveillance Outlook activee sur tous les dossiers projet: "
+                f"{len(entry_ids)} mail(s) connus, controle toutes les 5 minutes."
+            )
         except Exception as exc:
             watch_checkbox.blockSignals(True)
             watch_checkbox.setChecked(False)
@@ -1562,9 +1677,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             watch_paused_logged = True
             return
         watch_paused_logged = False
+        previous_entry_ids = set(watch_state.known_entry_ids)
         try:
-            rows = scan_current_preview()
-            change = watch_state.update(rows)
+            request = preview_request(all_projects=True)
+            current_entry_ids = active_controller.scan_entry_ids(request)
+            change = watch_state.update_entry_ids(current_entry_ids)
         except Exception as exc:
             append_log(f"Surveillance Outlook en attente: {exc}")
             notify_user(
@@ -1573,21 +1690,34 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 QSystemTrayIcon.MessageIcon.Warning,
             )
             return
-        archive_result = ArchiveBatchResult()
-        if change.new_count:
-            try:
-                archive_result = archive_new_ready_rows(change.new_entry_ids)
-            except Exception as exc:
-                append_log(f"Erreur archivage automatique: {exc}")
-                notify_user(
-                    "Archivage automatique en erreur",
-                    "Verifier MailFlow pour traiter les nouveaux mails.",
-                    QSystemTrayIcon.MessageIcon.Warning,
-                )
-        new_pending_count = sync_review_queue_from_preview()
-        refresh_table()
         if change.new_count == 0:
             return
+        try:
+            active_controller.scan_incremental_preview(
+                request,
+                change.new_entry_ids,
+            )
+        except Exception as exc:
+            watch_state.reset_entry_ids(previous_entry_ids)
+            append_log(f"Surveillance Outlook en attente: {exc}")
+            notify_user(
+                "Nouveaux mails en attente",
+                "La lecture ou la classification a echoue; MailFlow reessaiera.",
+                QSystemTrayIcon.MessageIcon.Warning,
+            )
+            return
+        archive_result = ArchiveBatchResult()
+        try:
+            archive_result = archive_new_ready_rows(change.new_entry_ids)
+        except Exception as exc:
+            append_log(f"Erreur archivage automatique: {exc}")
+            notify_user(
+                "Archivage automatique en erreur",
+                "Verifier MailFlow pour traiter les nouveaux mails.",
+                QSystemTrayIcon.MessageIcon.Warning,
+            )
+        new_pending_count = sync_review_queue_from_preview()
+        refresh_table()
         append_log(f"Surveillance Outlook: {change.new_count} nouveau(x) mail(s) detecte(s).")
         if archive_result.exported_count:
             append_log(f"Archivage automatique: {format_archive_result(archive_result)}")

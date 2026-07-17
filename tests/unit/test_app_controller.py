@@ -13,7 +13,11 @@ from mailflow.core.contact_directory import (
     DirectoryUpsertOutcome,
     OrganizationDirectoryEntry,
 )
-from mailflow.core.scan_service import DirectoryScanRequest, ScanRequest
+from mailflow.core.scan_service import (
+    DirectoryScanRequest,
+    ProjectFolderOption,
+    ScanRequest,
+)
 from mailflow.models import (
     ArchiveDecision,
     ClassificationResult,
@@ -43,7 +47,24 @@ class FakeScanService:
 
     def scan_with_items(self, request: ScanRequest) -> list[ScannedMail]:
         self.requests.append(request)
-        return [ScannedMail(item=object(), metadata=mail) for mail in self.mails]
+        return [
+            ScannedMail(item=object(), metadata=mail)
+            for mail in self.mails
+            if request.entry_ids is None or mail.entry_id in request.entry_ids
+        ]
+
+    def list_project_folders(self, request: ScanRequest) -> list[ProjectFolderOption]:
+        self.requests.append(request)
+        return [
+            ProjectFolderOption(
+                project_number="2025-4893",
+                folder_name="2025-4893 (Marquise)",
+            )
+        ]
+
+    def scan_entry_ids(self, request: ScanRequest) -> set[str]:
+        self.requests.append(request)
+        return {mail.entry_id for mail in self.mails}
 
     def scan_all_project_folders_with_items(
         self,
@@ -338,6 +359,58 @@ def test_controller_reports_scan_progress(tmp_path: Path) -> None:
         "Classification 1/1...",
         "1 mail(s) prets.",
     ]
+
+
+def test_controller_lists_projects_available_for_manual_scan(tmp_path: Path) -> None:
+    scanner = FakeScanService([])
+    controller = AppController(
+        scan_service=scanner,
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+
+    options = controller.available_project_folders(
+        PreviewRequest(
+            account_identifier="Balz",
+            outlook_root_folder="Boite de reception",
+            year="2025",
+            project_number="4893",
+        )
+    )
+
+    assert options[0].project_number == "2025-4893"
+    assert scanner.requests[-1].project_number is None
+
+
+def test_controller_appends_only_new_incremental_preview_rows(tmp_path: Path) -> None:
+    old_row = make_row(tmp_path, entry_id="ENTRY-OLD")
+    new_row = make_row(tmp_path, entry_id="ENTRY-NEW")
+    scanner = FakeScanService(
+        [make_mail("ENTRY-OLD"), make_mail("ENTRY-NEW")]
+    )
+    pipeline = FakePreviewPipeline([new_row])
+    controller = AppController(
+        scan_service=scanner,
+        preview_pipeline=pipeline,
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+    )
+    controller.preview_rows = [old_row]
+
+    rows = controller.scan_incremental_preview(
+        PreviewRequest(
+            account_identifier="Balz",
+            outlook_root_folder="Boite de reception",
+            year="2025",
+        ),
+        ["ENTRY-NEW"],
+    )
+
+    assert rows == [new_row]
+    assert controller.preview_rows == [old_row, new_row]
+    assert pipeline.mails == [make_mail("ENTRY-NEW")]
+    assert scanner.requests[-1].entry_ids == frozenset({"ENTRY-NEW"})
 
 
 def test_controller_reset_preview_clears_rows_and_outlook_items(tmp_path: Path) -> None:

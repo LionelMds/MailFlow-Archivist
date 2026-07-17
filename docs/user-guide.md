@@ -190,13 +190,21 @@ de chantier ajoutee comme fichier, restent exportees comme pieces jointes.
 
 ## Surveillance Outlook
 
-La case `Surveillance Outlook` garde l'application active pendant la journee et relance
-un scan toutes les 5 minutes. Si la fenetre MailFlow est ouverte avec une previsualisation
-en cours, la surveillance se met en attente pour ne pas ecraser les corrections manuelles.
-Lorsqu'elle peut scanner et qu'un nouvel `EntryID` Outlook apparait, MailFlow met a jour
-la previsualisation et le panneau `Arborescence`, puis affiche la fenetre. L'utilisateur
-peut choisir de mettre a jour le journal HTML immediatement, ou refuser pour verifier et
-corriger l'arborescence avant export.
+Avant un scan manuel, une fenetre liste tous les dossiers projet Outlook trouves pour
+l'annee selectionnee. Cocher uniquement les projets a classer, ou utiliser `Tout
+selectionner` et `Tout deselectionner`. Le champ `Projet` sert de preselection lorsqu'il
+contient un numero, mais tous les dossiers restent visibles.
+
+La case `Surveillance Outlook` garde l'application active pendant la journee et
+controle toutes les 5 minutes tous les dossiers projet de l'annee selectionnee. La
+selection effectuee pour un scan manuel ne limite jamais la surveillance. Le controle
+periodique compare uniquement les `EntryID` ; MailFlow ne charge les autres metadonnees,
+le corps, les pieces jointes et la classification IA que pour les nouveaux mails.
+
+Si la fenetre MailFlow est ouverte avec une previsualisation en cours, la surveillance
+se met en attente pour ne pas ecraser les corrections manuelles. Lorsqu'un nouvel
+`EntryID` Outlook apparait, MailFlow l'ajoute a la previsualisation existante sans
+reclassifier les mails deja connus.
 
 Si Outlook est ferme pendant un scan, l'erreur est affichee dans les logs et la
 surveillance reprendra au scan suivant lorsque Outlook sera de nouveau disponible.

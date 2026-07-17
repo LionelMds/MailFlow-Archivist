@@ -36,6 +36,7 @@ from mailflow.ui.main_window import (
     openai_key_status_style,
     openai_key_status_text,
     parse_reminder_times,
+    project_folder_selected_by_default,
     review_reminder_due_key,
     should_hide_to_tray,
     should_pause_watch_scan,
@@ -72,6 +73,19 @@ class FakeController:
         if callable(progress_callback):
             progress_callback("0 mail(s) prets.")
         self.preview_rows = []
+        return []
+
+    def available_project_folders(self, _request: object) -> list[object]:
+        return []
+
+    def scan_entry_ids(self, _request: object) -> set[str]:
+        return set()
+
+    def scan_incremental_preview(
+        self,
+        _request: object,
+        _entry_ids: object,
+    ) -> list[object]:
         return []
 
     def reset_preview(self) -> list[object]:
@@ -303,6 +317,26 @@ def test_ui_text_contains_expected_actions() -> None:
     assert "Destination proposee" in PREVIEW_COLUMNS
     assert ACTION_LABELS[PreviewAction.REVIEW] == "A verifier"
     assert UI_TEXT["archive_all_except_review"] == "Tout archiver sauf a verifier"
+
+
+@pytest.mark.parametrize(
+    ("project_number", "project_filter", "expected"),
+    [
+        ("2025-4893", "", True),
+        ("2025-4893", "4893", True),
+        ("2025-4893", "2025-4893", True),
+        ("2025-4893", "4900", False),
+    ],
+)
+def test_project_folder_default_selection(
+    project_number: str,
+    project_filter: str,
+    expected: bool,
+) -> None:
+    assert (
+        project_folder_selected_by_default(project_number, project_filter)
+        is expected
+    )
 
 
 def test_outlook_account_label_includes_smtp_address() -> None:

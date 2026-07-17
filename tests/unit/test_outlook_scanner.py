@@ -72,6 +72,15 @@ class DirectoryOnlyMailItem:
         raise AssertionError("directory import must not read categories")
 
 
+class EntryIdOnlyMailItem:
+    EntryID = "ENTRY-OLD"
+    MessageClass = "IPM.Note"
+
+    @property
+    def Subject(self) -> str:
+        raise AssertionError("EntryID scan must not read mail metadata")
+
+
 def test_iter_project_folders_filters_names() -> None:
     folders = FakeCollection(
         [
@@ -122,6 +131,40 @@ def test_scan_year_folder_scans_only_project_folders() -> None:
     assert len(mails) == 1
     assert mails[0].project_number == "2025-4893"
     assert mails[0].outlook_folder == "Boite de reception/2025/2025-4893"
+
+
+def test_scan_year_folder_entry_ids_does_not_read_mail_metadata() -> None:
+    project = SimpleNamespace(
+        Name="2025-4893",
+        Items=FakeCollection([EntryIdOnlyMailItem()]),
+    )
+    year_folder = SimpleNamespace(
+        Name="2025",
+        Folders=FakeCollection([project]),
+    )
+
+    entry_ids = OutlookScanner().scan_year_folder_entry_ids(year_folder)
+
+    assert entry_ids == {"ENTRY-OLD"}
+
+
+def test_scan_year_folder_reads_full_metadata_only_for_requested_entry_ids() -> None:
+    project = SimpleNamespace(
+        Name="2025-4893",
+        Items=FakeCollection([EntryIdOnlyMailItem(), mail_item("ENTRY-NEW")]),
+    )
+    year_folder = SimpleNamespace(
+        Name="2025",
+        Folders=FakeCollection([project]),
+    )
+
+    scanned = OutlookScanner().scan_year_folder_with_items(
+        year_folder,
+        outlook_root_path="Boite de reception",
+        entry_ids=frozenset({"ENTRY-NEW"}),
+    )
+
+    assert [item.metadata.entry_id for item in scanned] == ["ENTRY-NEW"]
 
 
 def test_scan_all_project_folders_recurses_under_root() -> None:

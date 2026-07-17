@@ -3,7 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 from types import SimpleNamespace
 
-from mailflow.core.scan_service import DirectoryScanRequest, OutlookScanService, ScanRequest
+from mailflow.core.scan_service import (
+    DirectoryScanRequest,
+    OutlookScanService,
+    ProjectFolderOption,
+    ScanRequest,
+)
 from mailflow.outlook.scanner import OutlookScanner
 
 
@@ -83,6 +88,90 @@ def test_scan_service_filters_specific_project() -> None:
     )
 
     assert [mail.entry_id for mail in mails] == ["ENTRY-1"]
+
+
+def test_scan_service_filters_multiple_selected_projects() -> None:
+    first = SimpleNamespace(
+        Name="2025-4893",
+        Items=FakeCollection([mail_item("ENTRY-1")]),
+    )
+    skipped = SimpleNamespace(
+        Name="2025-4900",
+        Items=FakeCollection([mail_item("ENTRY-2")]),
+    )
+    second = SimpleNamespace(
+        Name="2025-4999 (Extension)",
+        Items=FakeCollection([mail_item("ENTRY-3")]),
+    )
+    year_folder = SimpleNamespace(
+        Name="2025",
+        Folders=FakeCollection([first, skipped, second]),
+    )
+    service = OutlookScanService(
+        folder_resolver=FakeResolver(year_folder),
+        scanner=OutlookScanner(),
+    )
+
+    mails = service.scan(
+        ScanRequest(
+            account_identifier=None,
+            outlook_root_folder="Boite de reception",
+            year="2025",
+            project_numbers=("2025-4893", "4999"),
+        )
+    )
+
+    assert [mail.entry_id for mail in mails] == ["ENTRY-1", "ENTRY-3"]
+
+
+def test_scan_service_lists_project_folders_before_scan() -> None:
+    project = SimpleNamespace(Name="2025-4893 (Marquise)", Items=FakeCollection([]))
+    ignored = SimpleNamespace(Name="Archives", Items=FakeCollection([]))
+    year_folder = SimpleNamespace(
+        Name="2025",
+        Folders=FakeCollection([project, ignored]),
+    )
+    service = OutlookScanService(
+        folder_resolver=FakeResolver(year_folder),
+        scanner=OutlookScanner(),
+    )
+
+    options = service.list_project_folders(
+        ScanRequest(
+            account_identifier=None,
+            outlook_root_folder="Boite de reception",
+            year="2025",
+        )
+    )
+
+    assert options == [
+        ProjectFolderOption(
+            project_number="2025-4893",
+            folder_name="2025-4893 (Marquise)",
+        )
+    ]
+
+
+def test_scan_service_reads_entry_ids_without_full_mail_scan() -> None:
+    project = SimpleNamespace(
+        Name="2025-4893",
+        Items=FakeCollection([mail_item("ENTRY-1"), mail_item("ENTRY-2")]),
+    )
+    year_folder = SimpleNamespace(Name="2025", Folders=FakeCollection([project]))
+    service = OutlookScanService(
+        folder_resolver=FakeResolver(year_folder),
+        scanner=OutlookScanner(),
+    )
+
+    entry_ids = service.scan_entry_ids(
+        ScanRequest(
+            account_identifier=None,
+            outlook_root_folder="Boite de reception",
+            year="2025",
+        )
+    )
+
+    assert entry_ids == {"ENTRY-1", "ENTRY-2"}
 
 
 def test_scan_service_resolves_root_for_directory_import() -> None:

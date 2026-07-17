@@ -57,6 +57,7 @@ class OutlookScanner:
         *,
         outlook_root_path: str,
         project_numbers: set[str] | None = None,
+        entry_ids: frozenset[str] | None = None,
     ) -> list[ScannedMail]:
         year_name = str(getattr(year_folder, "Name", ""))
         scanned_mails: list[ScannedMail] = []
@@ -71,8 +72,32 @@ class OutlookScanner:
                     project_number,
                 ]
             )
-            scanned_mails.extend(self.scan_project_folder_with_items(project_folder, outlook_path))
+            scanned_mails.extend(
+                self.scan_project_folder_with_items(
+                    project_folder,
+                    outlook_path,
+                    entry_ids=entry_ids,
+                )
+            )
         return scanned_mails
+
+    def scan_year_folder_entry_ids(
+        self,
+        year_folder: Any,
+        *,
+        project_numbers: set[str] | None = None,
+    ) -> set[str]:
+        entry_ids: set[str] = set()
+        for project_folder in self.iter_project_folders(year_folder):
+            project_number = _project_number_from_folder(project_folder)
+            if project_numbers is not None and project_number not in project_numbers:
+                continue
+            for item in iter_com_collection(getattr(project_folder, "Items", [])):
+                if _looks_like_mail_item(item):
+                    entry_id = _text_attr(item, "EntryID")
+                    if entry_id:
+                        entry_ids.add(entry_id)
+        return entry_ids
 
     def scan_all_project_folders_with_items(
         self,
@@ -110,6 +135,8 @@ class OutlookScanner:
         self,
         project_folder: Any,
         outlook_path: str,
+        *,
+        entry_ids: frozenset[str] | None = None,
     ) -> list[ScannedMail]:
         project_number = _project_number_from_folder(project_folder)
         return [
@@ -123,6 +150,7 @@ class OutlookScanner:
             )
             for item in iter_com_collection(getattr(project_folder, "Items", []))
             if _looks_like_mail_item(item)
+            and (entry_ids is None or _text_attr(item, "EntryID") in entry_ids)
         ]
 
     def scan_project_folder_directory_items(

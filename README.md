@@ -77,19 +77,22 @@ L'onglet `Annuaire` permet aussi d'attribuer un role global a chaque entreprise 
 ce role devient la regle de base pour tous les projets existants et futurs.
 Le journal HTML permet aussi de filtrer par dossier cible.
 
-Apres le scan, le panneau `Arborescence` affiche les dossiers proposes avec le nombre
-de mails. L'utilisateur peut renommer un dossier ou fusionner deux dossiers detectes
-comme doublons avant toute creation de fichiers.
+Avant un scan manuel, MailFlow affiche tous les dossiers projet Outlook de l'annee
+selectionnee. L'utilisateur choisit les dossiers a traiter avec des cases a cocher ;
+les boutons permettent aussi de tout selectionner ou tout deselectionner. Apres le
+scan, le panneau `Arborescence` affiche les dossiers proposes avec le nombre de mails.
+L'utilisateur peut renommer un dossier ou fusionner deux dossiers detectes comme
+doublons avant toute creation de fichiers.
 
 Les images integrees dans le corps des mails, comme les logos de signature, ne sont pas
 exportees comme pieces jointes. Elles sont affichees directement dans le journal HTML.
 
-La case `Surveillance Outlook` relance un scan toutes les 5 minutes tant que
-l'application reste ouverte. Si une previsualisation est deja ouverte dans la fenetre,
-la surveillance se met en attente afin de ne pas ecraser les corrections manuelles.
-En cas de nouveaux mails detectes lors d'un scan autorise, MailFlow affiche la
-previsualisation et l'arborescence mises a jour, puis demande confirmation avant de
-mettre a jour le journal HTML.
+La case `Surveillance Outlook` controle toutes les 5 minutes tous les dossiers projet
+de l'annee selectionnee, quelle que soit la selection du dernier scan manuel. Le
+controle courant ne lit que les `EntryID` Outlook ; le corps, les pieces jointes et la
+classification IA ne sont charges que pour les nouveaux identifiants. Si une
+previsualisation est deja ouverte dans la fenetre, la surveillance se met en attente
+afin de ne pas ecraser les corrections manuelles.
 
 Quand la surveillance est active, fermer la fenetre masque MailFlow dans la zone de
 notification au lieu de l'arreter. Le menu de l'icone permet de rouvrir l'application,

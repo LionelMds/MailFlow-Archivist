@@ -1,5 +1,13 @@
 # Release
 
+## Version 0.8.4
+
+- ajout d'une fenetre de selection des dossiers projet avant chaque scan manuel ;
+- conservation de tous les dossiers dans le perimetre de la surveillance, quelle que
+  soit la selection manuelle ;
+- surveillance incrementale par `EntryID`, avec lecture complete et classification IA
+  uniquement pour les nouveaux mails.
+
 ## Version 0.8.3
 
 - remplacement du role par projet de l'annuaire par un role global pour chaque

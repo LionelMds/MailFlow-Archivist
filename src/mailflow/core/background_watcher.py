@@ -21,10 +21,16 @@ class WatchState:
     known_entry_ids: set[str] = field(default_factory=set)
 
     def reset(self, rows: Sequence[PreviewRow]) -> None:
-        self.known_entry_ids = _entry_ids(rows)
+        self.reset_entry_ids(_entry_ids(rows))
+
+    def reset_entry_ids(self, entry_ids: Sequence[str] | set[str]) -> None:
+        self.known_entry_ids = {entry_id for entry_id in entry_ids if entry_id}
 
     def update(self, rows: Sequence[PreviewRow]) -> WatchChange:
-        current = _entry_ids(rows)
+        return self.update_entry_ids(_entry_ids(rows))
+
+    def update_entry_ids(self, entry_ids: Sequence[str] | set[str]) -> WatchChange:
+        current = {entry_id for entry_id in entry_ids if entry_id}
         new_ids = sorted(current - self.known_entry_ids)
         self.known_entry_ids = current
         return WatchChange(new_entry_ids=new_ids, total_count=len(current))

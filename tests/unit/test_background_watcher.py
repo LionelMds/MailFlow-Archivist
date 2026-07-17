@@ -76,6 +76,16 @@ def test_watch_state_updates_baseline_after_each_scan(tmp_path: Path) -> None:
     assert state.update([first, second]).new_entry_ids == []
 
 
+def test_watch_state_can_use_lightweight_entry_id_scans() -> None:
+    state = WatchState()
+
+    state.reset_entry_ids({"ENTRY-1"})
+    change = state.update_entry_ids({"ENTRY-1", "ENTRY-2"})
+
+    assert change.new_entry_ids == ["ENTRY-2"]
+    assert change.total_count == 2
+
+
 def test_review_queue_tracks_pending_review_rows(tmp_path: Path) -> None:
     ready = make_row("READY", tmp_path)
     review = make_row("REVIEW", tmp_path, PreviewAction.REVIEW)
