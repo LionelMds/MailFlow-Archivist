@@ -260,9 +260,14 @@ class FakeController:
         return self.archive_ready(include_review=include_review)
 
 
-def make_preview_row(tmp_path: Path, action: PreviewAction) -> PreviewRow:
+def make_preview_row(
+    tmp_path: Path,
+    action: PreviewAction,
+    *,
+    entry_id: str | None = None,
+) -> PreviewRow:
     mail = MailMetadata(
-        entry_id=f"ENTRY-{action.value}",
+        entry_id=entry_id or f"ENTRY-{action.value}",
         project_number="2025-4893",
         outlook_folder="Boite de reception/2025/2025-4893",
         direction=Direction.RECEIVED,
@@ -403,6 +408,16 @@ def test_build_manual_classification_update_can_mark_manual_required() -> None:
     assert update.interlocutor == InterlocutorType.INCONNU
     assert update.learning_term is None
     assert update.manual_required
+
+
+def test_build_manual_classification_update_accepts_external_role_label() -> None:
+    update = build_manual_classification_update(
+        mail_type_value="Correspondance",
+        interlocutor_value="intervenant externe",
+        destination_value="Correspondance",
+    )
+
+    assert update.interlocutor == InterlocutorType.INTERVENANT_EXTERNE
 
 
 def test_build_manual_classification_update_keeps_supplier_role_without_category() -> None:
@@ -568,3 +583,44 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert controller.reset_count == 1
     window.close()
     app.quit()
+
+
+def test_preview_refresh_preserves_current_row_and_scroll_position(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow.ui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    controller = FakeController()
+    controller.preview_rows = [
+        make_preview_row(
+            tmp_path,
+            PreviewAction.ARCHIVE,
+            entry_id=f"ENTRY-{index:03d}",
+        )
+        for index in range(80)
+    ]
+    window = MainWindow(AppSettings(), controller=controller)
+    dynamic_window = cast(Any, window)
+    table = dynamic_window.mailflow_preview_table
+    window.show()
+    dynamic_window.mailflow_refresh_table()
+    app.processEvents()
+
+    table.setCurrentCell(55, 4)
+    table.clearSelection()
+    table.selectRow(55)
+    table.verticalScrollBar().setValue(35)
+    expected_scroll = table.verticalScrollBar().value()
+    assert expected_scroll > 0
+
+    dynamic_window.mailflow_refresh_table()
+    app.processEvents()
+
+    assert table.currentRow() == 55
+    assert [index.row() for index in table.selectionModel().selectedRows()] == [55]
+    assert table.verticalScrollBar().value() == expected_scroll
+    window.close()

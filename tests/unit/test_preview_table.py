@@ -133,6 +133,8 @@ def test_render_preview_rows_sets_headers_and_items(tmp_path: Path) -> None:
 def test_editable_options_for_manual_columns() -> None:
     assert MAIL_TYPE_OPTIONS == ("Correspondance", "Demande de prix", "Commande")
     assert "fournisseur" in INTERLOCUTOR_OPTIONS
+    assert "intervenant externe" in INTERLOCUTOR_OPTIONS
+    assert "interne" in INTERLOCUTOR_OPTIONS
     assert "Fournisseurs/Demande de prix" in DESTINATION_OPTIONS
     assert editable_options_for_column(TYPE_COLUMN) == MAIL_TYPE_OPTIONS
     assert editable_options_for_column(INTERLOCUTOR_COLUMN) == INTERLOCUTOR_OPTIONS

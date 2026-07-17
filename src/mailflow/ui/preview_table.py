@@ -38,10 +38,18 @@ MAIL_TYPE_OPTIONS = (
     RoutingCategory.DEMANDE_DE_PRIX.value,
     RoutingCategory.COMMANDE.value,
 )
+
+
+def interlocutor_option_label(interlocutor: InterlocutorType) -> str:
+    return interlocutor.value.replace("_", " ")
+
+
+def interlocutor_type_from_option(value: str) -> InterlocutorType:
+    return InterlocutorType(value.strip().casefold().replace(" ", "_"))
+
+
 INTERLOCUTOR_OPTIONS = (
-    InterlocutorType.CLIENT.value,
-    InterlocutorType.FOURNISSEUR.value,
-    InterlocutorType.INCONNU.value,
+    *(interlocutor_option_label(item) for item in InterlocutorType),
 )
 DESTINATION_OPTIONS = MANUAL_DESTINATIONS
 
@@ -90,7 +98,7 @@ def preview_row_to_cells(row: PreviewRow) -> list[str]:
             if decision.mail_type == MailType.A_VERIFIER
             else routing_category_for_mail_type(decision.mail_type).value
         ),
-        decision.interlocutor.value,
+        interlocutor_option_label(decision.interlocutor),
         decision.target_relative_folder,
         f"{decision.confidence:.0%}",
         ACTION_LABELS[row.action],

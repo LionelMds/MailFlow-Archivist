@@ -139,6 +139,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QSystemTrayIcon,
         QTableWidget,
         QTableWidgetItem,
+        QTableWidgetSelectionRange,
         QTextEdit,
         QToolButton,
         QTreeWidget,
@@ -170,6 +171,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         PREVIEW_COLUMNS,
         TYPE_COLUMN,
         editable_options_for_column,
+        interlocutor_option_label,
+        interlocutor_type_from_option,
         preview_row_to_cells,
         should_highlight_cell,
     )
@@ -675,8 +678,34 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             return
         event.accept()
 
-    def refresh_table() -> None:
+    def table_entry_id(row_index: int) -> str | None:
+        if row_index < 0:
+            return None
+        item = table.item(row_index, 0)
+        if item is None:
+            return None
+        value = item.data(Qt.ItemDataRole.UserRole)
+        return str(value) if value else None
+
+    def refresh_table(*, preferred_row_index: int | None = None) -> None:
         nonlocal refreshing_table
+        selected_entry_ids = {
+            entry_id
+            for index in table.selectionModel().selectedRows()
+            if (entry_id := table_entry_id(index.row())) is not None
+        }
+        current_entry_id = table_entry_id(table.currentRow())
+        current_column = max(table.currentColumn(), 0)
+        vertical_scroll = table.verticalScrollBar().value()
+        horizontal_scroll = table.horizontalScrollBar().value()
+        preferred_entry_id = (
+            active_controller.preview_rows[preferred_row_index].mail.entry_id
+            if preferred_row_index is not None
+            and 0 <= preferred_row_index < len(active_controller.preview_rows)
+            else None
+        )
+        if preferred_entry_id is not None:
+            selected_entry_ids = {preferred_entry_id}
         refreshing_table = True
         combo_by_cell.clear()
         table.clearContents()
@@ -688,6 +717,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 options = editable_options_for_column(column_index)
                 if options is None:
                     item = QTableWidgetItem(value)
+                    if column_index == 0:
+                        item.setData(Qt.ItemDataRole.UserRole, row.mail.entry_id)
                     if should_highlight_cell(row, column_index):
                         item.setBackground(QColor("#fff3b0"))
                     table.setItem(row_index, column_index, item)
@@ -708,6 +739,41 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 table.setCellWidget(row_index, column_index, combo)
                 combo_by_cell[(row_index, column_index)] = combo
         table.resizeColumnsToContents()
+        row_by_entry_id = {
+            row.mail.entry_id: row_index
+            for row_index, row in enumerate(active_controller.preview_rows)
+        }
+        target_entry_id = preferred_entry_id or current_entry_id
+        target_row = (
+            row_by_entry_id.get(target_entry_id)
+            if target_entry_id is not None
+            else None
+        )
+        table.clearSelection()
+        restored_selection = False
+        for entry_id in selected_entry_ids:
+            selected_row = row_by_entry_id.get(entry_id)
+            if selected_row is None:
+                continue
+            table.setRangeSelected(
+                QTableWidgetSelectionRange(
+                    selected_row,
+                    0,
+                    selected_row,
+                    len(PREVIEW_COLUMNS) - 1,
+                ),
+                True,
+            )
+            restored_selection = True
+        if target_row is not None and not restored_selection:
+            table.selectRow(target_row)
+        if target_row is not None:
+            table.setCurrentCell(
+                target_row,
+                min(current_column, len(PREVIEW_COLUMNS) - 1),
+            )
+        table.verticalScrollBar().setValue(vertical_scroll)
+        table.horizontalScrollBar().setValue(horizontal_scroll)
         refreshing_table = False
         refresh_folder_tree()
         refresh_project_digest()
@@ -1125,11 +1191,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             return
         update = ask_manual_classification(row_index)
         if update is None:
-            refresh_table()
+            refresh_table(preferred_row_index=row_index)
             return
         try:
             updated = active_controller.apply_manual_update(row_index, update)
-            refresh_table()
+            refresh_table(preferred_row_index=row_index)
             append_log(
                 "Classement manuel enregistre pour "
                 f"{updated.mail.project_number}: "
@@ -1137,7 +1203,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 f"{updated.decision.target_relative_folder}."
             )
         except Exception as exc:
-            refresh_table()
+            refresh_table(preferred_row_index=row_index)
             append_log(f"Erreur classement manuel: {exc}")
 
     def ask_manual_classification(row_index: int) -> ManualClassificationUpdate | None:
@@ -1171,7 +1237,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         interlocutor_combo.addItems(list(INTERLOCUTOR_OPTIONS))
         set_combo_value(
             interlocutor_combo,
-            combo_text(row_index, INTERLOCUTOR_COLUMN) or row.decision.interlocutor.value,
+            combo_text(row_index, INTERLOCUTOR_COLUMN)
+            or interlocutor_option_label(row.decision.interlocutor),
             INTERLOCUTOR_OPTIONS,
         )
         destination_combo = QComboBox()
@@ -1194,7 +1261,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             if not auto_destination:
                 return
             try:
-                selected_role = InterlocutorType(interlocutor_combo.currentText())
+                selected_role = interlocutor_type_from_option(
+                    interlocutor_combo.currentText()
+                )
                 type_by_label = {
                     RoutingCategory.CORRESPONDANCE.value: MailType.CORRESPONDANCE_GENERALE,
                     RoutingCategory.DEMANDE_DE_PRIX.value: MailType.DEMANDE_DE_PRIX,
@@ -1886,6 +1955,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_scan_status_label = scan_status_label
     dynamic_window.mailflow_reset_button = reset_button
     dynamic_window.mailflow_preview_table = table
+    dynamic_window.mailflow_refresh_table = refresh_table
     dynamic_window.mailflow_folder_tree = folder_tree
     dynamic_window.mailflow_rename_folder_button = rename_folder_button
     dynamic_window.mailflow_merge_folder_button = merge_folder_button
@@ -2271,7 +2341,9 @@ def build_manual_classification_update(
         mail_type = MailType.A_VERIFIER if not mail_type_value else MailType(mail_type_value)
     return ManualClassificationUpdate(
         mail_type=mail_type,
-        interlocutor=InterlocutorType(interlocutor_value),
+        interlocutor=InterlocutorType(
+            interlocutor_value.strip().casefold().replace(" ", "_")
+        ),
         target_relative_folder=destination_value,
         learning_term=learning_term,
         misleading_term=misleading_term,

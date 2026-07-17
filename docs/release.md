@@ -1,5 +1,12 @@
 # Release
 
+## Version 0.8.5
+
+- conservation de la ligne active, des selections et de la position de defilement
+  apres une correction dans le tableau des mails ;
+- ajout des roles `interne` et `intervenant_externe` dans les choix manuels
+  d'interlocuteur.
+
 ## Version 0.8.4
 
 - ajout d'une fenetre de selection des dossiers projet avant chaque scan manuel ;
