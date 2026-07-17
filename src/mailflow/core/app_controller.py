@@ -27,7 +27,6 @@ from mailflow.core.contact_directory import (
     ContactDirectoryStoreProtocol,
     DirectoryImportResult,
     OrganizationDirectoryEntry,
-    ProjectParticipantEntry,
     import_contact_directory_from_mails,
 )
 from mailflow.core.correspondence_hierarchy import (
@@ -119,17 +118,20 @@ class DirectoryStoreProtocol(
     def list_organizations(self) -> list[OrganizationDirectoryEntry]:
         ...
 
-    def list_project_numbers(self) -> list[str]:
-        ...
-
     def add_organization(
         self,
         name: str,
         *,
         domain: str | None = None,
-        project_number: str | None = None,
         role: InterlocutorType = InterlocutorType.INCONNU,
     ) -> int:
+        ...
+
+    def set_organization_role(
+        self,
+        organization_id: int,
+        role: InterlocutorType,
+    ) -> None:
         ...
 
     def delete_organization(self, organization_id: int) -> None:
@@ -145,25 +147,11 @@ class DirectoryStoreProtocol(
     ) -> None:
         ...
 
-    def list_project_participants(self, project_number: str) -> list[ProjectParticipantEntry]:
-        ...
-
-    def set_project_participant_role(
-        self,
-        project_number: str,
-        organization_id: int,
-        role: InterlocutorType,
-    ) -> None:
-        ...
-
     def interlocutor_for_email(
         self,
         project_number: str,
         email: str,
     ) -> InterlocutorType | None:
-        ...
-
-    def organization_id_for_email(self, email: str) -> int | None:
         ...
 
 
@@ -352,35 +340,7 @@ class AppController:
         add_example = getattr(self.preview_pipeline, "add_verified_example", None)
         if example is not None and callable(add_example):
             add_example(example)
-        self._remember_manual_project_role(updated_row, update.interlocutor)
         return self.preview_rows[row_index]
-
-    def _remember_manual_project_role(
-        self,
-        row: PreviewRow,
-        role: InterlocutorType,
-    ) -> None:
-        if self.directory_store is None or role not in {
-            InterlocutorType.CLIENT,
-            InterlocutorType.FOURNISSEUR,
-        }:
-            return
-        email = primary_external_email(row.mail)
-        if email is None:
-            return
-        organization_id = self.directory_store.organization_id_for_email(email)
-        if organization_id is None:
-            return
-        self.directory_store.set_project_participant_role(
-            row.mail.project_number,
-            organization_id,
-            role,
-        )
-        self.preview_rows = apply_project_roles_to_rows(
-            self.preview_rows,
-            self.directory_store,
-            self.projects_root,
-        )
 
     def suggested_account_identifier(self) -> str | None:
         return None
@@ -424,36 +384,43 @@ class AppController:
             raise RuntimeError(msg)
         return self.directory_store.list_organizations()
 
-    def directory_project_numbers(self) -> list[str]:
-        if self.directory_store is None:
-            return []
-        return self.directory_store.list_project_numbers()
-
     def add_directory_organization(
         self,
         name: str,
         *,
         domain: str | None = None,
-        project_number: str | None = None,
         role: InterlocutorType = InterlocutorType.INCONNU,
     ) -> int:
         if self.directory_store is None:
             msg = "Aucun annuaire n'est configure"
             raise RuntimeError(msg)
-        project = project_number or self.current_project_number()
         organization_id = self.directory_store.add_organization(
             name,
             domain=domain,
-            project_number=project,
             role=role,
         )
-        if project is not None and role != InterlocutorType.INCONNU:
-            self.preview_rows = apply_project_roles_to_rows(
-                self.preview_rows,
-                self.directory_store,
-                self.projects_root,
-            )
+        self.preview_rows = apply_directory_roles_to_rows(
+            self.preview_rows,
+            self.directory_store,
+            self.projects_root,
+        )
         return organization_id
+
+    def set_directory_organization_role(
+        self,
+        organization_id: int,
+        role: InterlocutorType,
+    ) -> list[PreviewRow]:
+        if self.directory_store is None:
+            msg = "Aucun annuaire n'est configure"
+            raise RuntimeError(msg)
+        self.directory_store.set_organization_role(organization_id, role)
+        self.preview_rows = apply_directory_roles_to_rows(
+            self.preview_rows,
+            self.directory_store,
+            self.projects_root,
+        )
+        return self.preview_rows
 
     def delete_directory_organization(self, organization_id: int) -> None:
         if self.directory_store is None:
@@ -479,39 +446,6 @@ class AppController:
             source_organization_id,
             target_organization_id,
         )
-
-    def project_participant_entries(
-        self,
-        project_number: str | None = None,
-    ) -> list[ProjectParticipantEntry]:
-        if self.directory_store is None:
-            return []
-        project = project_number or self.current_project_number()
-        if project is None:
-            return []
-        return self.directory_store.list_project_participants(project)
-
-    def set_project_participant_role(
-        self,
-        organization_id: int,
-        role: InterlocutorType,
-        *,
-        project_number: str | None = None,
-    ) -> list[PreviewRow]:
-        if self.directory_store is None:
-            msg = "Aucun annuaire n'est configure"
-            raise RuntimeError(msg)
-        project = project_number or self.current_project_number()
-        if project is None:
-            msg = "Aucun projet scanne"
-            raise RuntimeError(msg)
-        self.directory_store.set_project_participant_role(project, organization_id, role)
-        self.preview_rows = apply_project_roles_to_rows(
-            self.preview_rows,
-            self.directory_store,
-            self.projects_root,
-        )
-        return self.preview_rows
 
     def current_project_number(self) -> str | None:
         for row in self.preview_rows:
@@ -696,12 +630,12 @@ def selected_rows(rows: Sequence[PreviewRow], indexes: Sequence[int]) -> list[Pr
     return [rows[index] for index in indexes if 0 <= index < len(rows)]
 
 
-def apply_project_roles_to_rows(
+def apply_directory_roles_to_rows(
     rows: list[PreviewRow],
     directory_store: DirectoryStoreProtocol,
     projects_root: Path,
 ) -> list[PreviewRow]:
-    updated_rows = [_row_with_project_role(row, directory_store, projects_root) for row in rows]
+    updated_rows = [_row_with_directory_role(row, directory_store, projects_root) for row in rows]
     return apply_correspondence_hierarchy(
         updated_rows,
         projects_root=projects_root,
@@ -709,12 +643,12 @@ def apply_project_roles_to_rows(
     )
 
 
-def _row_with_project_role(
+def _row_with_directory_role(
     row: PreviewRow,
     directory_store: DirectoryStoreProtocol,
     projects_root: Path,
 ) -> PreviewRow:
-    role = _project_role_for_row(row, directory_store)
+    role = _directory_role_for_row(row, directory_store)
     if role is None or role == row.decision.interlocutor:
         return row
     target_relative = destination_for(row.decision.mail_type, role) or "A verifier"
@@ -734,7 +668,7 @@ def _row_with_project_role(
             "requires_review": requires_review,
             "target_relative_folder": target_relative,
             "target_path": target_path,
-            "reason": _append_project_role_reason(row.decision.reason, role),
+            "reason": _append_directory_role_reason(row.decision.reason, role),
         }
     )
     return row.model_copy(
@@ -748,7 +682,7 @@ def _row_with_project_role(
     )
 
 
-def _project_role_for_row(
+def _directory_role_for_row(
     row: PreviewRow,
     directory_store: DirectoryStoreProtocol,
 ) -> InterlocutorType | None:
@@ -764,8 +698,8 @@ def _participant_emails(mail: MailMetadata) -> list[str]:
     return [] if email is None else [email]
 
 
-def _append_project_role_reason(reason: str, role: InterlocutorType) -> str:
-    note = f"Role projet applique: {role.value}."
+def _append_directory_role_reason(reason: str, role: InterlocutorType) -> str:
+    note = f"Role entreprise applique: {role.value}."
     if note in reason:
         return reason
     return f"{reason} {note}".strip()

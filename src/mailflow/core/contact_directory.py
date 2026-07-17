@@ -63,16 +63,7 @@ class OrganizationDirectoryEntry:
     domains: tuple[str, ...]
     contacts: tuple[str, ...]
     project_count: int
-
-
-@dataclass(frozen=True)
-class ProjectParticipantEntry:
-    organization_id: int
-    name: str
-    domains: tuple[str, ...]
-    contacts: tuple[str, ...]
-    role: InterlocutorType
-    mail_count: int
+    default_role: InterlocutorType = InterlocutorType.INCONNU
 
 
 class ContactDirectoryStoreProtocol(Protocol):

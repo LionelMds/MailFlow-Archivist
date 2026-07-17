@@ -50,9 +50,11 @@ La destination reste modifiable manuellement dans la previsualisation. Les sous-
 de destination sont crees si le dossier projet existe deja ; le dossier projet lui-meme
 n'est jamais cree automatiquement.
 
-Le role d'une entreprise peut etre fixe par projet dans l'onglet `Annuaire`. Seuls les
+Le role d'une entreprise est fixe globalement dans l'onglet `Annuaire`. Il sert de
+regle de base pour tous les projets existants et futurs. Seuls les
 roles `client` et `fournisseur` permettent l'archivage automatique; les autres restent
-a verifier. Ce role prime sur la reponse IA pour toutes les lignes du projet scanne.
+a verifier. Une correction manuelle depuis une ligne peut modifier le role du mail
+concerne sans modifier le role global de l'annuaire ni les autres mails du projet.
 Pour un mail envoye, le premier destinataire externe prime sur les collegues Balz Metal
 places ensuite en copie.
 
@@ -96,6 +98,10 @@ adresses, domaines, noms affiches et numeros projet, puis alimente la base SQLit
 locale. Les domaines internes Balz Metal sont ignores. Les domaines generiques comme
 `gmail.com`, `outlook.com` ou `icloud.com` ne sont pas generalises a toute une
 entreprise sauf si le nom affiche contient clairement une societe.
+
+La colonne `Role global` permet de definir une entreprise comme cliente, fournisseur,
+intervenante externe, interne ou inconnue. Cette valeur s'applique a tous les projets.
+Les anciens roles projet coherents sont repris automatiquement lors de la mise a jour.
 
 L'import peut aussi etre lance en ligne de commande :
 

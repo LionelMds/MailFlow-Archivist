@@ -326,11 +326,6 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     delete_directory_button = QPushButton(UI_TEXT["delete_directory"])
     rename_directory_button = QPushButton(UI_TEXT["rename_directory"])
     merge_directory_button = QPushButton(UI_TEXT["merge_directory"])
-    directory_project_combo = QComboBox()
-    directory_project_combo.setEditable(True)
-    directory_project_combo.setMinimumWidth(150)
-    directory_actions_layout.addWidget(QLabel("Projet"))
-    directory_actions_layout.addWidget(directory_project_combo)
     directory_actions_layout.addWidget(import_directory_button)
     directory_actions_layout.addWidget(refresh_directory_button)
     directory_actions_layout.addWidget(add_directory_button)
@@ -340,7 +335,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     directory_actions_layout.addStretch(1)
     directory_table = QTableWidget(0, 5)
     directory_table.setHorizontalHeaderLabels(
-        ["Entreprise", "Domaines", "Contacts", "Role projet", "Projets"]
+        ["Entreprise", "Domaines", "Contacts", "Role global", "Projets"]
     )
     directory_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     directory_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -879,56 +874,22 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         except Exception as exc:
             append_log(f"Erreur fusion dossier: {exc}")
 
-    def selected_directory_project() -> str | None:
-        return clean_optional_text(directory_project_combo.currentText())
-
-    def refresh_directory_project_options(*, preferred_project: str | None = None) -> None:
-        previous = selected_directory_project()
-        try:
-            projects = active_controller.directory_project_numbers()
-        except Exception:
-            projects = []
-        candidates = [
-            preferred_project,
-            previous,
-            active_controller.current_project_number(),
-            clean_optional_text(project_input.text()),
-            *projects,
-        ]
-        values: list[str] = []
-        for candidate in candidates:
-            if candidate and candidate not in values:
-                values.append(candidate)
-        selected = next((candidate for candidate in candidates if candidate), None)
-        directory_project_combo.blockSignals(True)
-        directory_project_combo.clear()
-        directory_project_combo.addItems(values)
-        if selected is not None:
-            directory_project_combo.setCurrentText(selected)
-        directory_project_combo.blockSignals(False)
-
     def refresh_directory_table() -> None:
         nonlocal refreshing_directory_table
         refreshing_directory_table = True
-        refresh_directory_project_options()
-        project = selected_directory_project()
         try:
             entries = active_controller.directory_entries()
-            project_entries = active_controller.project_participant_entries(project)
         except Exception as exc:
             refreshing_directory_table = False
             directory_table.setRowCount(0)
             directory_status_label.setText(f"Annuaire indisponible: {exc}")
             return
-        project_roles = {
-            int(entry.organization_id): entry.role for entry in project_entries
-        }
         directory_table.clearContents()
         for row_index in range(directory_table.rowCount()):
             directory_table.removeCellWidget(row_index, 3)
         directory_table.setRowCount(len(entries))
         directory_table.setHorizontalHeaderLabels(
-            ["Entreprise", "Domaines", "Contacts", "Role projet", "Projets"]
+            ["Entreprise", "Domaines", "Contacts", "Role global", "Projets"]
         )
         for row_index, entry in enumerate(entries):
             organization_id = int(entry.organization_id)
@@ -936,7 +897,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             domains = tuple(str(item) for item in entry.domains)
             contacts = tuple(str(item) for item in entry.contacts)
             project_count = int(getattr(entry, "project_count", getattr(entry, "mail_count", 0)))
-            role = project_roles.get(organization_id)
+            role = getattr(entry, "default_role", InterlocutorType.INCONNU)
 
             name_item = QTableWidgetItem(name)
             name_item.setData(Qt.ItemDataRole.UserRole, organization_id)
@@ -951,53 +912,40 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             directory_table.setCellWidget(
                 row_index,
                 3,
-                project_role_combo(organization_id, role),
+                global_role_combo(organization_id, role),
             )
             directory_table.setItem(row_index, 4, project_item)
         directory_table.resizeRowsToContents()
         refreshing_directory_table = False
-        scope = f" pour {project}" if project else ""
         directory_status_label.setText(
-            f"{len(entries)} entreprise(s) dans l'annuaire local; "
-            f"{len(project_entries)} rattachee(s){scope}."
+            f"{len(entries)} entreprise(s) dans l'annuaire global."
         )
 
-    def project_role_combo(organization_id: int, role: Any) -> Any:
+    def global_role_combo(organization_id: int, role: Any) -> Any:
         combo = QComboBox()
         for item in InterlocutorType:
             combo.addItem(interlocutor_label(item), item.value)
         current_role = role if isinstance(role, InterlocutorType) else InterlocutorType.INCONNU
         set_combo_value_by_data(combo, current_role.value)
-        project = selected_directory_project()
-        combo.setEnabled(project is not None)
-        if project is None:
-            combo.setToolTip("Selectionner un projet pour attribuer un role.")
 
         def role_changed(_value: str = "") -> None:
             if refreshing_directory_table:
                 return
-            project_number = selected_directory_project()
-            if project_number is None:
-                append_log("Selectionner un projet avant d'attribuer un role.")
-                refresh_directory_table()
-                return
             selected_role = InterlocutorType(str(combo.currentData()))
             try:
-                active_controller.set_project_participant_role(
+                active_controller.set_directory_organization_role(
                     organization_id,
                     selected_role,
-                    project_number=project_number,
                 )
                 refresh_table()
                 refresh_directory_table()
                 update_mail_preview(table.currentRow())
                 append_log(
-                    "Role projet applique: "
-                    f"{selected_role.value} pour l'entreprise #{organization_id} "
-                    f"sur {project_number}."
+                    "Role global applique: "
+                    f"{selected_role.value} pour l'entreprise #{organization_id}."
                 )
             except Exception as exc:
-                append_log(f"Erreur role projet: {exc}")
+                append_log(f"Erreur role global: {exc}")
                 refresh_directory_table()
 
         combo.currentTextChanged.connect(role_changed)
@@ -1020,7 +968,6 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         return organization_id, item.text()
 
     def add_directory_organization() -> None:
-        project = selected_directory_project()
         dialog = QDialog(window)
         dialog.setWindowTitle("Ajouter une entreprise")
         form = QFormLayout(dialog)
@@ -1031,11 +978,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         for item in InterlocutorType:
             role_combo.addItem(interlocutor_label(item), item.value)
         set_combo_value_by_data(role_combo, InterlocutorType.INCONNU.value)
-        role_combo.setEnabled(project is not None)
         form.addRow("Entreprise", name_input)
         form.addRow("Domaine e-mail", domain_input)
-        form.addRow("Projet", QLabel(project or "Aucun projet selectionne"))
-        form.addRow("Role projet", role_combo)
+        form.addRow("Role global", role_combo)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
@@ -1047,19 +992,13 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        role = (
-            InterlocutorType(str(role_combo.currentData()))
-            if project is not None
-            else InterlocutorType.INCONNU
-        )
+        role = InterlocutorType(str(role_combo.currentData()))
         try:
             organization_id = active_controller.add_directory_organization(
                 name_input.text(),
                 domain=clean_optional_text(domain_input.text()),
-                project_number=project,
                 role=role,
             )
-            refresh_directory_project_options(preferred_project=project)
             refresh_directory_table()
             append_log(
                 f"Entreprise ajoutee a l'annuaire: {name_input.text().strip()} "
@@ -1093,7 +1032,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             (
                 f"Supprimer {name} de l'annuaire ?\n\n"
                 f"{len(entry.domains)} domaine(s), {len(entry.contacts)} contact(s) "
-                "et tous ses roles projet seront retires.\n"
+                "et son role global seront retires.\n"
                 "Aucun e-mail ni fichier archive ne sera supprime."
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -1459,9 +1398,6 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             rows = scan_current_preview(progress_callback=progress)
             watch_state.reset(rows)
             refresh_table()
-            refresh_directory_project_options(
-                preferred_project=active_controller.current_project_number()
-            )
             refresh_directory_table()
             navigation.setCurrentRow(0)
             set_scan_status(f"{len(rows)} mail(s) charges.", success=True)
@@ -1797,10 +1733,6 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     delete_directory_button.clicked.connect(delete_selected_directory_organization)
     rename_directory_button.clicked.connect(rename_selected_directory_organization)
     merge_directory_button.clicked.connect(merge_selected_directory_organization)
-    directory_project_combo.activated.connect(lambda _index: refresh_directory_table())
-    directory_project_line_edit = directory_project_combo.lineEdit()
-    if directory_project_line_edit is not None:
-        directory_project_line_edit.editingFinished.connect(refresh_directory_table)
     navigation.currentRowChanged.connect(
         lambda index: refresh_directory_table() if index == 2 else None
     )
@@ -1845,7 +1777,6 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_delete_directory_button = delete_directory_button
     dynamic_window.mailflow_rename_directory_button = rename_directory_button
     dynamic_window.mailflow_merge_directory_button = merge_directory_button
-    dynamic_window.mailflow_directory_project_combo = directory_project_combo
     dynamic_window.mailflow_directory_table = directory_table
     dynamic_window.mailflow_directory_status_label = directory_status_label
     dynamic_window.mailflow_logs = logs

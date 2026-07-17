@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 
@@ -86,6 +87,7 @@ def test_directory_store_lists_organizations_for_ui(tmp_path: Path) -> None:
         "Jean AIG <contact@gva.ch>",
     )
     assert entries[0].project_count == 2
+    assert entries[0].default_role == InterlocutorType.INCONNU
 
 
 def test_directory_store_renames_organization(tmp_path: Path) -> None:
@@ -125,32 +127,12 @@ def test_directory_store_merges_organizations(tmp_path: Path) -> None:
     assert store.count_contacts() == 2
 
 
-def test_directory_store_sets_project_participant_role(tmp_path: Path) -> None:
-    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
-    store.record_observation(observation("contact@gva.ch"))
-    organization_id = store.list_organizations()[0].organization_id
-
-    store.set_project_participant_role(
-        "2025-4893",
-        organization_id,
-        InterlocutorType.CLIENT,
-    )
-
-    assert store.interlocutor_for_email("2025-4893", "chef@gva.ch") == (
-        InterlocutorType.CLIENT
-    )
-    participants = store.list_project_participants("2025-4893")
-    assert participants[0].name == "AIG"
-    assert participants[0].role == InterlocutorType.CLIENT
-
-
-def test_directory_store_adds_manual_organization_with_project_role(tmp_path: Path) -> None:
+def test_directory_store_adds_manual_organization_with_global_role(tmp_path: Path) -> None:
     store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
 
     organization_id = store.add_organization(
         "Metal Factory",
         domain="@MetalFactory.ch",
-        project_number="2025-4893",
         role=InterlocutorType.FOURNISSEUR,
     )
 
@@ -159,41 +141,109 @@ def test_directory_store_adds_manual_organization_with_project_role(tmp_path: Pa
     assert store.interlocutor_for_email("2025-4893", "vente@metalfactory.ch") == (
         InterlocutorType.FOURNISSEUR
     )
-    assert store.list_project_numbers() == ["2025-4893"]
+    assert store.interlocutor_for_email("2026-4995", "vente@metalfactory.ch") == (
+        InterlocutorType.FOURNISSEUR
+    )
+    assert store.list_organizations()[0].default_role == InterlocutorType.FOURNISSEUR
 
 
-def test_directory_store_keeps_roles_independent_for_each_supplier(tmp_path: Path) -> None:
+def test_directory_store_keeps_global_roles_independent_for_each_company(tmp_path: Path) -> None:
     store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
-    metal_factory_id = store.add_organization(
+    store.add_organization(
         "Metal Factory",
         domain="metalfactory.ch",
-        project_number="2025-4893",
+        role=InterlocutorType.FOURNISSEUR,
     )
-    kohler_id = store.add_organization(
+    store.add_organization(
         "Hans Kohler",
         domain="kohler.ch",
-        project_number="2025-4893",
-    )
-
-    store.set_project_participant_role(
-        "2025-4893",
-        metal_factory_id,
-        InterlocutorType.FOURNISSEUR,
-    )
-    store.set_project_participant_role(
-        "2025-4893",
-        kohler_id,
-        InterlocutorType.INTERVENANT_EXTERNE,
+        role=InterlocutorType.INTERVENANT_EXTERNE,
     )
 
     roles = {
-        entry.name: entry.role
-        for entry in store.list_project_participants("2025-4893")
+        entry.name: entry.default_role
+        for entry in store.list_organizations()
     }
     assert roles == {
         "Hans Kohler": InterlocutorType.INTERVENANT_EXTERNE,
         "Metal Factory": InterlocutorType.FOURNISSEUR,
     }
+    assert store.interlocutor_for_email("2024-4788", "vente@metalfactory.ch") == (
+        InterlocutorType.FOURNISSEUR
+    )
+
+
+def test_directory_store_global_role_replaces_existing_project_roles(tmp_path: Path) -> None:
+    db_path = tmp_path / "mailflow.sqlite"
+    store = SQLiteDirectoryStore(db_path)
+    store.record_observation(observation("contact@gva.ch"))
+    store.record_observation(
+        replace(observation("autre@gva.ch"), project_number="2026-4995")
+    )
+    organization_id = store.list_organizations()[0].organization_id
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE project_participants SET role = 'client' WHERE organization_id = ?",
+            (organization_id,),
+        )
+
+    store.set_organization_role(organization_id, InterlocutorType.FOURNISSEUR)
+
+    assert store.interlocutor_for_email("2025-4893", "contact@gva.ch") == (
+        InterlocutorType.FOURNISSEUR
+    )
+    assert store.interlocutor_for_email("2026-4995", "contact@gva.ch") == (
+        InterlocutorType.FOURNISSEUR
+    )
+    assert store.interlocutor_for_email("2030-9999", "contact@gva.ch") == (
+        InterlocutorType.FOURNISSEUR
+    )
+
+
+def test_directory_store_legacy_project_role_cannot_override_global_role(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "mailflow.sqlite"
+    store = SQLiteDirectoryStore(db_path)
+    organization_id = store.add_organization(
+        "AIG",
+        domain="gva.ch",
+        role=InterlocutorType.CLIENT,
+    )
+    store.record_observation(observation("contact@gva.ch"))
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE project_participants SET role = 'fournisseur' WHERE organization_id = ?",
+            (organization_id,),
+        )
+
+    assert store.interlocutor_for_email("2025-4893", "contact@gva.ch") == (
+        InterlocutorType.CLIENT
+    )
+    assert store.interlocutor_for_email("2026-4995", "contact@gva.ch") == (
+        InterlocutorType.CLIENT
+    )
+
+
+def test_directory_store_migrates_consistent_legacy_project_role_once(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "mailflow.sqlite"
+    store = SQLiteDirectoryStore(db_path)
+    store.record_observation(observation("contact@gva.ch"))
+    organization_id = store.list_organizations()[0].organization_id
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE project_participants SET role = 'client' WHERE organization_id = ?",
+            (organization_id,),
+        )
+        connection.execute(
+            "DELETE FROM directory_meta WHERE key = 'global_organization_roles_v1'"
+        )
+
+    migrated = SQLiteDirectoryStore(db_path).list_organizations()
+
+    assert migrated[0].default_role == InterlocutorType.CLIENT
 
 
 def test_directory_store_rejects_duplicate_manual_domain(tmp_path: Path) -> None:
@@ -212,7 +262,11 @@ def test_directory_store_deletes_organization_and_related_records(tmp_path: Path
     store.delete_organization(organization_id)
 
     assert store.list_organizations() == []
-    assert store.list_project_participants("2025-4893") == []
+    with sqlite3.connect(tmp_path / "mailflow.sqlite") as connection:
+        participant_count = connection.execute(
+            "SELECT COUNT(*) FROM project_participants"
+        ).fetchone()
+    assert participant_count == (0,)
     assert store.organization_name_for_email("contact@gva.ch") is None
     assert store.count_domains() == 0
     assert store.count_contacts() == 0

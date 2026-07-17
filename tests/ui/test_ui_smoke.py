@@ -10,7 +10,6 @@ from mailflow.config import AI_MODEL_OPTIONS, AppSettings
 from mailflow.core.contact_directory import (
     DirectoryImportResult,
     OrganizationDirectoryEntry,
-    ProjectParticipantEntry,
 )
 from mailflow.core.folder_tree import FolderPathSummary, FolderTreeNode
 from mailflow.models import (
@@ -59,10 +58,10 @@ class FakeController:
                 domains=("gva.ch",),
                 contacts=("contact@gva.ch",),
                 project_count=1,
+                default_role=InterlocutorType.CLIENT,
             )
         ]
-        self.project_role = InterlocutorType.CLIENT
-        self.project_role_project: str | None = None
+        self.global_role = InterlocutorType.CLIENT
 
     def scan_and_preview(
         self,
@@ -107,15 +106,11 @@ class FakeController:
     def directory_entries(self) -> list[OrganizationDirectoryEntry]:
         return self.directory_entries_list
 
-    def directory_project_numbers(self) -> list[str]:
-        return ["2025-4893", "2024-4788"]
-
     def add_directory_organization(
         self,
         name: str,
         *,
         domain: str | None = None,
-        project_number: str | None = None,
         role: InterlocutorType = InterlocutorType.INCONNU,
     ) -> int:
         organization_id = 2
@@ -125,12 +120,33 @@ class FakeController:
                 name=name,
                 domains=() if domain is None else (domain,),
                 contacts=(),
-                project_count=int(project_number is not None),
+                project_count=0,
+                default_role=role,
             )
         )
-        self.project_role = role
-        self.project_role_project = project_number
+        self.global_role = role
         return organization_id
+
+    def set_directory_organization_role(
+        self,
+        organization_id: int,
+        role: InterlocutorType,
+    ) -> list[object]:
+        self.global_role = role
+        self.directory_entries_list = [
+            OrganizationDirectoryEntry(
+                organization_id=entry.organization_id,
+                name=entry.name,
+                domains=entry.domains,
+                contacts=entry.contacts,
+                project_count=entry.project_count,
+                default_role=(
+                    role if entry.organization_id == organization_id else entry.default_role
+                ),
+            )
+            for entry in self.directory_entries_list
+        ]
+        return self.preview_rows
 
     def delete_directory_organization(self, organization_id: int) -> None:
         self.directory_entries_list = [
@@ -138,32 +154,6 @@ class FakeController:
             for entry in self.directory_entries_list
             if entry.organization_id != organization_id
         ]
-
-    def project_participant_entries(
-        self,
-        project_number: str | None = None,
-    ) -> list[ProjectParticipantEntry]:
-        return [
-            ProjectParticipantEntry(
-                organization_id=1,
-                name="AIG",
-                domains=("gva.ch",),
-                contacts=("contact@gva.ch",),
-                role=self.project_role,
-                mail_count=3,
-            )
-        ]
-
-    def set_project_participant_role(
-        self,
-        organization_id: int,
-        role: InterlocutorType,
-        *,
-        project_number: str | None = None,
-    ) -> list[object]:
-        self.project_role = role
-        self.project_role_project = project_number
-        return self.preview_rows
 
     def current_project_number(self) -> str | None:
         return "2025-4893"
@@ -176,6 +166,7 @@ class FakeController:
                 domains=("gva.ch",),
                 contacts=("contact@gva.ch",),
                 project_count=1,
+                default_role=self.global_role,
             )
         ]
 
@@ -523,14 +514,12 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_delete_directory_button.text() == "Supprimer entreprise"
     assert dynamic_window.mailflow_rename_directory_button.text() == "Renommer entreprise"
     assert dynamic_window.mailflow_merge_directory_button.text() == "Fusionner entreprise"
-    assert dynamic_window.mailflow_directory_project_combo.currentText() == "2025-4893"
     assert dynamic_window.mailflow_directory_table.rowCount() == 1
     assert dynamic_window.mailflow_directory_table.item(0, 0).text() == "AIG"
     assert dynamic_window.mailflow_directory_table.item(0, 1).text() == "gva.ch"
     assert dynamic_window.mailflow_directory_table.cellWidget(0, 3).currentText() == "client"
     dynamic_window.mailflow_directory_table.cellWidget(0, 3).setCurrentText("fournisseur")
-    assert controller.project_role == InterlocutorType.FOURNISSEUR
-    assert controller.project_role_project == "2025-4893"
+    assert controller.global_role == InterlocutorType.FOURNISSEUR
     assert dynamic_window.mailflow_navigation.count() == 4
     assert dynamic_window.mailflow_navigation.item(0).text() == "Mails"
     assert dynamic_window.mailflow_navigation.item(1).text() == "Arborescence"

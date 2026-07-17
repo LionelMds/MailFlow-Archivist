@@ -73,8 +73,8 @@ MailFlow ne peut pas choisir avec certitude.
 L'annuaire local peut etre alimente depuis tout l'historique Outlook projet :
 une adresse ou un domaine connu, par exemple `@gva.ch`, prend le pas sur les
 heuristiques de nom et permet de classer directement sous l'entreprise officielle.
-L'onglet `Annuaire` permet aussi d'attribuer un role par projet a chaque entreprise ;
-ce role est reapplique a toutes les lignes du projet scanne.
+L'onglet `Annuaire` permet aussi d'attribuer un role global a chaque entreprise ;
+ce role devient la regle de base pour tous les projets existants et futurs.
 Le journal HTML permet aussi de filtrer par dossier cible.
 
 Apres le scan, le panneau `Arborescence` affiche les dossiers proposes avec le nombre
@@ -101,7 +101,7 @@ Le mode IA se configure dans le bloc `Configuration` : `activee` classe chaque m
 avec l'IA, tandis que `desactivee` place les lignes en verification manuelle. Il
 n'existe aucun classement de secours par mots-cles.
 
-L'annuaire fixe l'entreprise et son role pour le projet. L'IA choisit uniquement entre
+L'annuaire fixe l'entreprise et son role global. L'IA choisit uniquement entre
 `Correspondance`, `Demande de prix` et `Commande`. L'historique recent de l'entreprise
 et les corrections manuelles verifiees lui sont transmis comme contexte. Une
 correction apprend une decision complete, jamais un terme isole.

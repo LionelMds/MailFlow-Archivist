@@ -191,7 +191,7 @@ def apply_routing_guardrails(
     else:
         updates["organization_role"] = InterlocutorType.INCONNU.value
         updates["requires_review"] = True
-        reason_notes.append("Role projet client/fournisseur a confirmer dans l'annuaire.")
+        reason_notes.append("Role client/fournisseur a confirmer dans l'annuaire global.")
 
     if ai.confidence < 0.80:
         updates["requires_review"] = True

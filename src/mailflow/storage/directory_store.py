@@ -9,7 +9,6 @@ from mailflow.core.contact_directory import (
     ContactObservation,
     DirectoryUpsertOutcome,
     OrganizationDirectoryEntry,
-    ProjectParticipantEntry,
 )
 from mailflow.core.correspondence_hierarchy import safe_folder_name
 from mailflow.models import InterlocutorType
@@ -57,6 +56,10 @@ CREATE TABLE IF NOT EXISTS project_participants(
   UNIQUE(project_number, organization_id),
   FOREIGN KEY(organization_id) REFERENCES organizations(id)
 );
+CREATE TABLE IF NOT EXISTS directory_meta(
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_organization_domains_org
   ON organization_domains(organization_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_org
@@ -74,6 +77,7 @@ class SQLiteDirectoryStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(DIRECTORY_SCHEMA)
+            _migrate_legacy_project_roles_once(connection)
 
     def record_observation(self, observation: ContactObservation) -> DirectoryUpsertOutcome:
         self.initialize()
@@ -148,25 +152,13 @@ class SQLiteDirectoryStore:
         email: str,
     ) -> InterlocutorType | None:
         normalized_email = email.strip().casefold()
-        project = project_number.strip()
-        if not normalized_email or not project:
+        if not normalized_email:
             return None
         self.initialize()
         with self._connect() as connection:
             organization_id = _organization_id_for_email(connection, normalized_email)
             if organization_id is None:
                 return None
-            row = connection.execute(
-                """
-                SELECT role
-                FROM project_participants
-                WHERE project_number = ? AND organization_id = ?
-                LIMIT 1
-                """,
-                (project, organization_id),
-            ).fetchone()
-            if row is not None and str(row[0]) != InterlocutorType.INCONNU.value:
-                return InterlocutorType(str(row[0]))
             row = connection.execute(
                 """
                 SELECT default_role
@@ -185,7 +177,7 @@ class SQLiteDirectoryStore:
         with self._connect() as connection:
             organization_rows = connection.execute(
                 """
-                SELECT id, name
+                SELECT id, name, default_role
                 FROM organizations
                 ORDER BY name COLLATE NOCASE
                 """
@@ -197,29 +189,16 @@ class SQLiteDirectoryStore:
                     domains=tuple(_domains_for_organization(connection, int(row[0]))),
                     contacts=tuple(_contacts_for_organization(connection, int(row[0]))),
                     project_count=_project_count_for_organization(connection, int(row[0])),
+                    default_role=InterlocutorType(str(row[2])),
                 )
                 for row in organization_rows
             ]
-
-    def list_project_numbers(self) -> list[str]:
-        self.initialize()
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT DISTINCT project_number
-                FROM project_participants
-                WHERE TRIM(project_number) <> ''
-                ORDER BY project_number DESC
-                """
-            ).fetchall()
-        return [str(row[0]) for row in rows]
 
     def add_organization(
         self,
         name: str,
         *,
         domain: str | None = None,
-        project_number: str | None = None,
         role: InterlocutorType = InterlocutorType.INCONNU,
     ) -> int:
         cleaned_name = safe_folder_name(name.strip())
@@ -228,10 +207,6 @@ class SQLiteDirectoryStore:
             raise ValueError(msg)
         normalized_name = _normalize_organization_name(cleaned_name)
         normalized_domain = _normalize_directory_domain(domain)
-        project = "" if project_number is None else project_number.strip()
-        if role != InterlocutorType.INCONNU and not project:
-            msg = "Un projet est obligatoire pour attribuer un role projet"
-            raise ValueError(msg)
 
         self.initialize()
         now = datetime.now(UTC).isoformat()
@@ -257,10 +232,16 @@ class SQLiteDirectoryStore:
 
             cursor = connection.execute(
                 """
-                INSERT INTO organizations(name, normalized_name, created_at, updated_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO organizations(
+                    name,
+                    normalized_name,
+                    default_role,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (cleaned_name, normalized_name, now, now),
+                (cleaned_name, normalized_name, role.value, now, now),
             )
             lastrowid = cursor.lastrowid
             if lastrowid is None:
@@ -283,22 +264,35 @@ class SQLiteDirectoryStore:
                     """,
                     (organization_id, normalized_domain, now, now),
                 )
-            if project:
-                connection.execute(
-                    """
-                    INSERT INTO project_participants(
-                        project_number,
-                        organization_id,
-                        role,
-                        first_seen_at,
-                        last_seen_at,
-                        observation_count
-                    )
-                    VALUES (?, ?, ?, ?, ?, 0)
-                    """,
-                    (project, organization_id, role.value, now, now),
-                )
         return organization_id
+
+    def set_organization_role(
+        self,
+        organization_id: int,
+        role: InterlocutorType,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        self.initialize()
+        with self._connect() as connection:
+            _ensure_organization_exists(connection, organization_id)
+            connection.execute(
+                """
+                UPDATE organizations
+                SET default_role = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (role.value, now, organization_id),
+            )
+            connection.execute(
+                """
+                UPDATE project_participants
+                SET role = ?,
+                    last_seen_at = ?
+                WHERE organization_id = ?
+                """,
+                (role.value, now, organization_id),
+            )
 
     def delete_organization(self, organization_id: int) -> None:
         self.initialize()
@@ -319,70 +313,6 @@ class SQLiteDirectoryStore:
             connection.execute(
                 "DELETE FROM organizations WHERE id = ?",
                 (organization_id,),
-            )
-
-    def list_project_participants(self, project_number: str) -> list[ProjectParticipantEntry]:
-        project = project_number.strip()
-        if not project:
-            return []
-        self.initialize()
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT
-                    organizations.id,
-                    organizations.name,
-                    project_participants.role,
-                    project_participants.observation_count
-                FROM project_participants
-                JOIN organizations ON organizations.id = project_participants.organization_id
-                WHERE project_participants.project_number = ?
-                ORDER BY organizations.name COLLATE NOCASE
-                """,
-                (project,),
-            ).fetchall()
-            return [
-                ProjectParticipantEntry(
-                    organization_id=int(row[0]),
-                    name=str(row[1]),
-                    domains=tuple(_domains_for_organization(connection, int(row[0]))),
-                    contacts=tuple(_contacts_for_organization(connection, int(row[0]))),
-                    role=InterlocutorType(str(row[2])),
-                    mail_count=int(row[3]),
-                )
-                for row in rows
-            ]
-
-    def set_project_participant_role(
-        self,
-        project_number: str,
-        organization_id: int,
-        role: InterlocutorType,
-    ) -> None:
-        project = project_number.strip()
-        if not project:
-            msg = "Le numero de projet est obligatoire"
-            raise ValueError(msg)
-        now = datetime.now(UTC).isoformat()
-        self.initialize()
-        with self._connect() as connection:
-            _ensure_organization_exists(connection, organization_id)
-            connection.execute(
-                """
-                INSERT INTO project_participants(
-                    project_number,
-                    organization_id,
-                    role,
-                    first_seen_at,
-                    last_seen_at,
-                    observation_count
-                )
-                VALUES (?, ?, ?, ?, ?, 0)
-                ON CONFLICT(project_number, organization_id) DO UPDATE SET
-                    role = excluded.role,
-                    last_seen_at = excluded.last_seen_at
-                """,
-                (project, organization_id, role.value, now, now),
             )
 
     def rename_organization(self, organization_id: int, name: str) -> None:
@@ -432,6 +362,13 @@ class SQLiteDirectoryStore:
         with self._connect() as connection:
             _ensure_organization_exists(connection, source_organization_id)
             _ensure_organization_exists(connection, target_organization_id)
+            source_role = _organization_default_role(connection, source_organization_id)
+            target_role = _organization_default_role(connection, target_organization_id)
+            merged_role = (
+                source_role
+                if target_role == InterlocutorType.INCONNU
+                else target_role
+            )
             connection.execute(
                 """
                 UPDATE organization_domains
@@ -457,8 +394,13 @@ class SQLiteDirectoryStore:
                 now=now,
             )
             connection.execute(
-                "UPDATE organizations SET updated_at = ? WHERE id = ?",
-                (now, target_organization_id),
+                """
+                UPDATE organizations
+                SET default_role = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (merged_role.value, now, target_organization_id),
             )
             connection.execute(
                 "DELETE FROM organizations WHERE id = ?",
@@ -669,6 +611,52 @@ def _normalize_directory_domain(domain: str | None) -> str | None:
         msg = f"Domaine invalide: {domain.strip()}"
         raise ValueError(msg)
     return normalized
+
+
+def _migrate_legacy_project_roles_once(connection: sqlite3.Connection) -> None:
+    migration_key = "global_organization_roles_v1"
+    migrated = connection.execute(
+        "SELECT 1 FROM directory_meta WHERE key = ? LIMIT 1",
+        (migration_key,),
+    ).fetchone()
+    if migrated is not None:
+        return
+    connection.execute(
+        """
+        UPDATE organizations
+        SET default_role = (
+            SELECT MIN(project_participants.role)
+            FROM project_participants
+            WHERE project_participants.organization_id = organizations.id
+              AND project_participants.role <> 'inconnu'
+        )
+        WHERE organizations.default_role = 'inconnu'
+          AND (
+              SELECT COUNT(DISTINCT project_participants.role)
+              FROM project_participants
+              WHERE project_participants.organization_id = organizations.id
+                AND project_participants.role <> 'inconnu'
+          ) = 1
+        """
+    )
+    connection.execute(
+        "INSERT INTO directory_meta(key, value) VALUES (?, 'completed')",
+        (migration_key,),
+    )
+
+
+def _organization_default_role(
+    connection: sqlite3.Connection,
+    organization_id: int,
+) -> InterlocutorType:
+    row = connection.execute(
+        "SELECT default_role FROM organizations WHERE id = ? LIMIT 1",
+        (organization_id,),
+    ).fetchone()
+    if row is None:
+        msg = f"Entreprise introuvable: {organization_id}"
+        raise ValueError(msg)
+    return InterlocutorType(str(row[0]))
 
 
 def _organization_id_for_email(connection: sqlite3.Connection, email: str) -> int | None:

@@ -1,5 +1,13 @@
 # Release
 
+## Version 0.8.3
+
+- remplacement du role par projet de l'annuaire par un role global pour chaque
+  entreprise ;
+- application de cette regle a tous les projets existants et futurs, avec possibilite
+  de corriger ponctuellement le role d'un mail sans modifier l'annuaire ;
+- migration automatique des anciens roles projet lorsqu'ils sont coherents.
+
 ## Version 0.8.2
 
 - correction de l'attribution des roles projet dans l'annuaire grace a un projet

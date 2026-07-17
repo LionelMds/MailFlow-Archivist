@@ -12,7 +12,6 @@ from mailflow.core.contact_directory import (
     ContactObservation,
     DirectoryUpsertOutcome,
     OrganizationDirectoryEntry,
-    ProjectParticipantEntry,
 )
 from mailflow.core.scan_service import DirectoryScanRequest, ScanRequest
 from mailflow.models import (
@@ -113,7 +112,7 @@ class FakeDirectoryStore:
         self.renamed: tuple[int, str] | None = None
         self.merged: tuple[int, int] | None = None
         self.deleted: int | None = None
-        self.roles: dict[tuple[str, int], InterlocutorType] = {}
+        self.global_roles: dict[int, InterlocutorType] = {}
 
     def record_observation(self, observation: ContactObservation) -> DirectoryUpsertOutcome:
         self.contacts.append(observation.email)
@@ -135,15 +134,11 @@ class FakeDirectoryStore:
     def list_organizations(self) -> list[OrganizationDirectoryEntry]:
         return self.entries
 
-    def list_project_numbers(self) -> list[str]:
-        return sorted({project for project, _organization_id in self.roles}, reverse=True)
-
     def add_organization(
         self,
         name: str,
         *,
         domain: str | None = None,
-        project_number: str | None = None,
         role: InterlocutorType = InterlocutorType.INCONNU,
     ) -> int:
         organization_id = max((entry.organization_id for entry in self.entries), default=0) + 1
@@ -154,13 +149,32 @@ class FakeDirectoryStore:
                 name=name,
                 domains=domains,
                 contacts=(),
-                project_count=int(project_number is not None),
+                project_count=0,
+                default_role=role,
             )
         )
-        if project_number is not None:
-            self.roles[(project_number, organization_id)] = role
+        self.global_roles[organization_id] = role
         return organization_id
 
+    def set_organization_role(
+        self,
+        organization_id: int,
+        role: InterlocutorType,
+    ) -> None:
+        self.global_roles[organization_id] = role
+        self.entries = [
+            OrganizationDirectoryEntry(
+                organization_id=entry.organization_id,
+                name=entry.name,
+                domains=entry.domains,
+                contacts=entry.contacts,
+                project_count=entry.project_count,
+                default_role=(
+                    role if entry.organization_id == organization_id else entry.default_role
+                ),
+            )
+            for entry in self.entries
+        ]
     def delete_organization(self, organization_id: int) -> None:
         self.deleted = organization_id
         self.entries = [
@@ -177,30 +191,6 @@ class FakeDirectoryStore:
     ) -> None:
         self.merged = (source_organization_id, target_organization_id)
 
-    def list_project_participants(self, project_number: str) -> list[ProjectParticipantEntry]:
-        return [
-            ProjectParticipantEntry(
-                organization_id=entry.organization_id,
-                name=entry.name,
-                domains=entry.domains,
-                contacts=entry.contacts,
-                role=self.roles.get(
-                    (project_number, entry.organization_id),
-                    InterlocutorType.INCONNU,
-                ),
-                mail_count=1,
-            )
-            for entry in self.entries
-        ]
-
-    def set_project_participant_role(
-        self,
-        project_number: str,
-        organization_id: int,
-        role: InterlocutorType,
-    ) -> None:
-        self.roles[(project_number, organization_id)] = role
-
     def interlocutor_for_email(
         self,
         project_number: str,
@@ -209,7 +199,7 @@ class FakeDirectoryStore:
         domain = email.rsplit("@", maxsplit=1)[-1].casefold()
         if self.domain_map.get(domain) is None and domain != "gva.ch":
             return None
-        return self.roles.get((project_number, 1))
+        return self.global_roles.get(1)
 
 
 class FakePreviewPipeline:
@@ -632,19 +622,15 @@ def test_controller_adds_and_deletes_directory_organization(tmp_path: Path) -> N
     organization_id = controller.add_directory_organization(
         "Metal Factory",
         domain="metalfactory.ch",
-        project_number="2025-4893",
         role=InterlocutorType.FOURNISSEUR,
     )
 
-    assert controller.directory_project_numbers() == ["2025-4893"]
-    assert directory_store.roles[("2025-4893", organization_id)] == (
-        InterlocutorType.FOURNISSEUR
-    )
+    assert directory_store.global_roles[organization_id] == InterlocutorType.FOURNISSEUR
     controller.delete_directory_organization(organization_id)
     assert directory_store.deleted == organization_id
 
 
-def test_controller_applies_project_role_to_all_preview_rows(tmp_path: Path) -> None:
+def test_controller_applies_global_directory_role_to_preview_rows(tmp_path: Path) -> None:
     directory_store = FakeDirectoryStore()
     directory_store.domain_map["gva.ch"] = "AIG"
     row = make_row(tmp_path).model_copy(
@@ -677,9 +663,9 @@ def test_controller_applies_project_role_to_all_preview_rows(tmp_path: Path) -> 
     )
     controller.preview_rows = [row]
 
-    updated = controller.set_project_participant_role(1, InterlocutorType.CLIENT)
+    updated = controller.set_directory_organization_role(1, InterlocutorType.CLIENT)
 
-    assert directory_store.roles[("2025-4893", 1)] == InterlocutorType.CLIENT
+    assert directory_store.global_roles[1] == InterlocutorType.CLIENT
     assert updated[0].decision.interlocutor == InterlocutorType.CLIENT
     assert updated[0].decision.target_relative_folder == "Correspondance/AIG"
 
@@ -879,7 +865,7 @@ def test_controller_manual_update_uses_directory_for_company_folder(tmp_path: Pa
     assert updated.decision.target_relative_folder == "Correspondance/AIG"
 
 
-def test_controller_persists_supplier_role_before_business_category_is_known(
+def test_controller_manual_supplier_role_does_not_change_global_directory_role(
     tmp_path: Path,
 ) -> None:
     row = make_row(tmp_path, PreviewAction.REVIEW).model_copy(
@@ -912,7 +898,7 @@ def test_controller_persists_supplier_role_before_business_category_is_known(
         ),
     )
 
-    assert directory_store.roles[("2025-4893", 1)] == InterlocutorType.FOURNISSEUR
+    assert directory_store.global_roles == {}
     assert updated.decision.interlocutor == InterlocutorType.FOURNISSEUR
     assert updated.decision.mail_type == MailType.A_VERIFIER
     assert updated.decision.target_relative_folder == "A verifier"
