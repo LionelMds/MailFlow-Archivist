@@ -1,6 +1,6 @@
 # Release
 
-## Version 0.9.0
+## Version 0.9.1
 
 - choix entre OpenAI et Ollama local, avec modèles et réglages indépendants ;
 - classification locale structurée, sans clé API et sans bascule vers OpenAI ;

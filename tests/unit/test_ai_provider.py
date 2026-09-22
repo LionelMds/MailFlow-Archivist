@@ -47,7 +47,7 @@ def test_ollama_unavailable_keeps_mail_for_review_without_api_fallback(tmp_path:
 
     def handle(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "127.0.0.1"
-        raise httpx.ConnectError("private mail secret", request=request)
+        raise httpx.ConnectError("PRIVATE_SERVER_SENTINEL_MAIL_BODY", request=request)
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         classifier = OllamaClassifier(client=client)
@@ -59,5 +59,5 @@ def test_ollama_unavailable_keeps_mail_for_review_without_api_fallback(tmp_path:
     assert row.classification.ai is None
     assert row.classification.ai_error is not None
     assert "Ollama" in row.classification.ai_error
-    assert "private" not in row.model_dump_json()
+    assert "PRIVATE_SERVER_SENTINEL_MAIL_BODY" not in row.model_dump_json()
     assert "OpenAI" not in row.classification.ai_error
