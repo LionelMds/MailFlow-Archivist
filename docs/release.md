@@ -1,5 +1,17 @@
 # Release
 
+## Version 0.9.0
+
+- choix entre OpenAI et Ollama local, avec modèles et réglages indépendants ;
+- classification locale structurée, sans clé API et sans bascule vers OpenAI ;
+- liste des modèles installés, test sur un mail fictif, statut et délai réglables ;
+- connexion limitée au PC, refus des modèles cloud, des proxys et redirections ;
+- traitement prudent des pannes et réponses invalides : les mails restent à vérifier ;
+- guide d'installation et diagnostic reproductible sur dix mails français synthétiques.
+
+Voir [le guide Ollama](ollama.md) pour l'installation du moteur et du modèle.
+Ollama et ses modèles sont installés séparément de MailFlow.
+
 ## Version 0.8.6
 
 - GPT-6 Astra par défaut, migration de l'ancien défaut enregistré et Responses API

@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from mailflow.models import AiMode
 
@@ -14,6 +15,9 @@ KEYRING_SERVICE = "mailflow-archivist"
 KEYRING_OPENAI_USERNAME = "openai-api-key"
 DEFAULT_AI_MODEL = "gpt-6-astra"
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60.0
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
+DEFAULT_OLLAMA_TIMEOUT_SECONDS = 180.0
 SETTINGS_VERSION = 1
 AI_MODEL_OPTIONS = (
     DEFAULT_AI_MODEL,
@@ -33,6 +37,29 @@ def _default_data_dir() -> Path:
         return Path(user_data_path(APP_NAME, "Balz Metal Sa"))
     except Exception:
         return Path(os.environ.get("APPDATA", Path.home())) / APP_NAME
+
+
+def validate_ollama_base_url(value: str) -> str:
+    message = "Ollama doit utiliser une adresse HTTP locale (127.0.0.1, localhost ou [::1])."
+    try:
+        url = urlsplit(value.strip())
+        port = url.port
+    except ValueError as exc:
+        raise ValueError(message) from exc
+    if (
+        url.scheme != "http"
+        or url.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or url.username is not None
+        or url.password is not None
+        or url.path not in {"", "/"}
+        or url.query
+        or url.fragment
+        or port == 0
+    ):
+        raise ValueError(message)
+    # Pin localhost to loopback without relying on DNS or the hosts file.
+    host = "[::1]" if url.hostname == "::1" else "127.0.0.1"
+    return f"http://{host}" + (f":{port}" if port is not None else "")
 
 
 class AppPaths(BaseModel):
@@ -63,14 +90,23 @@ class AppSettings(BaseModel):
     selected_outlook_account: str | None = None
     selected_year: str | None = None
     ai_mode: AiMode = AiMode.ALL
+    ai_provider: Literal["openai", "ollama"] = "openai"
     ai_model: str = DEFAULT_AI_MODEL
     openai_timeout_seconds: float = Field(default=DEFAULT_OPENAI_TIMEOUT_SECONDS, gt=0)
+    ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
+    ollama_model: str = Field(default=DEFAULT_OLLAMA_MODEL, min_length=1)
+    ollama_timeout_seconds: float = Field(default=DEFAULT_OLLAMA_TIMEOUT_SECONDS, gt=0)
     ai_include_body_excerpt: bool = True
     privacy_mask_phone_numbers: bool = False
     review_reminder_times: list[str] = Field(default_factory=lambda: ["09:00", "14:00"])
     client_email_domains: list[str] = Field(default_factory=lambda: ["gva.ch"])
     rule_confidence_threshold: float = 0.80
     decision_confidence_threshold: float = 0.80
+
+    @field_validator("ollama_base_url")
+    @classmethod
+    def local_ollama_url(cls, value: str) -> str:
+        return validate_ollama_base_url(value)
 
 
 def load_settings(path: Path | None = None) -> AppSettings:

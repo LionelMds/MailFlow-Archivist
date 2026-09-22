@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from mailflow.classifier.decision_engine import ArchiveState, decide_archive
+from mailflow.classifier.ollama_classifier import OllamaError
 from mailflow.classifier.routing_context import (
     ResolvedCounterparty,
     RoutingDirectoryProtocol,
@@ -201,7 +202,9 @@ class ClassificationPipeline:
             # API exception strings can contain request bodies or credentials.
             # Display only locally authored messages; leave the mail in review.
             status_code = getattr(exc, "status_code", None)
-            if status_code in {401, 403}:
+            if isinstance(exc, OllamaError):
+                error = str(exc)
+            elif status_code in {401, 403}:
                 error = "Accès OpenAI refusé : vérifiez la clé et l'accès au modèle dans Réglages."
             elif status_code == 429:
                 error = "Limite OpenAI atteinte : vérifiez le quota puis relancez l'analyse."

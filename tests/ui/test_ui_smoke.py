@@ -793,14 +793,17 @@ def test_saving_ai_settings_updates_existing_pipeline_and_key_without_losing_row
 
     from mailflow import config
     from mailflow.classifier import ai_classifier
+    from mailflow.core import app_controller
     from mailflow.ui.background_call import ResponsiveAiClassifier
     from mailflow.ui.main_window import MainWindow
 
     key_store = {"key": "initial-test-key"}
     monkeypatch.setattr(config, "get_openai_api_key", lambda: key_store["key"])
+    monkeypatch.setattr(app_controller, "get_openai_api_key", lambda: key_store["key"])
     monkeypatch.setattr(config, "set_openai_api_key", lambda key: key_store.update(key=key))
     monkeypatch.setattr(config, "save_settings", lambda _settings: None)
     monkeypatch.setattr(ai_classifier, "AiClassifier", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(app_controller, "AiClassifier", lambda **kwargs: SimpleNamespace(**kwargs))
     app = QApplication.instance() or QApplication([])
     controller = FakeController()
     controller.preview_rows = [make_preview_row(tmp_path, PreviewAction.REVIEW)]
@@ -823,7 +826,7 @@ def test_saving_ai_settings_updates_existing_pipeline_and_key_without_losing_row
     assert not pipeline.include_body_for_ai
     assert pipeline.privacy_mask_phone_numbers
     assert isinstance(pipeline.ai_classifier, ResponsiveAiClassifier)
-    assert pipeline.ai_classifier.classifier.model == "gpt-6-astra-custom"
+    assert cast(Any, pipeline.ai_classifier.classifier).model == "gpt-6-astra-custom"
     assert pipeline.ai_classifier.classifier.api_key == "initial-test-key"
 
     window.mailflow_openai_key_input.setText("replacement-test-key")
@@ -853,5 +856,228 @@ def test_archived_mail_is_read_only_in_review_and_inline_controls(tmp_path: Path
         assert not table.cellWidget(0, column).isEnabled()
     table.cellDoubleClicked.emit(0, 4)
     assert "déjà archivé" in window.mailflow_scan_status_label.text()
+    window.close()
+    app.processEvents()
+
+
+def test_local_ai_settings_round_trip_and_switch_preserve_both_models_and_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow import config
+    from mailflow.classifier.ollama_classifier import OllamaClassifier
+    from mailflow.config import AppPaths, load_settings
+    from mailflow.core import app_controller
+    from mailflow.ui.background_call import ResponsiveAiClassifier
+    from mailflow.ui.main_window import MainWindow
+
+    monkeypatch.setattr(config, "get_openai_api_key", lambda: "test-key")
+    monkeypatch.setattr(app_controller, "get_openai_api_key", lambda: "test-key")
+    monkeypatch.setattr(app_controller, "AiClassifier", lambda **kwargs: SimpleNamespace(**kwargs))
+    app = QApplication.instance() or QApplication([])
+    settings = AppSettings(paths=AppPaths(data_dir=tmp_path), ai_model="gpt-6-astra-custom")
+    controller = FakeController()
+    controller.preview_rows = [make_preview_row(tmp_path, PreviewAction.REVIEW)]
+    original_rows = controller.preview_rows
+    pipeline = SimpleNamespace(ai_classifier=None, ai_mode=AiMode.ALL)
+    cast(Any, controller).preview_pipeline = pipeline
+    window = MainWindow(settings, controller=controller)
+    window.mailflow_ai_provider_combo.setCurrentIndex(1)
+    window.mailflow_ollama_model_input.setCurrentText("custom-local:4b")
+    window.mailflow_ollama_base_url_input.setText("http://localhost:11435/")
+    window.mailflow_ollama_timeout_input.setValue(300.0)
+    window.mailflow_save_settings_button.click()
+
+    assert settings.ai_provider == "ollama"
+    assert settings.ollama_base_url == "http://127.0.0.1:11435"
+    assert not window.mailflow_openai_key_input.isEnabled()
+    assert window.mailflow_ai_model_input.isHidden()
+    assert window.mailflow_ollama_model_input.isEnabled()
+    assert isinstance(pipeline.ai_classifier, ResponsiveAiClassifier)
+    assert isinstance(pipeline.ai_classifier.classifier, OllamaClassifier)
+    assert controller.preview_rows is original_rows
+
+    window.mailflow_ai_provider_combo.setCurrentIndex(0)
+    window.mailflow_save_settings_button.click()
+    assert settings.ai_model == "gpt-6-astra-custom"
+    assert settings.ollama_model == "custom-local:4b"
+    assert cast(Any, pipeline.ai_classifier.classifier).model == "gpt-6-astra-custom"
+    assert window.mailflow_openai_key_input.isEnabled()
+    assert not window.mailflow_ollama_model_input.isEnabled()
+
+    window.mailflow_ai_provider_combo.setCurrentIndex(1)
+    window.mailflow_save_settings_button.click()
+    reloaded = load_settings(settings.paths.config_file)
+    assert reloaded.ai_provider == "ollama"
+    assert reloaded.ollama_model == "custom-local:4b"
+    assert reloaded.ollama_timeout_seconds == 300.0
+    assert reloaded.ai_model == "gpt-6-astra-custom"
+    window.close()
+    second_window = MainWindow(reloaded, controller=FakeController())
+    assert second_window.mailflow_ai_provider_combo.currentData() == "ollama"
+    assert second_window.mailflow_ollama_model_input.currentText() == "custom-local:4b"
+    assert second_window.mailflow_ollama_base_url_input.text() == "http://127.0.0.1:11435"
+    assert second_window.mailflow_ollama_timeout_input.value() == 300.0
+    second_window.close()
+    app.processEvents()
+
+
+def test_local_ai_test_is_responsive_and_never_reads_key_or_uses_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    import time
+
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow import config
+    from mailflow.classifier import ai_classifier, ollama_classifier
+    from mailflow.classifier.ai_classifier import AiConnectionCheck
+    from mailflow.core import app_controller
+    from mailflow.ui.main_window import MainWindow
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("Local mode must not access OpenAI or the key store")
+
+    checks: list[dict[str, Any]] = []
+
+    def make_local_classifier(**kwargs: Any) -> Any:
+        def check() -> AiConnectionCheck:
+            checks.append(kwargs)
+            time.sleep(0.1)
+            return AiConnectionCheck(ok=True, message="Connexion Ollama OK (mail fictif).")
+        return SimpleNamespace(check_connection=check, list_models=forbidden)
+
+    monkeypatch.setattr(config, "get_openai_api_key", forbidden)
+    monkeypatch.setattr(app_controller, "get_openai_api_key", forbidden)
+    monkeypatch.setattr(ai_classifier, "AiClassifier", forbidden)
+    monkeypatch.setattr(app_controller, "AiClassifier", forbidden)
+    monkeypatch.setattr(ollama_classifier, "OllamaClassifier", make_local_classifier)
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(AppSettings(ai_provider="ollama"), controller=FakeController())
+    assert checks == []
+    assert "aucun envoi à OpenAI" in window.mailflow_ai_provider_hint.text()
+    assert "à tester" in window.mailflow_ollama_status.text()
+    assert not window.mailflow_test_openai_key_button.isEnabled()
+    window.mailflow_ollama_timeout_input.setValue(240.0)
+    observed_busy: list[bool] = []
+    timer = QTimer()
+    timer.setInterval(5)
+    timer.timeout.connect(lambda: observed_busy.append(not window.mailflow_pages.isEnabled()))
+    timer.start()
+    window.mailflow_test_ollama_button.click()
+    timer.stop()
+    assert len(checks) == 1
+    assert checks[0]["model"] == "qwen3.5:4b"
+    assert checks[0]["base_url"] == "http://127.0.0.1:11434"
+    assert checks[0]["timeout_seconds"] == 240.0
+    assert observed_busy and all(observed_busy)
+    assert "Connexion Ollama OK" in window.mailflow_ollama_status.text()
+    assert window.mailflow_pages.isEnabled()
+    window.mailflow_ollama_model_input.setCurrentText("different:4b")
+    assert "à tester" in window.mailflow_ollama_status.text()
+    window.close()
+    app.processEvents()
+
+
+@pytest.mark.parametrize("models", [["qwen3.5:4b", "custom:4b"], [], ["another:4b"]])
+def test_refresh_local_models_preserves_selection_and_reports_installed_models(
+    models: list[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow.classifier import ollama_classifier
+    from mailflow.ui.main_window import MainWindow
+
+    calls: list[str] = []
+
+    def installed_models() -> list[str]:
+        calls.append("list")
+        return models
+
+    monkeypatch.setattr(ollama_classifier, "OllamaClassifier",
+                        lambda **_kwargs: SimpleNamespace(list_models=installed_models))
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(AppSettings(ai_provider="ollama"), controller=FakeController())
+    assert calls == []
+    window.mailflow_refresh_ollama_models_button.click()
+    assert calls == ["list"]
+    assert window.mailflow_ollama_model_input.currentText() == "qwen3.5:4b"
+    assert window.mailflow_ollama_model_input.count() == len(models)
+    if not models:
+        assert "aucun modèle" in window.mailflow_ollama_status.text()
+    elif "qwen3.5:4b" not in models:
+        assert "absent" in window.mailflow_ollama_status.text()
+    else:
+        assert "2 modèle(s) installé(s)" in window.mailflow_ollama_status.text()
+    window.close()
+    app.processEvents()
+
+
+def test_local_failure_restores_controls_and_shows_error_without_api_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow import config
+    from mailflow.classifier import ai_classifier, ollama_classifier
+    from mailflow.classifier.ai_classifier import AiConnectionCheck
+    from mailflow.ui.main_window import MainWindow
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("Local failure must not fall back to OpenAI")
+
+    def unavailable() -> list[str]:
+        raise ollama_classifier.OllamaError("Démarrez Ollama sur ce PC.")
+
+    monkeypatch.setattr(config, "get_openai_api_key", forbidden)
+    monkeypatch.setattr(ai_classifier, "AiClassifier", forbidden)
+    monkeypatch.setattr(ollama_classifier, "OllamaClassifier", lambda **_kwargs: SimpleNamespace(
+        check_connection=lambda: AiConnectionCheck(ok=False, message="Le modèle est absent."),
+        list_models=unavailable,
+    ))
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(AppSettings(ai_provider="ollama"), controller=FakeController())
+    window.mailflow_test_ollama_button.click()
+    assert "modèle est absent" in window.mailflow_ollama_status.text()
+    assert window.mailflow_test_ollama_button.isEnabled()
+    window.mailflow_refresh_ollama_models_button.click()
+    assert "Démarrez Ollama" in window.mailflow_ollama_status.text()
+    assert window.mailflow_refresh_ollama_models_button.isEnabled()
+    assert window.mailflow_ollama_model_input.currentText() == "qwen3.5:4b"
+    window.close()
+    app.processEvents()
+
+
+def test_saving_invalid_local_address_keeps_settings_and_pipeline_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow import config
+    from mailflow.ui.main_window import MainWindow
+
+    saved: list[AppSettings] = []
+    monkeypatch.setattr(config, "save_settings", saved.append)
+    app = QApplication.instance() or QApplication([])
+    settings = AppSettings(ai_provider="ollama")
+    controller = FakeController()
+    pipeline = SimpleNamespace(ai_classifier=None, ai_mode=AiMode.ALL)
+    cast(Any, controller).preview_pipeline = pipeline
+    window = MainWindow(settings, controller=controller)
+    window.mailflow_ollama_base_url_input.setText("https://outside.example.invalid")
+    window.mailflow_ollama_model_input.setCurrentText("changed:4b")
+    window.mailflow_save_settings_button.click()
+    assert settings.ollama_base_url == "http://127.0.0.1:11434"
+    assert settings.ollama_model == "qwen3.5:4b"
+    assert pipeline.ai_classifier is None
+    assert saved == []
+    assert "non enregistrés" in window.mailflow_scan_status_label.text()
     window.close()
     app.processEvents()

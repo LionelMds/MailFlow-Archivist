@@ -80,3 +80,34 @@ def test_legacy_model_migration_preserves_custom_timeout(tmp_path: Path) -> None
     }), encoding="utf-8")
 
     assert load_settings(config_path).openai_timeout_seconds == 90.0
+
+
+def test_ollama_settings_round_trip_and_legacy_provider(tmp_path: Path) -> None:
+    assert AppSettings().ai_provider == "openai"
+    settings = AppSettings(
+        paths=AppPaths(data_dir=tmp_path), ai_provider="ollama",
+        ollama_base_url="http://localhost:11434/", ollama_model="qwen3.5:4b",
+        ollama_timeout_seconds=120,
+    )
+
+    save_settings(settings)
+
+    assert load_settings(tmp_path / "config.json") == settings
+    assert settings.ollama_base_url == "http://127.0.0.1:11434"
+
+
+@pytest.mark.parametrize("url", [
+    "https://ollama.com", "http://192.168.1.2:11434", "http://127.0.0.1.example.com",
+    "http://user:pass@localhost:11434", "http://localhost:11434/api", "file:///tmp/ollama",
+    "http://localhost:11434?token=secret", "http://localhost:11434#fragment",
+    "http://localhost:99999", "http://localhost:0", "http://[invalid",
+])
+def test_ollama_rejects_nonlocal_or_ambiguous_urls(url: str) -> None:
+    with pytest.raises(ValueError, match="adresse HTTP locale"):
+        AppSettings(ollama_base_url=url)
+
+
+def test_ollama_supports_ipv6_loopback() -> None:
+    assert AppSettings(ollama_base_url="http://[::1]:11434").ollama_base_url == (
+        "http://[::1]:11434"
+    )

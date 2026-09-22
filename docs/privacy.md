@@ -1,6 +1,16 @@
 # Confidentialite
 
-Le MVP limite les donnees envoyees a l'IA :
+Le moteur **Ollama (local)** traite les données sur le PC. MailFlow accepte uniquement
+une adresse de boucle locale (`127.0.0.1`, `localhost` ou `::1`), ignore les proxys
+HTTP système et refuse les redirections. Il vérifie que le modèle est installé
+localement et refuse les modèles cloud avant de transmettre un mail. Une erreur
+laisse le mail à vérifier, sans bascule vers OpenAI. Le téléchargement initial
+d'Ollama et du modèle nécessite Internet ; la classification locale n'en a pas besoin.
+
+Le moteur **OpenAI (API)** transmet les mêmes données à OpenAI. Le choix du moteur
+est explicite dans les réglages ; les anciennes configurations conservent OpenAI.
+
+MailFlow limite les données transmises au moteur choisi :
 
 - metadonnees du mail ;
 - sujet ;
@@ -14,7 +24,7 @@ jusqu'à cinq exemples de corrections vérifiées pertinents. L'import de l'annu
 reste local, mais ces éléments sélectionnés sont transmis lors d'une classification IA.
 Les fichiers joints eux-mêmes ne sont pas transmis.
 
-Les appels Responses utilisent `store=False` pour ne pas demander la conservation
+En mode OpenAI, les appels Responses utilisent `store=False` pour ne pas demander la conservation
 de la réponse comme ressource API. Les éventuelles obligations de conservation ou
 journaux côté fournisseur dépendent des conditions du compte OpenAI ; cette option
 ne signifie pas « aucune rétention ». Les erreurs de classification affichées dans

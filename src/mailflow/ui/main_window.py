@@ -129,6 +129,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QComboBox,
         QDialog,
         QDialogButtonBox,
+        QDoubleSpinBox,
         QFileDialog,
         QFormLayout,
         QGridLayout,
@@ -163,14 +164,21 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     from mailflow import __version__
     from mailflow.classifier.ai_classifier import AiClassifier
+    from mailflow.classifier.ollama_classifier import OllamaClassifier
     from mailflow.config import (
         AI_MODEL_OPTIONS,
         DEFAULT_AI_MODEL,
+        DEFAULT_OLLAMA_BASE_URL,
+        DEFAULT_OLLAMA_MODEL,
         get_openai_api_key,
         save_settings,
         set_openai_api_key,
     )
-    from mailflow.core.app_controller import PreviewRequest, build_default_controller
+    from mailflow.core.app_controller import (
+        PreviewRequest,
+        build_ai_classifier,
+        build_default_controller,
+    )
     from mailflow.core.manual_review import suggested_manual_destination
     from mailflow.core.project_digest import build_project_digest
     from mailflow.resources import app_icon_path
@@ -221,14 +229,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         pipeline.ai_mode = settings.ai_mode
         pipeline.include_body_for_ai = settings.ai_include_body_excerpt
         pipeline.privacy_mask_phone_numbers = settings.privacy_mask_phone_numbers
-        pipeline.ai_classifier = None
-        api_key = get_openai_api_key() if settings.ai_mode != AiMode.DISABLED else None
-        if api_key:
-            pipeline.ai_classifier = ResponsiveAiClassifier(AiClassifier(
-                api_key=api_key,
-                model=settings.ai_model,
-                timeout_seconds=settings.openai_timeout_seconds,
-            ))
+        classifier = build_ai_classifier(settings)
+        pipeline.ai_classifier = (
+            ResponsiveAiClassifier(classifier) if classifier is not None else None
+        )
 
     enable_responsive_ai()
     window = MailFlowMainWindow()
@@ -584,13 +588,21 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     )
     set_combo_value_by_data(ai_mode_combo, selected_ai_mode.value)
     grid.addWidget(ai_mode_combo, 1, 1)
-    grid.addWidget(QLabel("Modèle IA"), 2, 0)
+    grid.addWidget(QLabel("Moteur IA"), 2, 0)
+    ai_provider_combo = QComboBox()
+    ai_provider_combo.addItem("OpenAI — API", "openai")
+    ai_provider_combo.addItem("Ollama — IA locale sur ce PC", "ollama")
+    set_combo_value_by_data(ai_provider_combo, settings.ai_provider)
+    grid.addWidget(ai_provider_combo, 2, 1)
+    ai_model_label = QLabel("Modèle OpenAI")
+    grid.addWidget(ai_model_label, 3, 0)
     ai_model_input = QComboBox()
     ai_model_input.setEditable(True)
     ai_model_input.addItems(list(AI_MODEL_OPTIONS))
     set_combo_value_by_text(ai_model_input, settings.ai_model)
-    grid.addWidget(ai_model_input, 2, 1)
-    grid.addWidget(QLabel("Clé API OpenAI"), 3, 0)
+    grid.addWidget(ai_model_input, 3, 1)
+    openai_key_label = QLabel("Clé API OpenAI")
+    grid.addWidget(openai_key_label, 4, 0)
     openai_key_widget = QWidget()
     openai_key_layout = QHBoxLayout(openai_key_widget)
     openai_key_layout.setContentsMargins(0, 0, 0, 0)
@@ -599,8 +611,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     openai_key_input.setPlaceholderText("Coller une nouvelle clé puis enregistrer")
     save_openai_key_button = QPushButton(UI_TEXT["save_openai_key"])
     test_openai_key_button = QPushButton(UI_TEXT["test_openai_key"])
-    openai_key_status = QLabel(openai_key_status_text(get_openai_api_key() is not None))
-    openai_key_status.setStyleSheet(openai_key_status_style(get_openai_api_key() is not None))
+    openai_key_status = QLabel()
     openai_key_layout.addWidget(openai_key_input)
     openai_key_layout.addWidget(save_openai_key_button)
     openai_key_layout.addWidget(test_openai_key_button)
@@ -609,18 +620,61 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     key_fields_layout.setContentsMargins(0, 0, 0, 0)
     key_fields_layout.addWidget(openai_key_widget)
     key_fields_layout.addWidget(openai_key_status)
-    grid.addWidget(key_fields, 3, 1)
-    ai_include_body_checkbox = QCheckBox("Envoyer l'extrait nettoyé du corps à l'IA")
+    grid.addWidget(key_fields, 4, 1)
+    ollama_model_label = QLabel("Modèle local installé")
+    grid.addWidget(ollama_model_label, 5, 0)
+    ollama_models_widget = QWidget()
+    ollama_models_layout = QHBoxLayout(ollama_models_widget)
+    ollama_models_layout.setContentsMargins(0, 0, 0, 0)
+    ollama_model_input = QComboBox()
+    ollama_model_input.setEditable(True)
+    ollama_model_input.addItem(settings.ollama_model)
+    ollama_models_layout.addWidget(ollama_model_input, 1)
+    refresh_ollama_models_button = QPushButton("Actualiser les modèles")
+    ollama_models_layout.addWidget(refresh_ollama_models_button)
+    grid.addWidget(ollama_models_widget, 5, 1)
+    ollama_url_label = QLabel("Adresse Ollama sur ce PC")
+    grid.addWidget(ollama_url_label, 6, 0)
+    ollama_base_url_input = QLineEdit(settings.ollama_base_url)
+    ollama_base_url_input.setPlaceholderText(DEFAULT_OLLAMA_BASE_URL)
+    ollama_address_widget = QWidget()
+    ollama_address_layout = QHBoxLayout(ollama_address_widget)
+    ollama_address_layout.setContentsMargins(0, 0, 0, 0)
+    ollama_address_layout.addWidget(ollama_base_url_input, 1)
+    ollama_address_layout.addWidget(QLabel("Délai maximal par mail"))
+    ollama_timeout_input = QDoubleSpinBox()
+    ollama_timeout_input.setRange(0.1, 3600.0)
+    ollama_timeout_input.setDecimals(1)
+    ollama_timeout_input.setSingleStep(30.0)
+    ollama_timeout_input.setSuffix(" s")
+    ollama_timeout_input.setValue(settings.ollama_timeout_seconds)
+    ollama_address_layout.addWidget(ollama_timeout_input)
+    grid.addWidget(ollama_address_widget, 6, 1)
+    ollama_test_widget = QWidget()
+    ollama_test_layout = QVBoxLayout(ollama_test_widget)
+    ollama_test_layout.setContentsMargins(0, 0, 0, 0)
+    test_ollama_button = QPushButton("Tester IA locale")
+    test_ollama_button.setToolTip("Classer un mail fictif pour vérifier Ollama et le modèle.")
+    ollama_test_layout.addWidget(test_ollama_button, 0, Qt.AlignmentFlag.AlignLeft)
+    ollama_status = QLabel("Connexion locale à tester.")
+    ollama_status.setWordWrap(True)
+    ollama_test_layout.addWidget(ollama_status)
+    grid.addWidget(ollama_test_widget, 7, 1)
+    ai_provider_hint = QLabel()
+    ai_provider_hint.setWordWrap(True)
+    ai_provider_hint.setProperty("role", "muted")
+    grid.addWidget(ai_provider_hint, 8, 1)
+    ai_include_body_checkbox = QCheckBox("Inclure l'extrait nettoyé du corps dans l'analyse IA")
     ai_include_body_checkbox.setChecked(settings.ai_include_body_excerpt)
-    grid.addWidget(ai_include_body_checkbox, 4, 1)
-    privacy_phone_checkbox = QCheckBox("Masquer les numéros de téléphone avant envoi")
+    grid.addWidget(ai_include_body_checkbox, 9, 1)
+    privacy_phone_checkbox = QCheckBox("Masquer les numéros de téléphone avant l'analyse IA")
     privacy_phone_checkbox.setChecked(settings.privacy_mask_phone_numbers)
-    grid.addWidget(privacy_phone_checkbox, 5, 1)
-    grid.addWidget(QLabel("Horaires des rappels"), 6, 0)
+    grid.addWidget(privacy_phone_checkbox, 10, 1)
+    grid.addWidget(QLabel("Horaires des rappels"), 11, 0)
     review_reminder_times_input = QLineEdit(format_reminder_times(settings.review_reminder_times))
     review_reminder_times_input.setPlaceholderText("09:00, 14:00, 16:30")
-    grid.addWidget(review_reminder_times_input, 6, 1)
-    grid.addWidget(QLabel("Mises à jour"), 7, 0)
+    grid.addWidget(review_reminder_times_input, 11, 1)
+    grid.addWidget(QLabel("Mises à jour"), 12, 0)
     update_widget = QWidget()
     update_layout = QHBoxLayout(update_widget)
     update_layout.setContentsMargins(0, 0, 0, 0)
@@ -630,10 +684,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     update_layout.addWidget(check_updates_button)
     update_layout.addWidget(update_status)
     update_layout.addStretch(1)
-    grid.addWidget(update_widget, 7, 1)
+    grid.addWidget(update_widget, 12, 1)
     save_settings_button = QPushButton(UI_TEXT["save_settings"])
     save_settings_button.setProperty("role", "primary")
-    grid.addWidget(save_settings_button, 8, 1)
+    grid.addWidget(save_settings_button, 13, 1)
     settings_layout.addWidget(config)
     settings_layout.addStretch(1)
     settings_scroll_area = QScrollArea()
@@ -799,6 +853,28 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     def update_openai_key_status(*, valid: bool | None = None) -> None:
         set_openai_key_status(has_key=has_openai_api_key(), valid=valid)
+
+    def update_ai_provider_fields() -> None:
+        local = ai_provider_combo.currentData() == "ollama"
+        for widget in (ai_model_label, ai_model_input, openai_key_label, key_fields):
+            widget.setVisible(not local)
+            widget.setEnabled(not local)
+        for widget in (
+            ollama_model_label, ollama_models_widget, ollama_url_label,
+            ollama_address_widget, ollama_test_widget,
+        ):
+            widget.setVisible(local)
+            widget.setEnabled(local)
+        ai_provider_hint.setText(
+            "Les mails sont analysés sur ce PC. Aucune clé API requise ; aucun envoi à OpenAI. "
+            "Ollama doit être démarré et le modèle installé."
+            if local else
+            "Les informations utilisées pour le classement sont envoyées à l'API OpenAI."
+        )
+        if not local:
+            update_openai_key_status()
+
+    update_ai_provider_fields()
 
     def show_window_from_tray() -> None:
         window.show()
@@ -1696,15 +1772,28 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     def update_projects_root() -> None:
         reminder_times = parse_reminder_times(review_reminder_times_input.text())
-        settings.local_projects_root = Path(projects_root_input.text())
-        settings.selected_outlook_account = selected_account_identifier()
-        settings.outlook_root_folder = current_outlook_root_folder()
-        settings.selected_year = clean_optional_text(year_input.text())
-        settings.ai_mode = AiMode(str(ai_mode_combo.currentData()))
-        settings.ai_model = clean_optional_text(ai_model_input.currentText()) or DEFAULT_AI_MODEL
-        settings.ai_include_body_excerpt = ai_include_body_checkbox.isChecked()
-        settings.privacy_mask_phone_numbers = privacy_phone_checkbox.isChecked()
-        settings.review_reminder_times = reminder_times
+        values = {
+            "local_projects_root": Path(projects_root_input.text()),
+            "selected_outlook_account": selected_account_identifier(),
+            "outlook_root_folder": current_outlook_root_folder(),
+            "selected_year": clean_optional_text(year_input.text()),
+            "ai_mode": AiMode(str(ai_mode_combo.currentData())),
+            "ai_provider": str(ai_provider_combo.currentData()),
+            "ai_model": clean_optional_text(ai_model_input.currentText()) or DEFAULT_AI_MODEL,
+            "ollama_model": (
+                clean_optional_text(ollama_model_input.currentText()) or DEFAULT_OLLAMA_MODEL
+            ),
+            "ollama_base_url": (
+                clean_optional_text(ollama_base_url_input.text()) or DEFAULT_OLLAMA_BASE_URL
+            ),
+            "ollama_timeout_seconds": ollama_timeout_input.value(),
+            "ai_include_body_excerpt": ai_include_body_checkbox.isChecked(),
+            "privacy_mask_phone_numbers": privacy_phone_checkbox.isChecked(),
+            "review_reminder_times": reminder_times,
+        }
+        validated = type(settings).model_validate(settings.model_dump() | values)
+        for field in values:
+            setattr(settings, field, getattr(validated, field))
 
     def save_current_settings() -> None:
         if operation_in_progress:
@@ -1716,10 +1805,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             set_scan_status("Réglages enregistrés. Les choix IA et confidentialité sont appliqués.")
             append_log("Réglages enregistrés et paramètres IA appliqués à la session.")
         except Exception as exc:
+            set_scan_status("Réglages non enregistrés : vérifiez les champs et le journal.",
+                            success=False)
             append_log(f"Erreur enregistrement parametres: {exc}")
 
     def save_openai_key_from_input() -> None:
-        if operation_in_progress:
+        if operation_in_progress or ai_provider_combo.currentData() != "openai":
             return
         api_key = clean_optional_text(openai_key_input.text())
         if api_key is None:
@@ -1736,6 +1827,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     @exclusive_operation
     def test_openai_key_from_input() -> None:
+        if ai_provider_combo.currentData() != "openai":
+            return
         api_key = clean_optional_text(openai_key_input.text()) or get_openai_api_key()
         if api_key is None:
             set_openai_key_status(has_key=False, valid=False)
@@ -1757,6 +1850,62 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             test_openai_key_button.setEnabled(True)
         set_openai_key_status(has_key=True, valid=result.ok)
         append_log(f"Test OpenAI: {result.message}")
+
+    def ollama_classifier_from_input() -> OllamaClassifier:
+        return OllamaClassifier(
+            base_url=clean_optional_text(ollama_base_url_input.text()) or DEFAULT_OLLAMA_BASE_URL,
+            model=clean_optional_text(ollama_model_input.currentText()) or DEFAULT_OLLAMA_MODEL,
+            timeout_seconds=ollama_timeout_input.value(),
+        )
+
+    def set_ollama_status(message: str, *, success: bool | None = None) -> None:
+        color = "#166534" if success is True else "#9f1239" if success is False else "#334155"
+        ollama_status.setText(message)
+        ollama_status.setStyleSheet(f"QLabel {{ color: {color}; }}")
+
+    def reset_ollama_status() -> None:
+        set_ollama_status("Connexion locale à tester.")
+
+    @exclusive_operation
+    def test_ollama_from_input() -> None:
+        if ai_provider_combo.currentData() != "ollama":
+            return
+        set_ollama_status("Test local en cours sur un mail fictif… Le modèle peut prendre un "
+                          "moment à démarrer.")
+        try:
+            result = run_with_event_loop(ollama_classifier_from_input().check_connection)
+        except Exception as exc:
+            set_ollama_status(f"Test local impossible : {exc}", success=False)
+            append_log(f"Test Ollama impossible : {exc}")
+            return
+        set_ollama_status(result.message, success=result.ok)
+        append_log(f"Test Ollama : {result.message}")
+
+    @exclusive_operation
+    def refresh_ollama_models() -> None:
+        if ai_provider_combo.currentData() != "ollama":
+            return
+        selected_model = ollama_model_input.currentText().strip() or DEFAULT_OLLAMA_MODEL
+        set_ollama_status("Recherche des modèles installés sur ce PC…")
+        try:
+            models = run_with_event_loop(ollama_classifier_from_input().list_models)
+        except Exception as exc:
+            set_ollama_status(f"Ollama indisponible : {exc}", success=False)
+            append_log(f"Actualisation des modèles Ollama impossible : {exc}")
+            return
+        ollama_model_input.clear()
+        ollama_model_input.addItems(models)
+        ollama_model_input.setCurrentText(selected_model)
+        if not models:
+            set_ollama_status("Ollama répond, mais aucun modèle n'est installé. "
+                              "Installez un modèle dans Ollama, puis actualisez.", success=False)
+        elif selected_model not in models:
+            set_ollama_status(f"{len(models)} modèle(s) installé(s). "
+                              "Choisissez un modèle de la liste ; le modèle saisi est absent.",
+                              success=False)
+        else:
+            set_ollama_status(f"{len(models)} modèle(s) installé(s). "
+                              "Cliquez sur « Tester IA locale » pour vérifier le classement.")
 
     def set_update_status(message: str, *, success: bool | None = None) -> None:
         if success is True:
@@ -1835,7 +1984,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     ) -> list[PreviewRow]:
         nonlocal active_controller
         update_projects_root()
-        if settings.ai_mode != AiMode.DISABLED and not has_openai_api_key():
+        if (settings.ai_mode != AiMode.DISABLED and settings.ai_provider == "openai"
+                and not has_openai_api_key()):
             append_log("Mode IA actif sans cle OpenAI: les lignes resteront a verifier.")
         if not controller_was_injected:
             active_controller = build_default_controller(settings)
@@ -2332,6 +2482,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     )
     save_openai_key_button.clicked.connect(save_openai_key_from_input)
     test_openai_key_button.clicked.connect(test_openai_key_from_input)
+    ai_provider_combo.currentIndexChanged.connect(update_ai_provider_fields)
+    ollama_model_input.currentTextChanged.connect(reset_ollama_status)
+    ollama_base_url_input.textChanged.connect(reset_ollama_status)
+    refresh_ollama_models_button.clicked.connect(refresh_ollama_models)
+    test_ollama_button.clicked.connect(test_ollama_from_input)
     check_updates_button.clicked.connect(check_updates_from_ui)
     save_settings_button.clicked.connect(save_current_settings)
     rename_folder_button.clicked.connect(rename_selected_folder)
@@ -2401,7 +2556,15 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_review_reminder_timer = review_reminder_timer
     dynamic_window.mailflow_review_reminder_times_input = review_reminder_times_input
     dynamic_window.mailflow_ai_mode_combo = ai_mode_combo
+    dynamic_window.mailflow_ai_provider_combo = ai_provider_combo
+    dynamic_window.mailflow_ai_provider_hint = ai_provider_hint
     dynamic_window.mailflow_ai_model_input = ai_model_input
+    dynamic_window.mailflow_ollama_model_input = ollama_model_input
+    dynamic_window.mailflow_ollama_base_url_input = ollama_base_url_input
+    dynamic_window.mailflow_ollama_timeout_input = ollama_timeout_input
+    dynamic_window.mailflow_ollama_status = ollama_status
+    dynamic_window.mailflow_refresh_ollama_models_button = refresh_ollama_models_button
+    dynamic_window.mailflow_test_ollama_button = test_ollama_button
     dynamic_window.mailflow_openai_key_input = openai_key_input
     dynamic_window.mailflow_openai_key_status = openai_key_status
     dynamic_window.mailflow_save_openai_key_button = save_openai_key_button

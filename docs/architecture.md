@@ -26,6 +26,20 @@ de l'annuaire, la phase commerciale est proposée par l'IA, puis les contrôles 
 valident la décision avant l'archivage. Le contexte est chronologique par projet et
 entreprise ; il inclut les corrections manuelles vérifiées.
 
+`AppSettings.ai_provider` sélectionne explicitement `openai` ou `ollama`.
+`build_ai_classifier` construit uniquement le moteur choisi ; il ne lit pas la clé
+OpenAI en mode local. Les deux adaptateurs partagent `build_ai_payload`, le prompt
+métier et le contrat `AiMailClassification`, puis les mêmes contrôles d'archivage.
+
+`OllamaClassifier` appelle l'API native `/api/chat` avec un schéma JSON, sans streaming
+ni raisonnement exposé. Le schéma reprend les contraintes déjà imposées par l'annuaire
+(rôle, entreprise confirmée, Correspondance pour un client et vérification si rôle
+inconnu). Ces valeurs sont aussi vérifiées au retour ; le modèle choisit la phase
+commerciale du fournisseur à partir du mail et de son historique.
+Le client HTTP ignore les proxys et redirections, valide
+l'adresse locale et les métadonnées du modèle. Une sortie invalide ou tronquée,
+un modèle absent ou une indisponibilité n'entraîne aucune bascule vers OpenAI.
+
 `AiClassifier` utilise Responses API et `AiMailClassification` comme contrat de sortie.
 GPT-6 Astra est le défaut, avec `reasoning.effort=low`, `store=False` et une limite de
 4096 tokens de sortie. Une réponse refusée, incomplète ou invalide ne devient jamais

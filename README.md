@@ -29,7 +29,7 @@ Cette premiere tranche met en place :
   puis entreprise ;
 - annuaire SQLite evolutif alimente par les domaines et contacts Outlook ;
 - previsualisateur d'arborescence avec renommage et fusion avant archivage ;
-- parametrage IA dans l'interface avec cle OpenAI stockee dans `keyring` et test visuel ;
+- choix OpenAI ou Ollama local dans l'interface, clé OpenAI dans `keyring` et test visuel ;
 - recherche de mises a jour depuis l'application avec lancement de l'installateur ;
 - logo officiel MailFlow utilise dans l'application, l'icone Windows et l'app macOS ;
 - resume projet automatique dans l'inspecteur et dans le journal HTML ;
@@ -109,7 +109,14 @@ L'annuaire fixe l'entreprise et son role global. L'IA choisit uniquement entre
 et les corrections manuelles verifiees lui sont transmis comme contexte. Une
 correction apprend une decision complete, jamais un terme isole.
 
-Le modèle par défaut est **GPT-6 Astra** (`gpt-6-astra`), appelé via Responses API
+Le moteur se choisit dans `Réglages` : **OpenAI (API)** ou **Ollama (local)**.
+Ollama utilise un modèle installé sur le PC sans clé API ; les mails restent sur cette
+machine. Le modèle local proposé est **Qwen3.5 4B** (`qwen3.5:4b`). Le bouton
+d'actualisation liste les modèles installés et le test local classe un mail fictif.
+Une panne locale ne déclenche jamais un appel OpenAI. Les réglages de chaque moteur
+sont conservés séparément. Voir [l'installation locale](docs/ollama.md).
+
+Pour OpenAI, le modèle par défaut est **GPT-6 Astra** (`gpt-6-astra`), appelé via Responses API
 avec une sortie structurée stricte et un effort de raisonnement `low`. Le délai réseau
 par défaut est de 60 secondes ; le SDK peut réessayer une fois. L'attente des réponses
 IA laisse l'interface réactive. Les commandes qui modifieraient le travail en cours

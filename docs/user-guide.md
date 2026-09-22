@@ -47,6 +47,19 @@ séparés dans l'inspecteur ; les séparateurs permettent d'ajuster leur largeur
 Pendant une analyse, l'interface reste réactive à l'attente de l'IA. Les commandes
 de modification sont désactivées jusqu'à la fin pour protéger le lot en cours.
 
+## Choisir une IA locale
+
+Dans **Réglages**, choisir **Ollama (local)**, puis le modèle installé sur le PC.
+L'adresse habituelle est `http://127.0.0.1:11434`. Actualiser la liste des modèles
+si nécessaire, lancer **Tester IA locale**, puis enregistrer les réglages.
+Aucune clé API n'est nécessaire. Le test utilise un mail fictif et laisse
+l'interface réactive pendant le chargement du modèle.
+
+Si Ollama est arrêté ou le modèle absent, le statut indique le problème ; les
+mails restent à vérifier. Ouvrir Ollama et refaire le test. Le guide
+[Ollama](ollama.md) explique l'installation et les diagnostics.
+Pour revenir à l'API, choisir **OpenAI (API)** ; son modèle et sa clé sont conservés.
+
 ## Hierarchie des dossiers
 
 Apres la classification, MailFlow propose une destination par entreprise

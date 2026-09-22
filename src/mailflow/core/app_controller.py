@@ -8,6 +8,7 @@ from typing import Protocol, cast
 
 from mailflow.classifier.ai_classifier import AiClassifier
 from mailflow.classifier.decision_engine import destination_for
+from mailflow.classifier.ollama_classifier import OllamaClassifier
 from mailflow.classifier.pipeline import ClassificationPipeline, action_from_decision
 from mailflow.classifier.routing_context import primary_external_email
 from mailflow.config import AppSettings, get_openai_api_key
@@ -625,7 +626,7 @@ def build_default_controller(settings: AppSettings) -> AppController:
     learning_store.initialize()
     directory_store = SQLiteDirectoryStore(settings.paths.sqlite_file)
     directory_store.initialize()
-    ai_classifier = _build_ai_classifier(settings)
+    ai_classifier = build_ai_classifier(settings)
     outlook_client = OutlookClient()
     return OutlookAppController(
         scan_service=OutlookScanService(
@@ -697,9 +698,15 @@ class OutlookAppController(AppController):
         return self.outlook_client.list_root_folder_paths(account_identifier)
 
 
-def _build_ai_classifier(settings: AppSettings) -> AiClassifier | None:
+def build_ai_classifier(settings: AppSettings) -> AiClassifier | OllamaClassifier | None:
     if settings.ai_mode == AiMode.DISABLED:
         return None
+    if settings.ai_provider == "ollama":
+        return OllamaClassifier(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_model,
+            timeout_seconds=settings.ollama_timeout_seconds,
+        )
     api_key = get_openai_api_key()
     if not api_key:
         return None
