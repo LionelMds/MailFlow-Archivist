@@ -1,6 +1,6 @@
 # Release
 
-## Modifications locales non publiées — revue et Astra
+## Version 0.8.6
 
 - GPT-6 Astra par défaut, migration de l'ancien défaut enregistré et Responses API
   structurée avec validation des réponses et stockage distant désactivé ;
@@ -8,10 +8,12 @@
   lecture séparée du bilan projet et attente IA réactive ;
 - respect des mails ignorés et archivés lors des corrections et actions globales ;
 - fiabilisation des pièces jointes, connexions SQLite et adresses SMTP Exchange ;
-- validation CI sur push et pull request, en complément du workflow de release.
+- validation CI sur push et pull request, en complément du workflow de release ;
+- SDK OpenAI limité à la version majeure 2 validée et dépendance de test HTTP
+  déclarée explicitement pour fiabiliser les installations Windows et macOS.
 
-La version publiée reste 0.8.5. Aucun tag ni installateur n'est produit par ces
-modifications locales. Voir `docs/project-review.md` pour la validation effectuée.
+Voir `docs/project-review.md` pour la revue initiale et les limites de validation
+des changements.
 
 ## Version 0.8.5
 

@@ -3,8 +3,9 @@
 Cette revue couvre l'application locale : configuration et démarrage, adaptateurs
 Outlook, classification, décisions d'archivage, SQLite, export MSG/HTML, annuaire,
 surveillance, interface Qt, mises à jour, tests et workflows de livraison. Les
-améliorations sont implémentées dans le dépôt ; elles ne constituent pas une release
-publiée. La version distribuée reste 0.8.5.
+améliorations étaient alors implémentées localement, avant la préparation de la
+version 0.8.6. La version distribuée au moment de cette revue était la 0.8.5.
+Voir [les notes de release](release.md) pour la livraison de ces changements.
 
 ![Interface revue, avec des données fictives](images/mailflow-workspace.png)
 
@@ -148,8 +149,9 @@ restent à prendre en compte sont les suivantes :
 3. **Maintenabilité UI** : la fenêtre principale garde de nombreuses responsabilités.
    Les styles et l'attente réseau sont extraits, mais la séparation en vues et
    présentateurs et la persistance de l'agencement restent à poursuivre.
-4. **Livraison** : aucun push, tag, build d'installateur, test macOS réel ou déploiement
-   n'a été effectué. Le nouveau workflow CI doit encore être exécuté sur GitHub.
+4. **Livraison lors de cette revue** : aucun push, tag, build d'installateur, test
+   macOS réel ou déploiement n'avait été effectué. Les validations de publication
+   sont suivies séparément dans GitHub Actions.
 5. **Reprise après panne SQLite** : si l'enregistrement du journal échoue après
    l'export, les fichiers complets restent sur disque sans catégorie Outlook.
    Une nouvelle tentative peut produire une copie ; une reprise transactionnelle
