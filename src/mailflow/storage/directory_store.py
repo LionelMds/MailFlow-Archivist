@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from mailflow.core.contact_directory import (
 )
 from mailflow.core.correspondence_hierarchy import safe_folder_name
 from mailflow.models import InterlocutorType
+from mailflow.storage.connection import database_connection
 
 DIRECTORY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS organizations(
@@ -579,10 +581,8 @@ class SQLiteDirectoryStore:
         )
         return False
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path)
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+    def _connect(self) -> AbstractContextManager[sqlite3.Connection]:
+        return database_connection(self.db_path)
 
 
 def _organization_id_for_contact(connection: sqlite3.Connection, email: str) -> int | None:

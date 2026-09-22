@@ -225,6 +225,7 @@ class ClassificationResult(BaseModel):
 
     rule: RuleClassification
     ai: AiMailClassification | None = None
+    ai_error: str | None = None
 
 
 class PreviewRow(BaseModel):

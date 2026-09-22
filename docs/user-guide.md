@@ -23,6 +23,30 @@ Avant tout archivage, l'utilisateur garde la main sur :
 - les decisions proposees ;
 - les conflits de fichiers.
 
+## Parcours de travail
+
+1. Ouvrir **Réglages** pour définir le dossier local des projets et tester l'IA.
+2. Choisir le compte Outlook, le dossier source et l'année, puis **Scanner Outlook**.
+   Cocher les projets à analyser dans la fenêtre qui apparaît.
+3. Dans **Mails**, utiliser la recherche et le filtre **À vérifier**. Sélectionner un
+   mail pour lire son contenu, sa destination et l'explication du classement dans
+   l'aperçu. **Vérifier la sélection** ouvre la correction manuelle.
+4. Sélectionner les mails prêts et utiliser **Archiver**. Le menu du bouton propose
+   également **Archiver tous les mails prêts**, après confirmation sur l'ensemble du
+   lot. Cette action globale inclut les mails prêts masqués par un filtre ; l'action
+   sur la sélection ne traite que les lignes visibles sélectionnées.
+
+Les filtres **Prêts à archiver**, **Ignorés** et **Archivés** permettent de retrouver
+chaque état. **Effacer les filtres** réaffiche le lot. Une recherche ne relance pas
+l'IA. Les corrections conservent la ligne active et la position de défilement.
+
+**Ctrl+F** place le curseur dans la recherche. **Ctrl+Entrée** archive la sélection
+admissible après confirmation. Les détails du mail et le **Bilan du projet** sont
+séparés dans l'inspecteur ; les séparateurs permettent d'ajuster leur largeur.
+
+Pendant une analyse, l'interface reste réactive à l'attente de l'IA. Les commandes
+de modification sont désactivées jusqu'à la fin pour protéger le lot en cours.
+
 ## Hierarchie des dossiers
 
 Apres la classification, MailFlow propose une destination par entreprise
@@ -63,10 +87,9 @@ places ensuite en copie.
 Apres le scan, le panneau `Arborescence` montre les dossiers proposes avec le nombre de
 mails par branche. Cette etape ne cree encore aucun fichier.
 
-L'interface principale est scrollable : les panneaux ouverts gardent une hauteur lisible
-et les panneaux reduits ne prennent que leur en-tete. Les separateurs restent
-deplacables pour ajuster la place donnee a la previsualisation, a l'arborescence, a
-l'apercu du mail et aux logs.
+La navigation latérale sépare les mails, l'arborescence, l'annuaire et les réglages.
+Le journal d'activité est repliable et les réglages restent accessibles par défilement
+sur les fenêtres réduites.
 
 Actions possibles :
 
@@ -74,11 +97,11 @@ Actions possibles :
   `METAL-FACTORY` vers `Metal Factory` ;
 - `Fusionner vers...` deplace tous les mails du dossier selectionne vers un autre
   dossier deja propose, utile lorsqu'un doublon accidentel a ete detecte.
-- `Ignorer selection` marque seulement les lignes selectionnees comme ignorees ;
-- `Tout remettre a archiver` remet les lignes archivables en action `Archiver`, sans
-  toucher aux lignes deja archivees ni aux lignes qui exigent une verification. Cette
-  action force aussi la decision interne d'archivage pour permettre de re-archiver un
-  mail deja vu dans SQLite ou marque comme archive dans Outlook.
+- `Ignorer la sélection` marque seulement les lignes sélectionnées comme ignorées ;
+- `Rétablir les mails ignorés` remet les lignes archivables en action `Archiver`, sans
+  toucher aux lignes déjà archivées ni aux lignes qui exigent une vérification.
+  Seule cette action explicite réactive les mails ignorés encore admissibles.
+  L'archivage global et la reclassification respectent les décisions d'ignorer.
 
 Les changements sont appliques a la previsualisation et au futur export/archivage.
 Ils restent modifiables tant que l'utilisateur n'a pas confirme l'archivage ou l'export.
@@ -111,15 +134,18 @@ python -m mailflow --import-contact-directory --account "lionel@balzmetal.ch" --
 
 ## Mode IA
 
-Dans `Configuration`, choisir `activee` pour demander une classification IA sur tous
+Dans `Réglages`, choisir `activee` pour demander une classification IA sur les
 les mails. Le mode `desactivee` ne tente aucune classification locale : les lignes
 restent a verifier manuellement.
 
 Coller la cle OpenAI dans `Cle API OpenAI`, puis cliquer sur `Enregistrer cle`.
 La cle est stockee dans le coffre du systeme et n'est pas sauvegardee dans le JSON.
-Le modele par defaut est `gpt-5.4-nano`. La liste `Modele IA` propose aussi
-`gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5`, `gpt-4o-mini` et `gpt-4o`; elle reste
-editable pour saisir un autre modele compatible Structured Outputs.
+Le modèle par défaut est **GPT-6 Astra** (`gpt-6-astra`). L'ancien défaut
+`gpt-5.4-nano` est migré au chargement d'une configuration ancienne, puis cette
+migration est mémorisée à l'enregistrement des paramètres. Un autre modèle déjà
+configuré et le mode IA désactivé sont conservés. Le sélecteur reste modifiable.
+Le délai réseau par défaut passe à 60 secondes, avec un nouvel essai possible par
+le SDK. Le raisonnement est réglé sur `low` pour Astra.
 
 Le bouton `Tester IA` verifie la cle et le modele avec un mail fictif. Le statut
 s'affiche directement a cote du champ : non testee, test en cours, valide ou invalide.
@@ -137,9 +163,19 @@ Options de confidentialite :
 Si le mode IA est actif mais qu'aucune cle n'est disponible, MailFlow conserve les
 lignes en verification et affiche un avertissement dans les logs.
 
+L'enregistrement des réglages applique immédiatement le modèle, le mode IA et les
+options de confidentialité aux prochaines analyses, y compris en surveillance.
+Les décisions déjà affichées ne sont pas recalculées automatiquement.
+
+En cas de refus d'accès, de quota atteint, de délai dépassé ou de réponse inexploitable,
+la ligne reste à vérifier et l'aperçu indique la marche à suivre. Corriger le problème
+dans **Réglages**, tester l'IA puis relancer la classification du lot. Les corrections
+de classement et les contrôles métier restent nécessaires : une sortie structurée
+ne garantit pas l'exactitude d'une décision.
+
 ## Mises a jour
 
-Dans `Configuration`, le bouton `Rechercher mise a jour` verifie la derniere release
+Dans `Réglages`, le bouton `Rechercher mise a jour` verifie la derniere release
 publiee sur GitHub. Si une version plus recente existe, MailFlow propose de telecharger
 et lancer l'installateur adapte :
 

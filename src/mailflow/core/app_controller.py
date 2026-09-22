@@ -216,10 +216,9 @@ class AppController:
             )
         )
         mails = [item.metadata for item in scanned]
-        self.outlook_items = {item.metadata.entry_id: item.item for item in scanned}
         if progress_callback is not None:
             progress_callback(f"{len(mails)} mail(s) lus. Classification en cours...")
-        self.preview_rows = self.preview_pipeline.preview(
+        preview_rows = self.preview_pipeline.preview(
             mails,
             progress_callback=(
                 None
@@ -229,6 +228,8 @@ class AppController:
                 )
             ),
         )
+        self.outlook_items = {item.metadata.entry_id: item.item for item in scanned}
+        self.preview_rows = preview_rows
         if progress_callback is not None:
             progress_callback(f"{len(self.preview_rows)} mail(s) prets.")
         return self.preview_rows
@@ -311,10 +312,11 @@ class AppController:
         *,
         progress_callback: ScanProgressCallback | None = None,
     ) -> list[PreviewRow]:
-        mails = [row.mail for row in self.preview_rows]
+        protected_actions = {PreviewAction.IGNORE, PreviewAction.ARCHIVED}
+        mails = [row.mail for row in self.preview_rows if row.action not in protected_actions]
         if not mails:
             return self.preview_rows
-        self.preview_rows = self.preview_pipeline.preview(
+        reclassified = self.preview_pipeline.preview(
             mails,
             progress_callback=(
                 None
@@ -324,6 +326,11 @@ class AppController:
                 )
             ),
         )
+        by_id = {row.mail.entry_id: row for row in reclassified}
+        self.preview_rows = [
+            row if row.action in protected_actions else by_id.get(row.mail.entry_id, row)
+            for row in self.preview_rows
+        ]
         return self.preview_rows
 
     def rows_ready_for_archive(self, *, include_review: bool = False) -> list[PreviewRow]:
@@ -403,6 +410,8 @@ class AppController:
         if row_index < 0 or row_index >= len(self.preview_rows):
             msg = f"Index de ligne invalide: {row_index}"
             raise IndexError(msg)
+        if self.preview_rows[row_index].action == PreviewAction.ARCHIVED:
+            raise ValueError("Un mail archive ne peut plus etre reclasse dans l'apercu.")
         organization_directory = (
             cast(OrganizationDirectoryProtocol, self.directory_store)
             if hasattr(self.directory_store, "organization_name_for_email")
@@ -415,11 +424,16 @@ class AppController:
             organization_directory=organization_directory,
         )
         self.preview_rows[row_index] = updated_row
+        refreshed_examples = False
         if self.learning_store is not None:
             self.learning_store.record(signal)
+            set_examples = getattr(self.preview_pipeline, "set_verified_examples", None)
+            if callable(set_examples):
+                set_examples(self.learning_store.verified_examples())
+                refreshed_examples = True
         example = verified_example_from_signal(signal)
         add_example = getattr(self.preview_pipeline, "add_verified_example", None)
-        if example is not None and callable(add_example):
+        if not refreshed_examples and example is not None and callable(add_example):
             add_example(example)
         return self.preview_rows[row_index]
 
@@ -559,21 +573,27 @@ class AppController:
             raise RuntimeError(msg)
         preflight_result = ArchiveBatchResult()
         candidates: list[ArchiveCandidate] = []
+        ready = {id(row) for row in rows_to_archive(list(rows), include_review=include_review)}
         for row in rows:
-            project_path = local_project_path(self.projects_root, row.mail.project_number)
-            if not project_path.exists():
-                preflight_result.failures.append(
-                    ArchiveFailure(
-                        mail_id=row.mail.entry_id,
-                        reason=f"Dossier projet local absent: {project_path}",
-                    )
-                )
+            if id(row) not in ready:
+                preflight_result.skipped.append(row.mail.entry_id)
                 continue
-            if not row.decision.target_path.exists():
-                row.decision.target_path.mkdir(parents=True, exist_ok=True)
             item = self.outlook_items.get(row.mail.entry_id)
             if item is None:
                 preflight_result.skipped.append(row.mail.entry_id)
+                continue
+            try:
+                project_path = local_project_path(self.projects_root, row.mail.project_number)
+                if not project_path.is_dir():
+                    raise FileNotFoundError(f"Dossier projet local absent: {project_path}")
+                row.decision.target_path.mkdir(parents=True, exist_ok=True)
+            except (OSError, ValueError) as exc:
+                preflight_result.failures.append(
+                    ArchiveFailure(
+                        mail_id=row.mail.entry_id,
+                        reason=str(exc),
+                    )
+                )
                 continue
             candidates.append(ArchiveCandidate(item=item, row=row))
         result = self.archive_executor.archive(candidates, include_review=include_review)
@@ -717,7 +737,7 @@ def _normalize_preview_request(request: PreviewRequest) -> PreviewRequest:
 
 
 def selected_rows(rows: Sequence[PreviewRow], indexes: Sequence[int]) -> list[PreviewRow]:
-    return [rows[index] for index in indexes if 0 <= index < len(rows)]
+    return [rows[index] for index in dict.fromkeys(indexes) if 0 <= index < len(rows)]
 
 
 def apply_directory_roles_to_rows(
@@ -725,12 +745,20 @@ def apply_directory_roles_to_rows(
     directory_store: DirectoryStoreProtocol,
     projects_root: Path,
 ) -> list[PreviewRow]:
-    updated_rows = [_row_with_directory_role(row, directory_store, projects_root) for row in rows]
-    return apply_correspondence_hierarchy(
+    editable_rows = [row for row in rows if row.action != PreviewAction.ARCHIVED]
+    updated_rows = [
+        _row_with_directory_role(row, directory_store, projects_root) for row in editable_rows
+    ]
+    updated_rows = apply_correspondence_hierarchy(
         updated_rows,
         projects_root=projects_root,
         organization_directory=directory_store,
     )
+    by_id = {row.mail.entry_id: row for row in updated_rows}
+    return [
+        row if row.action == PreviewAction.ARCHIVED else by_id[row.mail.entry_id]
+        for row in rows
+    ]
 
 
 def _row_with_directory_role(
@@ -764,9 +792,13 @@ def _row_with_directory_role(
     return row.model_copy(
         update={
             "decision": decision,
-            "action": action_from_decision(
-                archive=decision.archive,
-                requires_review=decision.requires_review,
+            "action": (
+                PreviewAction.IGNORE
+                if row.action == PreviewAction.IGNORE
+                else action_from_decision(
+                    archive=decision.archive,
+                    requires_review=decision.requires_review,
+                )
             ),
         }
     )

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import AbstractContextManager
 from datetime import datetime
 from pathlib import Path
 
 from mailflow.models import ArchivedMailRecord
+from mailflow.storage.connection import database_connection
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS archived_mails(
@@ -32,13 +34,18 @@ CREATE INDEX IF NOT EXISTS idx_archived_project
 class SQLiteArchiveStore:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
+        self._initialized = False
 
     def initialize(self) -> None:
+        if self._initialized:
+            return
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(SCHEMA)
+        self._initialized = True
 
     def is_archived(self, outlook_entry_id: str) -> bool:
+        self.initialize()
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT 1 FROM archived_mails WHERE outlook_entry_id = ? LIMIT 1",
@@ -84,16 +91,31 @@ class SQLiteArchiveStore:
             )
         return cursor.rowcount == 1
 
+    def get_archived_record(self, outlook_entry_id: str) -> ArchivedMailRecord | None:
+        """Return the original archive destination without reclassifying the message."""
+        self.initialize()
+        with self._connect() as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                """
+                SELECT outlook_entry_id, conversation_id, internet_message_id,
+                       project_number, subject, sender, sent_at, msg_path,
+                       target_folder, classification, confidence, archived_at
+                FROM archived_mails WHERE outlook_entry_id = ? LIMIT 1
+                """,
+                (outlook_entry_id,),
+            ).fetchone()
+        return ArchivedMailRecord.model_validate(dict(row)) if row is not None else None
+
     def count_archived(self) -> int:
         self.initialize()
         with self._connect() as connection:
             row = connection.execute("SELECT COUNT(*) FROM archived_mails").fetchone()
         return int(row[0])
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+    def _connect(self) -> AbstractContextManager[sqlite3.Connection]:
+        return database_connection(self.db_path)
 
 
 def utc_now_naive() -> datetime:
     return datetime.utcnow()
-

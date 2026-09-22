@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -308,20 +309,20 @@ def make_preview_row(
 
 def test_ui_text_contains_expected_actions() -> None:
     assert UI_TEXT["scan_button"] == "Scanner Outlook"
-    assert UI_TEXT["reset_workspace"] == "Reinitialiser"
+    assert UI_TEXT["reset_workspace"] == "Réinitialiser"
     assert UI_TEXT["watch_outlook"] == "Surveillance Outlook"
-    assert UI_TEXT["export_project_html"] == "Exporter HTML projet"
+    assert UI_TEXT["export_project_html"] == "Exporter le projet en HTML"
     assert UI_TEXT["import_directory"] == "Importer annuaire Outlook"
     assert UI_TEXT["rename_directory"] == "Renommer entreprise"
     assert UI_TEXT["archive"] == "Archiver"
     assert UI_TEXT["more_actions"] == "Plus"
-    assert UI_TEXT["background_mode"] == "Passer en arriere-plan"
+    assert UI_TEXT["background_mode"] == "Passer en arrière-plan"
     assert UI_TEXT["tray_open"] == "Ouvrir MailFlow"
     assert UI_TEXT["tray_watch_active"] == "surveillance active"
     assert UI_TEXT["tray_quit"] == "Quitter"
-    assert "Destination proposee" in PREVIEW_COLUMNS
-    assert ACTION_LABELS[PreviewAction.REVIEW] == "A verifier"
-    assert UI_TEXT["archive_all_except_review"] == "Tout archiver sauf a verifier"
+    assert "Destination proposée" in PREVIEW_COLUMNS
+    assert ACTION_LABELS[PreviewAction.REVIEW] == "À vérifier"
+    assert UI_TEXT["archive_all_except_review"] == "Archiver tous les mails prêts"
 
 
 @pytest.mark.parametrize(
@@ -523,11 +524,11 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert "Aucun projet scanne" in dynamic_window.mailflow_project_digest_preview.toPlainText()
     assert dynamic_window.mailflow_mail_preview.isReadOnly()
     assert dynamic_window.mailflow_ai_mode_combo.currentData() == AiMode.ALL.value
-    assert dynamic_window.mailflow_ai_model_input.currentText() == "gpt-5.4-nano"
+    assert dynamic_window.mailflow_ai_model_input.currentText() == "gpt-6-astra"
     assert dynamic_window.mailflow_ai_model_input.count() >= len(AI_MODEL_OPTIONS)
     assert dynamic_window.mailflow_openai_key_input.echoMode() == QLineEdit.EchoMode.Password
     assert dynamic_window.mailflow_test_openai_key_button.text() == "Tester IA"
-    assert dynamic_window.mailflow_check_updates_button.text() == "Rechercher mise a jour"
+    assert dynamic_window.mailflow_check_updates_button.text() == "Rechercher une mise à jour"
     assert "Version" in dynamic_window.mailflow_update_status.text()
     assert dynamic_window.mailflow_ai_include_body_checkbox.isChecked()
     assert dynamic_window.mailflow_watch_checkbox.text() == "Surveillance Outlook"
@@ -536,7 +537,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_review_reminder_times_input.text() == "09:00, 14:00"
     assert dynamic_window.mailflow_scan_button.text() == "Scanner Outlook"
     assert dynamic_window.mailflow_scan_status_label.text() == ""
-    assert dynamic_window.mailflow_reset_button.text() == "Reinitialiser"
+    assert dynamic_window.mailflow_reset_button.text() == "Réinitialiser"
     assert not window.windowIcon().isNull()
     assert not dynamic_window.mailflow_tray_icon.icon().isNull()
     assert dynamic_window.mailflow_tray_icon.toolTip() == (
@@ -549,16 +550,16 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_rename_folder_button.text() == "Renommer dossier"
     assert dynamic_window.mailflow_merge_folder_button.text() == "Fusionner vers..."
     assert dynamic_window.mailflow_archive_button.text() == "Archiver"
-    assert dynamic_window.mailflow_archive_selection_action.text() == "Archiver selection"
-    assert dynamic_window.mailflow_archive_all_action.text() == "Tout archiver sauf a verifier"
+    assert dynamic_window.mailflow_archive_selection_action.text() == "Archiver la sélection"
+    assert dynamic_window.mailflow_archive_all_action.text() == "Archiver tous les mails prêts"
     assert dynamic_window.mailflow_more_actions_button.text() == "Plus"
-    assert dynamic_window.mailflow_more_actions_menu.actions()[0].text() == "Ignorer selection"
-    assert dynamic_window.mailflow_background_action.text() == "Passer en arriere-plan"
+    assert dynamic_window.mailflow_more_actions_menu.actions()[0].text() == "Ignorer la sélection"
+    assert dynamic_window.mailflow_background_action.text() == "Passer en arrière-plan"
     assert dynamic_window.mailflow_restore_archivable_action.text() == (
-        "Tout remettre a archiver"
+        "Rétablir les mails ignorés"
     )
     assert dynamic_window.mailflow_import_directory_button.text() == "Importer annuaire Outlook"
-    assert dynamic_window.mailflow_refresh_directory_button.text() == "Rafraichir"
+    assert dynamic_window.mailflow_refresh_directory_button.text() == "Actualiser"
     assert dynamic_window.mailflow_add_directory_button.text() == "Ajouter entreprise"
     assert dynamic_window.mailflow_delete_directory_button.text() == "Supprimer entreprise"
     assert dynamic_window.mailflow_rename_directory_button.text() == "Renommer entreprise"
@@ -573,7 +574,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_navigation.item(0).text() == "Mails"
     assert dynamic_window.mailflow_navigation.item(1).text() == "Arborescence"
     assert dynamic_window.mailflow_navigation.item(2).text() == "Annuaire"
-    assert dynamic_window.mailflow_navigation.item(3).text() == "Reglages"
+    assert dynamic_window.mailflow_navigation.item(3).text() == "Réglages"
     assert dynamic_window.mailflow_pages.count() == 4
     assert dynamic_window.mailflow_content_splitter.count() == 2
     assert dynamic_window.mailflow_workspace_splitter.count() == 2
@@ -624,3 +625,233 @@ def test_preview_refresh_preserves_current_row_and_scroll_position(
     assert [index.row() for index in table.selectionModel().selectedRows()] == [55]
     assert table.verticalScrollBar().value() == expected_scroll
     window.close()
+
+
+def test_filters_hide_rows_without_changing_controller_indexes_or_hidden_selection(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow.ui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    controller = FakeController()
+    rows = [
+        make_preview_row(tmp_path, PreviewAction.ARCHIVE, entry_id="ready"),
+        make_preview_row(tmp_path, PreviewAction.REVIEW, entry_id="review"),
+        make_preview_row(tmp_path, PreviewAction.IGNORE, entry_id="ignored"),
+    ]
+    rows[1].mail.subject = "Rénovation façade"
+    rows[1].mail.sender_name = "Élodie"
+    controller.preview_rows = cast(list[object], rows)
+    window = MainWindow(AppSettings(), controller=controller)
+    table = window.mailflow_preview_table
+    table.selectRow(0)
+
+    window.mailflow_status_filter.setCurrentIndex(1)
+    window.mailflow_search_input.setText("elodie facade")
+
+    assert table.isRowHidden(0)
+    assert not table.isRowHidden(1)
+    assert table.isRowHidden(2)
+    assert window.mailflow_selected_table_row_indexes() == []
+    assert window.mailflow_mail_preview.toPlainText() == ""
+    table.selectRow(1)
+    assert window.mailflow_selected_table_row_indexes() == [1]
+    assert [cast(PreviewRow, row).mail.entry_id for row in controller.preview_rows] == [
+        "ready", "review", "ignored",
+    ]
+
+    window.mailflow_refresh_table()
+    assert window.mailflow_search_input.text() == "elodie facade"
+    assert window.mailflow_selected_table_row_indexes() == [1]
+    assert table.isRowHidden(0)
+    window.mailflow_search_input.setText("introuvable")
+    assert window.mailflow_mail_results.currentIndex() == 1
+    assert window.mailflow_selected_table_row_indexes() == []
+    window.mailflow_clear_filters_button.click()
+    assert all(not table.isRowHidden(index) for index in range(3))
+    assert window.mailflow_mail_results.currentIndex() == 0
+    window.close()
+    app.processEvents()
+
+
+def test_refresh_preserves_identity_and_column_width_after_rows_reorder(tmp_path: Path) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow.ui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    controller = FakeController()
+    controller.preview_rows = [
+        make_preview_row(tmp_path, PreviewAction.ARCHIVE, entry_id=f"id-{index}")
+        for index in range(3)
+    ]
+    window = MainWindow(AppSettings(), controller=controller)
+    table = window.mailflow_preview_table
+    table.setCurrentCell(0, 4)
+    table.selectRow(0)
+    table.setColumnWidth(4, 410)
+
+    controller.preview_rows.reverse()
+    window.mailflow_refresh_table()
+
+    assert table.currentRow() == 2
+    assert window.mailflow_selected_table_row_indexes() == [2]
+    assert table.columnWidth(4) == 410
+    window.close()
+    app.processEvents()
+
+
+def test_cancelling_archive_all_does_not_restore_ignored_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from mailflow.ui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    controller = FakeController()
+    controller.preview_rows = [
+        make_preview_row(tmp_path, PreviewAction.ARCHIVE),
+        make_preview_row(tmp_path, PreviewAction.IGNORE),
+    ]
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.No)
+    window = MainWindow(AppSettings(), controller=controller)
+
+    window.mailflow_archive_all_action.trigger()
+
+    assert len(controller.preview_rows) == 2
+    assert cast(PreviewRow, controller.preview_rows[1]).action == PreviewAction.IGNORE
+    assert not controller.archived_all
+    window.close()
+    app.processEvents()
+
+
+def test_busy_operation_blocks_mutating_controls_and_window_close(tmp_path: Path) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow.ui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    controller = FakeController()
+    controller.preview_rows = [make_preview_row(tmp_path, PreviewAction.ARCHIVE)]
+    window = MainWindow(AppSettings(), controller=controller)
+    window.show()
+    window.mailflow_preview_table.selectRow(0)
+    window.mailflow_set_operation_busy(True)
+
+    assert not window.mailflow_scan_button.isEnabled()
+    assert not window.mailflow_reset_button.isEnabled()
+    assert not window.mailflow_save_settings_button.isEnabled()
+    assert not window.mailflow_watch_checkbox.isEnabled()
+    assert not window.mailflow_archive_all_action.isEnabled()
+    assert not window.mailflow_restore_archivable_action.isEnabled()
+    assert not window.mailflow_report_action.isEnabled()
+    window.mailflow_restore_archivable_action.trigger()
+    assert len(controller.preview_rows) == 1
+    window.mailflow_reset_button.click()
+    assert controller.reset_count == 0
+    assert not window.close()
+
+    window.mailflow_set_operation_busy(False)
+    assert window.mailflow_scan_button.isEnabled()
+    assert window.mailflow_archive_all_action.isEnabled()
+    assert window.close()
+    app.processEvents()
+
+
+def test_navigation_discloses_settings_without_mail_inspector() -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow.ui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(AppSettings(), controller=FakeController())
+    assert window.mailflow_mail_results.currentIndex() == 1
+    assert not window.mailflow_archive_button.isEnabled()
+    window.mailflow_navigation.setCurrentRow(3)
+    assert window.mailflow_pages.currentIndex() == 3
+    assert window.mailflow_inspector.isHidden()
+    window.mailflow_navigation.setCurrentRow(0)
+    assert not window.mailflow_inspector.isHidden()
+    assert window.mailflow_preview_tabs.count() == 2
+    window.close()
+    app.processEvents()
+
+
+def test_saving_ai_settings_updates_existing_pipeline_and_key_without_losing_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow import config
+    from mailflow.classifier import ai_classifier
+    from mailflow.ui.background_call import ResponsiveAiClassifier
+    from mailflow.ui.main_window import MainWindow
+
+    key_store = {"key": "initial-test-key"}
+    monkeypatch.setattr(config, "get_openai_api_key", lambda: key_store["key"])
+    monkeypatch.setattr(config, "set_openai_api_key", lambda key: key_store.update(key=key))
+    monkeypatch.setattr(config, "save_settings", lambda _settings: None)
+    monkeypatch.setattr(ai_classifier, "AiClassifier", lambda **kwargs: SimpleNamespace(**kwargs))
+    app = QApplication.instance() or QApplication([])
+    controller = FakeController()
+    controller.preview_rows = [make_preview_row(tmp_path, PreviewAction.REVIEW)]
+    original_rows = controller.preview_rows
+    pipeline = SimpleNamespace(ai_classifier=None, ai_mode=AiMode.ALL)
+    cast(Any, controller).preview_pipeline = pipeline
+    window = MainWindow(AppSettings(), controller=controller)
+
+    window.mailflow_ai_mode_combo.setCurrentIndex(0)
+    window.mailflow_save_settings_button.click()
+    assert pipeline.ai_mode == AiMode.DISABLED
+    assert pipeline.ai_classifier is None
+
+    window.mailflow_ai_mode_combo.setCurrentIndex(1)
+    window.mailflow_ai_model_input.setCurrentText("gpt-6-astra-custom")
+    window.mailflow_ai_include_body_checkbox.setChecked(False)
+    window.mailflow_privacy_phone_checkbox.setChecked(True)
+    window.mailflow_save_settings_button.click()
+    assert pipeline.ai_mode == AiMode.ALL
+    assert not pipeline.include_body_for_ai
+    assert pipeline.privacy_mask_phone_numbers
+    assert isinstance(pipeline.ai_classifier, ResponsiveAiClassifier)
+    assert pipeline.ai_classifier.classifier.model == "gpt-6-astra-custom"
+    assert pipeline.ai_classifier.classifier.api_key == "initial-test-key"
+
+    window.mailflow_openai_key_input.setText("replacement-test-key")
+    window.mailflow_save_openai_key_button.click()
+    assert pipeline.ai_classifier.classifier.api_key == "replacement-test-key"
+    assert controller.preview_rows is original_rows
+    assert window.mailflow_controller is controller
+    window.close()
+    app.processEvents()
+
+
+def test_archived_mail_is_read_only_in_review_and_inline_controls(tmp_path: Path) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow.ui.main_window import MainWindow
+    from mailflow.ui.preview_table import DESTINATION_COLUMN, INTERLOCUTOR_COLUMN, TYPE_COLUMN
+
+    app = QApplication.instance() or QApplication([])
+    controller = FakeController()
+    controller.preview_rows = [make_preview_row(tmp_path, PreviewAction.ARCHIVED)]
+    window = MainWindow(AppSettings(), controller=controller)
+    table = window.mailflow_preview_table
+    table.selectRow(0)
+    assert not window.mailflow_review_button.isEnabled()
+    for column in (DESTINATION_COLUMN, INTERLOCUTOR_COLUMN, TYPE_COLUMN):
+        assert not table.cellWidget(0, column).isEnabled()
+    table.cellDoubleClicked.emit(0, 4)
+    assert "déjà archivé" in window.mailflow_scan_status_label.text()
+    window.close()
+    app.processEvents()

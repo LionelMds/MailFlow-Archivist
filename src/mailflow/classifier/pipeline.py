@@ -15,14 +15,18 @@ from mailflow.core.correspondence_hierarchy import apply_correspondence_hierarch
 from mailflow.models import (
     AiMailClassification,
     AiMode,
+    ArchiveDecision,
+    ArchivedMailRecord,
     ClassificationResult,
     InterlocutorType,
     MailMetadata,
+    MailType,
     PreviewAction,
     PreviewRow,
     RoutingCategory,
     RuleClassification,
     VerifiedRoutingExample,
+    routing_category_for_mail_type,
 )
 
 
@@ -69,6 +73,9 @@ class ClassificationPipeline:
         self.organization_directory = organization_directory
         self.verified_examples = verified_examples or []
 
+    def set_verified_examples(self, examples: list[VerifiedRoutingExample]) -> None:
+        self.verified_examples = list(examples)
+
     def add_verified_example(self, example: VerifiedRoutingExample) -> None:
         self.verified_examples = [
             current
@@ -100,6 +107,18 @@ class ClassificationPipeline:
             rows_by_index[original_index] = row
             if row.classification.ai is not None:
                 history.append(_history_item(row.classification.ai, mail))
+            elif (
+                row.action == PreviewAction.ARCHIVED
+                and row.decision.mail_type != MailType.A_VERIFIER
+            ):
+                history.append({
+                    "sent_at": mail.sent_at.isoformat(),
+                    "direction": mail.direction.value,
+                    "subject": mail.subject[:160],
+                    "category": routing_category_for_mail_type(row.decision.mail_type).value,
+                    "summary": "Classement conserve dans le journal d'archivage.",
+                    "review": "no",
+                })
             if progress_callback is not None:
                 progress_callback(progress_index, total)
 
@@ -117,8 +136,14 @@ class ClassificationPipeline:
         counterparty: ResolvedCounterparty | None = None,
         history: list[dict[str, str]] | None = None,
     ) -> PreviewRow:
+        lookup_record = getattr(self.archive_state, "get_archived_record", None)
+        record = lookup_record(mail.entry_id) if callable(lookup_record) else None
+        if isinstance(record, ArchivedMailRecord):
+            return _archived_preview(mail, record)
+        # Outlook's category proves that a mail was archived, but doesn't contain
+        # its classification. Keep analysis for category-only historic archives.
         resolved = counterparty or resolve_counterparty(mail, self.organization_directory)
-        ai = self._classify_with_ai(mail, resolved, history or [])
+        ai, ai_error = self._classify_with_ai(mail, resolved, history or [])
         rule = _neutral_rule()
         decision = decide_archive(
             mail,
@@ -128,24 +153,37 @@ class ClassificationPipeline:
             archive_state=self.archive_state,
             confidence_threshold=self.decision_confidence_threshold,
         )
-        return PreviewRow(
+        if ai_error and decision.requires_review:
+            decision = decision.model_copy(
+                update={"reason": f"{ai_error} {decision.reason}"}
+            )
+        row = PreviewRow(
             mail=mail,
-            classification=ClassificationResult(rule=rule, ai=ai),
+            classification=ClassificationResult(rule=rule, ai=ai, ai_error=ai_error),
             decision=decision,
             action=action_from_decision(
                 archive=decision.archive,
                 requires_review=decision.requires_review,
             ),
         )
+        if decision.duplicate_status == "already_archived":
+            # This category-only archive has no saved folder. Finish the company
+            # grouping before locking its displayed classification against edits.
+            row = apply_correspondence_hierarchy(
+                [row], projects_root=self.projects_root,
+                organization_directory=self.organization_directory,
+            )[0]
+            row = row.model_copy(update={"action": PreviewAction.ARCHIVED})
+        return row
 
     def _classify_with_ai(
         self,
         mail: MailMetadata,
         counterparty: ResolvedCounterparty,
         history: list[dict[str, str]],
-    ) -> AiMailClassification | None:
+    ) -> tuple[AiMailClassification | None, str | None]:
         if not should_call_ai(ai_mode=self.ai_mode) or self.ai_classifier is None:
-            return None
+            return None, None
         context = build_routing_context(
             mail,
             counterparty,
@@ -159,9 +197,22 @@ class ClassificationPipeline:
                 privacy_mask_phone_numbers=self.privacy_mask_phone_numbers,
                 known_context=context,
             )
-        except Exception:
-            return None
-        return apply_routing_guardrails(result, counterparty)
+        except Exception as exc:
+            # API exception strings can contain request bodies or credentials.
+            # Display only locally authored messages; leave the mail in review.
+            status_code = getattr(exc, "status_code", None)
+            if status_code in {401, 403}:
+                error = "Accès OpenAI refusé : vérifiez la clé et l'accès au modèle dans Réglages."
+            elif status_code == 429:
+                error = "Limite OpenAI atteinte : vérifiez le quota puis relancez l'analyse."
+            elif status_code == 404:
+                error = "Modèle OpenAI indisponible : vérifiez le modèle dans Réglages."
+            elif isinstance(exc, TimeoutError) or "Timeout" in type(exc).__name__:
+                error = "Délai OpenAI dépassé : relancez l'analyse de ce mail."
+            else:
+                error = "Analyse IA échouée : testez la connexion dans Réglages puis réessayez."
+            return None, error
+        return apply_routing_guardrails(result, counterparty), None
 
 
 def apply_routing_guardrails(
@@ -216,6 +267,32 @@ def _neutral_rule() -> RuleClassification:
         confidence=0.0,
         matched_rules=[],
         matched_terms=[],
+    )
+
+
+def _archived_preview(mail: MailMetadata, record: ArchivedMailRecord) -> PreviewRow:
+    folder_root = record.target_folder.replace("\\", "/").split("/", 1)[0].casefold()
+    role = {
+        "correspondance": InterlocutorType.CLIENT,
+        "fournisseurs": InterlocutorType.FOURNISSEUR,
+    }.get(folder_root, InterlocutorType.INCONNU)
+    return PreviewRow(
+        mail=mail,
+        classification=ClassificationResult(rule=_neutral_rule()),
+        decision=ArchiveDecision(
+            mail_id=mail.entry_id,
+            project_number=record.project_number,
+            archive=False,
+            requires_review=False,
+            mail_type=record.classification,
+            interlocutor=role,
+            target_relative_folder=record.target_folder,
+            target_path=record.msg_path.parent,
+            confidence=record.confidence,
+            duplicate_status="already_archived",
+            reason="Mail deja archive : destination conservee depuis le journal SQLite.",
+        ),
+        action=PreviewAction.ARCHIVED,
     )
 
 

@@ -1,5 +1,18 @@
 # Release
 
+## Modifications locales non publiées — revue et Astra
+
+- GPT-6 Astra par défaut, migration de l'ancien défaut enregistré et Responses API
+  structurée avec validation des réponses et stockage distant désactivé ;
+- interface harmonisée, recherche, filtres de statut, compteurs, états vides guidés,
+  lecture séparée du bilan projet et attente IA réactive ;
+- respect des mails ignorés et archivés lors des corrections et actions globales ;
+- fiabilisation des pièces jointes, connexions SQLite et adresses SMTP Exchange ;
+- validation CI sur push et pull request, en complément du workflow de release.
+
+La version publiée reste 0.8.5. Aucun tag ni installateur n'est produit par ces
+modifications locales. Voir `docs/project-review.md` pour la validation effectuée.
+
 ## Version 0.8.5
 
 - conservation de la ligne active, des selections et de la position de defilement

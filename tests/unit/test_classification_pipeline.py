@@ -4,10 +4,15 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+import pytest
+
 from mailflow.classifier.pipeline import ClassificationPipeline, should_call_ai
+from mailflow.core.project_digest import build_project_digest
+from mailflow.core.project_html_exporter import export_project_correspondence_html
 from mailflow.models import (
     AiMailClassification,
     AiMode,
+    ArchivedMailRecord,
     Direction,
     InterlocutorType,
     MailMetadata,
@@ -16,6 +21,8 @@ from mailflow.models import (
     RoutingCategory,
     VerifiedRoutingExample,
 )
+from mailflow.outlook.categories import ARCHIVED_CATEGORY
+from mailflow.storage.sqlite_store import SQLiteArchiveStore
 
 
 class FakeDirectory:
@@ -220,6 +227,119 @@ def test_disabled_or_failed_ai_has_no_keyword_fallback(tmp_path: Path) -> None:
     assert failing_row.action == PreviewAction.REVIEW
     assert disabled_row.classification.rule.matched_rules == []
     assert failing_row.classification.rule.matched_terms == []
+    assert disabled_row.classification.ai_error is None
+    assert failing_row.classification.ai_error is not None
+    assert "Réglages" in failing_row.decision.reason
+
+
+def test_category_only_archive_keeps_classification_for_html(tmp_path: Path) -> None:
+    create_project(tmp_path)
+    classifier = FakeAiClassifier([ai_result("Correspondance", "client")])
+    pipeline = ClassificationPipeline(
+        projects_root=tmp_path, ai_classifier=classifier, organization_directory=FakeDirectory(),
+    )
+    archived_mail = mail().model_copy(update={"categories": [ARCHIVED_CATEGORY]})
+
+    row = pipeline.preview([archived_mail])[0]
+
+    assert len(classifier.contexts) == 1
+    assert row.action == PreviewAction.ARCHIVED
+    assert row.decision.duplicate_status == "already_archived"
+    assert not row.decision.requires_review
+    assert row.decision.mail_type == MailType.CORRESPONDANCE_GENERALE
+    assert row.decision.target_relative_folder == "Correspondance/AIG"
+
+
+@pytest.mark.parametrize("has_outlook_category", [False, True])
+def test_archived_sqlite_mail_preserves_original_classification_without_ai(
+    tmp_path: Path, has_outlook_category: bool,
+) -> None:
+    create_project(tmp_path)
+    classifier = FakeAiClassifier([])
+    archived_mail = mail().model_copy(update={
+        "categories": [ARCHIVED_CATEGORY] if has_outlook_category else [],
+    })
+    store = SQLiteArchiveStore(tmp_path / "archive.sqlite")
+    record = ArchivedMailRecord(
+        outlook_entry_id=archived_mail.entry_id,
+        project_number=archived_mail.project_number,
+        subject=archived_mail.subject,
+        sent_at=archived_mail.sent_at,
+        msg_path=tmp_path / "original" / "mail.msg",
+        target_folder="Fournisseurs/Commande/Original Supplier",
+        classification=MailType.COMMANDE,
+        confidence=0.93,
+        archived_at=datetime(2026, 5, 7),
+    )
+    store.record_archived(record)
+    pipeline = ClassificationPipeline(
+        projects_root=tmp_path, ai_classifier=classifier, archive_state=store,
+        organization_directory=FakeDirectory(),
+    )
+
+    row = pipeline.preview([archived_mail])[0]
+
+    assert classifier.contexts == []
+    assert row.action == PreviewAction.ARCHIVED
+    assert row.classification.ai is None
+    assert row.decision.mail_type == record.classification
+    assert row.decision.target_relative_folder == record.target_folder
+    assert row.decision.target_path == record.msg_path.parent
+    assert row.decision.interlocutor == InterlocutorType.FOURNISSEUR
+    assert row.decision.confidence == record.confidence
+    assert not row.decision.requires_review
+    exported = export_project_correspondence_html([row], {}, tmp_path)[0]
+    rendered = exported.html_path.read_text(encoding="utf-8")
+    assert 'data-folder="Fournisseurs/Commande/Original Supplier"' in rendered
+    assert build_project_digest([row]).order_points
+
+
+def test_archived_classification_contributes_to_later_ai_context(tmp_path: Path) -> None:
+    create_project(tmp_path)
+    archived_mail = mail()
+    store = SQLiteArchiveStore(tmp_path / "archive.sqlite")
+    store.record_archived(ArchivedMailRecord(
+        outlook_entry_id=archived_mail.entry_id,
+        project_number=archived_mail.project_number,
+        sent_at=archived_mail.sent_at,
+        msg_path=tmp_path / "original" / "mail.msg",
+        target_folder="Correspondance/AIG",
+        classification=MailType.CORRESPONDANCE_GENERALE,
+        confidence=0.95,
+        archived_at=datetime(2026, 5, 7),
+    ))
+    classifier = FakeAiClassifier([ai_result("Correspondance", "client")])
+    pipeline = ClassificationPipeline(
+        projects_root=tmp_path, ai_classifier=classifier, archive_state=store,
+        organization_directory=FakeDirectory(),
+    )
+
+    pipeline.preview([
+        archived_mail,
+        mail(entry_id="NEW", sent_at=archived_mail.sent_at + timedelta(hours=1)),
+    ])
+
+    assert len(classifier.contexts) == 1
+    history = classifier.contexts[0]["recent_company_history"]
+    assert len(history) == 1
+    assert history[0]["category"] == "Correspondance"
+    assert history[0]["subject"] == archived_mail.subject
+
+
+def test_ai_failure_does_not_expose_response_or_credential(tmp_path: Path) -> None:
+    class SensitiveFailure(FailingAiClassifier):
+        def classify(self, mail: MailMetadata, **kwargs: Any) -> AiMailClassification:
+            raise RuntimeError("secret-key-123 private message content")
+
+    create_project(tmp_path)
+    pipeline = ClassificationPipeline(projects_root=tmp_path, ai_classifier=SensitiveFailure())
+
+    row = pipeline.preview_one(mail())
+
+    assert "secret-key-123" not in row.model_dump_json()
+    assert "private message content" not in row.model_dump_json()
+    assert row.classification.ai_error is not None
+    assert row.action == PreviewAction.REVIEW
 
 
 def test_first_external_recipient_and_history_are_sent_to_ai(tmp_path: Path) -> None:

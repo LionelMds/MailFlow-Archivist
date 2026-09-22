@@ -99,7 +99,9 @@ def test_export_mail_saves_msg_and_attachments(tmp_path: Path) -> None:
 
     assert result.msg_path.exists()
     assert result.msg_path.name == "1-R-Offre garde-corps.msg"
-    assert item.saved_as == result.msg_path
+    assert item.saved_as is not None
+    assert item.saved_as.name == result.msg_path.name
+    assert not item.saved_as.exists()
     assert len(result.attachment_paths) == 1
     assert result.attachment_paths[0].parent == tmp_path
     assert result.attachment_paths[0].name == "1-R-Offre garde-corps - plan.pdf"
@@ -160,3 +162,68 @@ def test_export_mail_skips_inline_images_as_separate_attachments(tmp_path: Path)
         "1-R-Offre garde-corps - plan.pdf"
     ]
     assert not list(tmp_path.glob("*logo*"))
+
+
+def test_attachment_export_failure_leaves_no_partial_archive(tmp_path: Path) -> None:
+    class BrokenAttachment(FakeAttachment):
+        def SaveAsFile(self, path: str) -> None:
+            Path(path).write_bytes(b"partial")
+            raise OSError("attachment unavailable")
+
+    item = FakeMailItem([
+        FakeAttachment("plan.pdf", "first"), BrokenAttachment("detail.pdf", ""),
+    ])
+
+    with pytest.raises(OSError):
+        OutlookExporter().export_mail(item, metadata(), decision(tmp_path))
+
+    assert not list(tmp_path.iterdir())
+    result = OutlookExporter().export_mail(FakeMailItem(), metadata(), decision(tmp_path))
+    assert result.msg_path.name.startswith("1-R-")
+
+
+def test_failed_confirmed_overwrite_preserves_original_files(tmp_path: Path) -> None:
+    exporter = OutlookExporter()
+    result = exporter.export_mail(FakeMailItem(), metadata(), decision(tmp_path))
+    original_msg = result.msg_path.read_bytes()
+    original_attachment = result.attachment_paths[0].read_bytes()
+
+    class BrokenMail(FakeMailItem):
+        def SaveAs(self, path: str, _format: int) -> None:
+            Path(path).write_bytes(b"partial replacement")
+            raise OSError("Outlook disconnected")
+
+    with pytest.raises(OSError):
+        exporter.export_mail(
+            BrokenMail(), metadata().model_copy(update={"archive_order": 1}), decision(tmp_path),
+            overwrite_msg=True, attachment_policy=AttachmentConflictPolicy.OVERWRITE,
+        )
+
+    assert result.msg_path.read_bytes() == original_msg
+    assert result.attachment_paths[0].read_bytes() == original_attachment
+
+
+def test_concurrent_msg_creation_preserves_existing_mail_and_reverts_attachments(
+    tmp_path: Path,
+) -> None:
+    expected_msg = tmp_path / "1-R-Offre garde-corps.msg"
+
+    class RacingMail(FakeMailItem):
+        def SaveAs(self, path: str, _format: int) -> None:
+            super().SaveAs(path, _format)
+            expected_msg.write_bytes(b"other process")
+
+    with pytest.raises(FileExistsError):
+        OutlookExporter().export_mail(RacingMail(), metadata(), decision(tmp_path))
+
+    assert expected_msg.read_bytes() == b"other process"
+    assert list(tmp_path.iterdir()) == [expected_msg]
+
+
+def test_explicit_attachment_overwrite_supports_duplicate_attachment_names(tmp_path: Path) -> None:
+    item = FakeMailItem([FakeAttachment("plan.pdf", "first"), FakeAttachment("plan.pdf", "last")])
+    result = OutlookExporter().export_mail(
+        item, metadata(), decision(tmp_path), attachment_policy=AttachmentConflictPolicy.OVERWRITE,
+    )
+    assert len(result.attachment_paths) == 1
+    assert result.attachment_paths[0].read_text(encoding="utf-8") == "last"

@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from mailflow.models import InterlocutorType, MailType, ManualLearningSignal, RoutingCategory
 from mailflow.storage.learning_store import SQLiteLearningStore
 
@@ -82,3 +84,23 @@ def test_unresolved_supplier_category_is_not_used_as_verified_example(
 
     assert store.count() == 1
     assert store.verified_examples() == []
+
+
+@pytest.mark.parametrize("correction", [
+    {"selected_mail_type": MailType.A_VERIFIER, "selected_target_folder": "A verifier"},
+    {"selected_interlocutor": InterlocutorType.INCONNU},
+    {"organization_name": ""},
+])
+def test_unresolved_correction_revokes_only_previous_example_for_that_mail(
+    tmp_path: Path, correction: dict[str, object],
+) -> None:
+    store = SQLiteLearningStore(tmp_path / "mailflow.sqlite")
+    store.record(signal(mail_id="ENTRY-1"))
+    store.record(
+        signal(mail_id="ENTRY-2").model_copy(update={"organization_name": "Other Company"})
+    )
+
+    store.record(signal(mail_id="ENTRY-1").model_copy(update=correction))
+
+    assert store.count() == 3
+    assert [example.organization_name for example in store.verified_examples()] == ["Other Company"]

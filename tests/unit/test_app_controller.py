@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from mailflow.core.app_controller import AppController, PreviewRequest, selected_rows
+from mailflow.classifier.pipeline import ClassificationPipeline
+from mailflow.core.app_controller import (
+    AppController,
+    PreviewRequest,
+    apply_directory_roles_to_rows,
+    selected_rows,
+)
 from mailflow.core.archive_batch import ArchiveBatchExecutor
 from mailflow.core.contact_directory import (
     ContactObservation,
@@ -34,6 +40,7 @@ from mailflow.models import (
 )
 from mailflow.outlook.exporter import ExportResult
 from mailflow.outlook.scanner import ScannedMail
+from mailflow.storage.learning_store import SQLiteLearningStore
 
 
 class FakeScanService:
@@ -981,3 +988,149 @@ def test_selected_rows_ignores_invalid_indexes(tmp_path: Path) -> None:
     rows = [make_row(tmp_path), make_row(tmp_path, PreviewAction.IGNORE)]
 
     assert selected_rows(rows, [-1, 0, 99]) == [rows[0]]
+
+
+def test_selected_rows_deduplicates_indexes(tmp_path: Path) -> None:
+    row = make_row(tmp_path)
+    assert selected_rows([row], [0, 0, 0]) == [row]
+
+
+def test_reclassification_preserves_ignored_and_archived_rows(tmp_path: Path) -> None:
+    ignored = make_row(tmp_path, PreviewAction.IGNORE, "IGNORED")
+    archived = make_row(tmp_path, PreviewAction.ARCHIVED, "ARCHIVED")
+    review = make_row(tmp_path, PreviewAction.REVIEW, "REVIEW")
+    classified = make_row(tmp_path, PreviewAction.ARCHIVE, "REVIEW")
+    pipeline = FakePreviewPipeline([classified])
+    controller = AppController(
+        scan_service=FakeScanService([]), preview_pipeline=pipeline,
+        projects_root=tmp_path, report_dir=tmp_path,
+    )
+    controller.preview_rows = [ignored, review, archived]
+
+    assert controller.reclassify_preview() == [ignored, classified, archived]
+    assert pipeline.mails == [review.mail]
+
+
+def test_failed_scan_keeps_previous_outlook_items_and_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_row = make_row(tmp_path, entry_id="OLD")
+    old_item = object()
+    pipeline = FakePreviewPipeline([])
+    controller = AppController(
+        scan_service=FakeScanService([make_mail("NEW")]), preview_pipeline=pipeline,
+        projects_root=tmp_path, report_dir=tmp_path,
+    )
+    controller.preview_rows = [old_row]
+    controller.outlook_items = {"OLD": old_item}
+
+    def fail(*args: object, **kwargs: object) -> list[PreviewRow]:
+        raise RuntimeError("classification unavailable")
+
+    monkeypatch.setattr(pipeline, "preview", fail)
+    with pytest.raises(RuntimeError):
+        controller.scan_and_preview(PreviewRequest(None, "Inbox", "2025"))
+
+    assert controller.preview_rows == [old_row]
+    assert controller.outlook_items == {"OLD": old_item}
+
+
+def test_archive_does_not_create_directories_for_ignored_rows(tmp_path: Path) -> None:
+    create_project_folder(tmp_path)
+    destination = tmp_path / "unwanted-folder"
+    row = make_row(destination, PreviewAction.IGNORE)
+    controller = AppController(
+        scan_service=FakeScanService([]), preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path, report_dir=tmp_path,
+        archive_executor=ArchiveBatchExecutor(FakeArchiveService()),
+    )
+    controller.preview_rows = [row]
+    controller.outlook_items = {row.mail.entry_id: object()}
+
+    result = controller.archive_ready()
+
+    assert result.skipped == [row.mail.entry_id]
+    assert not destination.exists()
+
+
+def test_directory_role_change_keeps_ignored_and_archived_states(tmp_path: Path) -> None:
+    directory = FakeDirectoryStore()
+    directory.global_roles[1] = InterlocutorType.CLIENT
+    active = make_row(tmp_path).model_copy(
+        update={"mail": make_mail().model_copy(update={"sender_email": "contact@gva.ch"})}
+    )
+    ignored = active.model_copy(update={"action": PreviewAction.IGNORE})
+    archived = active.model_copy(update={
+        "action": PreviewAction.ARCHIVED,
+        "mail": active.mail.model_copy(update={"entry_id": "ARCHIVED"}),
+    })
+
+    result = apply_directory_roles_to_rows([ignored, archived], directory, tmp_path)
+
+    assert result[0].action == PreviewAction.IGNORE
+    assert result[0].decision.interlocutor == InterlocutorType.CLIENT
+    assert result[1] == archived
+
+
+def test_manual_classification_refuses_already_archived_mail(tmp_path: Path) -> None:
+    controller = AppController(
+        scan_service=FakeScanService([]), preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path, report_dir=tmp_path,
+    )
+    controller.preview_rows = [make_row(tmp_path, PreviewAction.ARCHIVED)]
+    with pytest.raises(ValueError, match="archive"):
+        controller.apply_manual_update(0, ManualClassificationUpdate(
+            mail_type=MailType.CORRESPONDANCE_GENERALE,
+            interlocutor=InterlocutorType.CLIENT,
+            target_relative_folder="Correspondance",
+        ))
+
+
+@pytest.mark.parametrize("interlocutor", [
+    InterlocutorType.INCONNU, InterlocutorType.FOURNISSEUR,
+])
+def test_manual_correction_revokes_persisted_example_and_live_pipeline_cache(
+    tmp_path: Path, interlocutor: InterlocutorType,
+) -> None:
+    store = SQLiteLearningStore(tmp_path / "learning.sqlite")
+    pipeline = ClassificationPipeline(projects_root=tmp_path)
+    controller = AppController(
+        scan_service=FakeScanService([]), preview_pipeline=pipeline,
+        projects_root=tmp_path, report_dir=tmp_path, learning_store=store,
+    )
+    controller.preview_rows = [make_row(tmp_path, PreviewAction.REVIEW)]
+    controller.apply_manual_update(0, ManualClassificationUpdate(
+        mail_type=MailType.DEMANDE_DE_PRIX, interlocutor=InterlocutorType.FOURNISSEUR,
+        target_relative_folder="Fournisseurs/Demande de prix",
+    ))
+    assert len(pipeline.verified_examples) == 1
+    assert pipeline.verified_examples == store.verified_examples()
+
+    corrected = controller.apply_manual_update(0, ManualClassificationUpdate(
+        mail_type=MailType.A_VERIFIER, interlocutor=interlocutor,
+        target_relative_folder="A verifier",
+    ))
+
+    assert corrected.action == PreviewAction.REVIEW
+    assert store.count() == 2
+    assert store.verified_examples() == []
+    assert pipeline.verified_examples == []
+
+
+def test_manual_valid_correction_replaces_live_example_without_duplicates(tmp_path: Path) -> None:
+    store = SQLiteLearningStore(tmp_path / "learning.sqlite")
+    pipeline = ClassificationPipeline(projects_root=tmp_path)
+    controller = AppController(
+        scan_service=FakeScanService([]), preview_pipeline=pipeline,
+        projects_root=tmp_path, report_dir=tmp_path, learning_store=store,
+    )
+    controller.preview_rows = [make_row(tmp_path, PreviewAction.REVIEW)]
+    for mail_type in (MailType.DEMANDE_DE_PRIX, MailType.COMMANDE):
+        controller.apply_manual_update(0, ManualClassificationUpdate(
+            mail_type=mail_type, interlocutor=InterlocutorType.FOURNISSEUR,
+            target_relative_folder="Fournisseurs/Demande de prix",
+        ))
+
+    assert len(pipeline.verified_examples) == 1
+    assert pipeline.verified_examples == store.verified_examples()
+    assert pipeline.verified_examples[0].category.value == "Commande"

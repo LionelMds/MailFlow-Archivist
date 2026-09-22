@@ -20,6 +20,63 @@ from mailflow.models import (
 from mailflow.outlook.attachments import PR_ATTACH_CONTENT_ID, PR_ATTACH_MIME_TAG
 
 
+def test_attachment_collision_preserves_each_distinct_document(tmp_path: Path) -> None:
+    create_project_folder(tmp_path)
+    row = make_row(tmp_path)
+    item = FakeMailItem([
+        FakeAttachment("plan.pdf", "first plan"),
+        FakeAttachment("plan.pdf", "second plan"),
+    ])
+
+    first = export_project_correspondence_html([row], {row.mail.entry_id: item}, tmp_path)[0]
+    second = export_project_correspondence_html(
+        [row], {row.mail.entry_id: item}, tmp_path, overwrite_html=True,
+    )[0]
+
+    assert [path.read_text(encoding="utf-8") for path in first.attachment_paths] == [
+        "first plan", "second plan",
+    ]
+    assert second.attachment_paths == first.attachment_paths
+    assert len(list(first.attachment_dir.iterdir())) == 2
+
+
+def test_attachment_failure_preserves_existing_html(tmp_path: Path) -> None:
+    create_project_folder(tmp_path)
+    row = make_row(tmp_path)
+    first = export_project_correspondence_html([row], {}, tmp_path)[0]
+    previous_html = first.html_path.read_bytes()
+
+    class BrokenAttachment(FakeAttachment):
+        def SaveAsFile(self, path: str) -> None:
+            Path(path).write_bytes(b"partial")
+            raise OSError("network unavailable")
+
+    with pytest.raises(OSError):
+        export_project_correspondence_html(
+            [row], {row.mail.entry_id: FakeMailItem([BrokenAttachment("plan.pdf", "")])},
+            tmp_path, overwrite_html=True,
+        )
+
+    assert first.html_path.read_bytes() == previous_html
+    assert not list(first.attachment_dir.iterdir())
+
+
+def test_inline_image_name_cannot_escape_temporary_directory(tmp_path: Path) -> None:
+    create_project_folder(tmp_path)
+    row = make_row(tmp_path)
+    outside = tmp_path / "outside.png"
+    image = FakeAttachment(str(outside), "image", properties={
+        PR_ATTACH_CONTENT_ID: "cid-image", PR_ATTACH_MIME_TAG: "image/png",
+    })
+
+    result = export_project_correspondence_html(
+        [row], {row.mail.entry_id: FakeMailItem([image])}, tmp_path,
+    )[0]
+
+    assert not outside.exists()
+    assert "data:image/png;base64," in result.html_path.read_text(encoding="utf-8")
+
+
 class FakePropertyAccessor:
     def __init__(self, values: dict[str, object] | None = None) -> None:
         self.values = values or {}
@@ -251,7 +308,9 @@ def test_project_html_export_refuses_existing_html_until_confirmed(tmp_path: Pat
     )[0]
 
     assert second_result.html_path == first_result.html_path
-    assert second_result.attachment_paths[0].read_text(encoding="utf-8") == "original"
+    assert first_result.attachment_paths[0].read_text(encoding="utf-8") == "original"
+    assert second_result.attachment_paths[0].read_text(encoding="utf-8") == "updated"
+    assert second_result.attachment_paths[0] != first_result.attachment_paths[0]
 
 
 def test_project_html_export_refuses_missing_project_folder(tmp_path: Path) -> None:

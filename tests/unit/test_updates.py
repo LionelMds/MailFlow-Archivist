@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from mailflow.core.update_installer import (
     download_update_installer,
@@ -11,10 +14,59 @@ from mailflow.core.update_installer import (
 from mailflow.core.updates import (
     ReleaseAsset,
     check_for_updates,
+    fetch_latest_release,
     is_version_newer,
     normalize_version,
     select_installer_asset,
 )
+
+
+def test_release_asset_reads_optional_digest() -> None:
+    payload = fake_release_payload("", 0)
+    payload["assets"][0]["digest"] = "sha256:" + "a" * 64
+    release = fetch_latest_release(fetch_json=lambda _url, _timeout: payload)
+    assert release.assets[0].digest == "sha256:" + "a" * 64
+    assert release.assets[1].digest is None
+
+
+def test_download_update_verifies_digest_before_replacing_installer(tmp_path: Path) -> None:
+    data = b"verified installer"
+    asset = ReleaseAsset("setup.exe", "https://github.test/setup.exe", len(data),
+                         "sha256:" + hashlib.sha256(data).hexdigest())
+    target = download_update_installer(
+        asset, download_dir=tmp_path, downloader=lambda _url, _timeout: data,
+    )
+    assert target.read_bytes() == data
+
+
+@pytest.mark.parametrize(("size", "digest", "message"), [
+    (10, None, "Taille"),
+    (3, "sha256:" + "0" * 64, "empreinte"),
+    (3, "sha256:invalid", "Empreinte"),
+])
+def test_invalid_installer_keeps_previous_download(
+    tmp_path: Path, size: int, digest: str | None, message: str,
+) -> None:
+    target = tmp_path / "setup.exe"
+    target.write_bytes(b"previous verified copy")
+    asset = ReleaseAsset("setup.exe", "https://github.test/setup.exe", size, digest)
+
+    with pytest.raises(ValueError, match=message):
+        download_update_installer(
+            asset, download_dir=tmp_path, downloader=lambda _url, _timeout: b"exe",
+        )
+
+    assert target.read_bytes() == b"previous verified copy"
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_update_refuses_non_https_download(tmp_path: Path) -> None:
+    asset = ReleaseAsset("setup.exe", "http://github.test/setup.exe", 3)
+    with pytest.raises(ValueError, match="HTTPS"):
+        download_update_installer(
+            asset, download_dir=tmp_path, downloader=lambda _url, _timeout: b"exe",
+        )
+    assert not list(tmp_path.iterdir())
 
 
 def fake_release_payload(_url: str, _timeout: float) -> dict[str, Any]:

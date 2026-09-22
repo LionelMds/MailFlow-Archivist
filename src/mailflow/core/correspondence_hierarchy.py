@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 from mailflow.core.project_paths import local_project_path
-from mailflow.models import Direction, PreviewRow
+from mailflow.models import Direction, PreviewAction, PreviewRow
 
 CORRESPONDENCE_FOLDER = "Correspondance"
 SUPPLIER_ROOT_FOLDER = "Fournisseurs"
@@ -49,6 +49,7 @@ def apply_correspondence_hierarchy(
 ) -> list[PreviewRow]:
     folder_by_mail_id = _folder_plan(rows, organization_directory=organization_directory)
     return [
+        row if row.action == PreviewAction.ARCHIVED else
         _row_with_folder(row, folder_by_mail_id[row.mail.entry_id], projects_root=projects_root)
         for row in rows
     ]

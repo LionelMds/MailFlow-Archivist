@@ -14,7 +14,7 @@ dependencies = [
     "platformdirs>=4.2",
     "structlog>=24.1",
     "keyring>=25.0",
-    "openai>=1.59",
+    "openai>=2.37.0",
     "pywin32>=306; platform_system == 'Windows'",
     "PySide6>=6.7",
 ]

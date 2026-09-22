@@ -38,3 +38,14 @@ def test_sqlite_store_is_idempotent(tmp_path: Path) -> None:
     assert store.record_archived(record(tmp_path)) is True
     assert store.record_archived(record(tmp_path)) is False
     assert store.count_archived() == 1
+
+
+def test_sqlite_store_reads_original_archive_record(tmp_path: Path) -> None:
+    store = SQLiteArchiveStore(tmp_path / "mailflow_archivist.sqlite")
+    original = record(tmp_path)
+
+    assert store.get_archived_record("ENTRY-1") is None
+    store.record_archived(original)
+
+    assert store.get_archived_record("ENTRY-1") == original
+    assert store.get_archived_record("UNKNOWN") is None

@@ -8,6 +8,18 @@ Le MVP limite les donnees envoyees a l'IA :
 - noms des pieces jointes ;
 - extrait nettoye du corps, limite a 8000 caracteres.
 
+La requête inclut aussi l'entreprise et son rôle issus de l'annuaire, jusqu'à six
+échanges récents de la même entreprise dans le projet (sujet, résumé, catégorie), et
+jusqu'à cinq exemples de corrections vérifiées pertinents. L'import de l'annuaire
+reste local, mais ces éléments sélectionnés sont transmis lors d'une classification IA.
+Les fichiers joints eux-mêmes ne sont pas transmis.
+
+Les appels Responses utilisent `store=False` pour ne pas demander la conservation
+de la réponse comme ressource API. Les éventuelles obligations de conservation ou
+journaux côté fournisseur dépendent des conditions du compte OpenAI ; cette option
+ne signifie pas « aucune rétention ». Les erreurs de classification affichées dans
+la prévisualisation utilisent des messages locaux sans recopier la requête distante.
+
 La cle API OpenAI est stockee via `keyring`, dans le coffre du systeme, et n'est
 jamais ecrite dans les logs ou le fichier de configuration JSON.
 

@@ -17,20 +17,20 @@ PREVIEW_COLUMNS = (
     "Projet",
     "Date",
     "Sens",
-    "Expediteur",
+    "Expéditeur",
     "Sujet",
-    "Type detecte",
+    "Type détecté",
     "Interlocuteur",
-    "Destination proposee",
+    "Destination proposée",
     "Confiance",
     "Action",
 )
 
 ACTION_LABELS = {
     PreviewAction.ARCHIVE: "Archiver",
-    PreviewAction.ARCHIVED: "Archive",
+    PreviewAction.ARCHIVED: "Archivé",
     PreviewAction.IGNORE: "Ignorer",
-    PreviewAction.REVIEW: "A verifier",
+    PreviewAction.REVIEW: "À vérifier",
 }
 
 MAIL_TYPE_OPTIONS = (
@@ -53,9 +53,9 @@ INTERLOCUTOR_OPTIONS = (
 )
 DESTINATION_OPTIONS = MANUAL_DESTINATIONS
 
-TYPE_COLUMN = PREVIEW_COLUMNS.index("Type detecte")
+TYPE_COLUMN = PREVIEW_COLUMNS.index("Type détecté")
 INTERLOCUTOR_COLUMN = PREVIEW_COLUMNS.index("Interlocuteur")
-DESTINATION_COLUMN = PREVIEW_COLUMNS.index("Destination proposee")
+DESTINATION_COLUMN = PREVIEW_COLUMNS.index("Destination proposée")
 REVIEW_EDITABLE_COLUMNS = {TYPE_COLUMN, INTERLOCUTOR_COLUMN, DESTINATION_COLUMN}
 
 
@@ -70,6 +70,8 @@ def editable_options_for_column(column: int) -> tuple[str, ...] | None:
 
 
 def row_requires_manual_attention(row: PreviewRow) -> bool:
+    if row.action in {PreviewAction.ARCHIVED, PreviewAction.IGNORE}:
+        return False
     decision = row.decision
     return (
         row.action == PreviewAction.REVIEW
@@ -90,7 +92,7 @@ def preview_row_to_cells(row: PreviewRow) -> list[str]:
     return [
         mail.project_number,
         mail.sent_at.strftime("%Y-%m-%d %H:%M"),
-        "Envoye" if mail.direction.value == "sent" else "Recu",
+        "Envoyé" if mail.direction.value == "sent" else "Reçu",
         mail.sender_name or mail.sender_email,
         mail.subject,
         (

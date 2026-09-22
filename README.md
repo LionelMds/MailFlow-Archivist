@@ -36,7 +36,7 @@ Cette premiere tranche met en place :
 - export HTML projet centralise dans `Correspondance` avec pieces jointes liees ;
 - surveillance Outlook par scan regulier avec confirmation avant mise a jour HTML ;
 - export CSV de rapport sans corps de mails ;
-- squelette UI PySide6 ;
+- interface PySide6 avec recherche, filtres de statut et aperçu de lecture ;
 - tests unitaires et smoke tests.
 
 ## Export HTML projet
@@ -100,7 +100,7 @@ d'activer ou desactiver la surveillance, ou de quitter completement.
 
 ## Mode IA
 
-Le mode IA se configure dans le bloc `Configuration` : `activee` classe chaque mail
+Le mode IA se configure dans `Réglages` : `activee` classe chaque mail
 avec l'IA, tandis que `desactivee` place les lignes en verification manuelle. Il
 n'existe aucun classement de secours par mots-cles.
 
@@ -109,10 +109,20 @@ L'annuaire fixe l'entreprise et son role global. L'IA choisit uniquement entre
 et les corrections manuelles verifiees lui sont transmis comme contexte. Une
 correction apprend une decision complete, jamais un terme isole.
 
-Le modele par defaut est `gpt-5.4-nano`, choisi pour un usage de classification
-rapide et economique. Le champ `Modele IA` propose aussi des modeles plus puissants
-comme `gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5`, `gpt-4o-mini` et `gpt-4o`, tout en
-restant editable pour saisir un autre modele compatible Structured Outputs.
+Le modèle par défaut est **GPT-6 Astra** (`gpt-6-astra`), appelé via Responses API
+avec une sortie structurée stricte et un effort de raisonnement `low`. Le délai réseau
+par défaut est de 60 secondes ; le SDK peut réessayer une fois. L'attente des réponses
+IA laisse l'interface réactive. Les commandes qui modifieraient le travail en cours
+sont temporairement désactivées.
+
+Au chargement d'une ancienne configuration, l'ancien défaut `gpt-5.4-nano` est migré
+vers Astra. Un autre modèle configuré et le mode IA désactivé sont conservés. La
+sauvegarde des réglages mémorise cette migration ; le sélecteur reste modifiable.
+L'accès au modèle dépend du compte OpenAI et se vérifie avec `Tester IA`.
+
+Les échecs IA restent en vérification manuelle avec une explication visible. Aucun
+classement par mots-clés ne remplace une réponse manquante. Les requêtes utilisent
+`store=False` ; cela ne constitue pas une garantie de rétention nulle chez le fournisseur.
 
 La cle OpenAI est enregistree dans le coffre du systeme via `keyring`, jamais dans le
 fichier JSON ni dans les logs. Le bouton `Tester IA` lance un mini appel structure sur
@@ -134,6 +144,11 @@ python -m mailflow --import-contact-directory --account "lionel@balzmetal.ch" --
 ```
 
 Sur ce poste, si `python` pointe vers l'alias Microsoft Store, utiliser un Python 3.11+ explicite ou le runtime configure dans Codex.
+
+La [revue du projet](docs/project-review.md) décrit l'architecture, les corrections,
+les contrôles et les limites de validation. Le [guide utilisateur](docs/user-guide.md)
+présente le parcours et les réglages. Les pushes sur `main` et les pull requests
+déclenchent désormais tests, Ruff et mypy sur Windows et macOS, sans publier de release.
 
 ## Installation et releases
 

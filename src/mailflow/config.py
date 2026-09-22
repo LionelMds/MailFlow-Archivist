@@ -12,8 +12,11 @@ from mailflow.models import AiMode
 APP_NAME = "MailFlow Archivist"
 KEYRING_SERVICE = "mailflow-archivist"
 KEYRING_OPENAI_USERNAME = "openai-api-key"
-DEFAULT_AI_MODEL = "gpt-5.4-nano"
+DEFAULT_AI_MODEL = "gpt-6-astra"
+DEFAULT_OPENAI_TIMEOUT_SECONDS = 60.0
+SETTINGS_VERSION = 1
 AI_MODEL_OPTIONS = (
+    DEFAULT_AI_MODEL,
     "gpt-5.4-nano",
     "gpt-5.4-mini",
     "gpt-5.4",
@@ -53,6 +56,7 @@ class AppPaths(BaseModel):
 class AppSettings(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
+    settings_version: int = Field(default=SETTINGS_VERSION, ge=1)
     paths: AppPaths = Field(default_factory=AppPaths)
     local_projects_root: Path = Path(r"C:\Users\Lionel\OneDrive - Balz Metal Sa\Clients")
     outlook_root_folder: str = "Boite de reception"
@@ -60,7 +64,7 @@ class AppSettings(BaseModel):
     selected_year: str | None = None
     ai_mode: AiMode = AiMode.ALL
     ai_model: str = DEFAULT_AI_MODEL
-    openai_timeout_seconds: float = 25.0
+    openai_timeout_seconds: float = Field(default=DEFAULT_OPENAI_TIMEOUT_SECONDS, gt=0)
     ai_include_body_excerpt: bool = True
     privacy_mask_phone_numbers: bool = False
     review_reminder_times: list[str] = Field(default_factory=lambda: ["09:00", "14:00"])
@@ -76,6 +80,14 @@ def load_settings(path: Path | None = None) -> AppSettings:
         return base
     raw = json.loads(config_path.read_text(encoding="utf-8"))
     raw.pop("openai_api_key", None)
+    if raw.get("settings_version", 0) == 0:
+        # Only replace the former default. Saving the version makes this migration
+        # one-time and lets users subsequently select the legacy model explicitly.
+        if raw.get("ai_model", "gpt-5.4-nano") == "gpt-5.4-nano":
+            raw["ai_model"] = DEFAULT_AI_MODEL
+            if raw.get("openai_timeout_seconds", 25.0) == 25.0:
+                raw["openai_timeout_seconds"] = DEFAULT_OPENAI_TIMEOUT_SECONDS
+        raw["settings_version"] = SETTINGS_VERSION
     if raw.get("ai_mode") == AiMode.AMBIGUOUS_ONLY.value:
         raw["ai_mode"] = AiMode.ALL.value
     return AppSettings.model_validate(raw)

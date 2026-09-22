@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 import webbrowser
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +20,7 @@ from mailflow.models import (
     MailType,
     ManualClassificationUpdate,
     OutlookAccount,
+    PreviewAction,
     PreviewRow,
     RoutingCategory,
 )
@@ -36,32 +37,32 @@ UI_TEXT = {
     "actions": "Actions",
     "logs": "Logs",
     "scan_button": "Scanner Outlook",
-    "reset_workspace": "Reinitialiser",
+    "reset_workspace": "Réinitialiser",
     "watch_outlook": "Surveillance Outlook",
-    "save_settings": "Enregistrer parametres",
-    "save_openai_key": "Enregistrer cle",
+    "save_settings": "Enregistrer les réglages",
+    "save_openai_key": "Enregistrer la clé",
     "test_openai_key": "Tester IA",
-    "check_updates": "Rechercher mise a jour",
-    "archive_selection": "Archiver selection",
+    "check_updates": "Rechercher une mise à jour",
+    "archive_selection": "Archiver la sélection",
     "archive": "Archiver",
-    "archive_all_except_review": "Tout archiver sauf a verifier",
-    "mark_ignored": "Ignorer selection",
-    "restore_archivable": "Tout remettre a archiver",
-    "reclassify": "Reclassifier avec l'IA",
-    "background_mode": "Passer en arriere-plan",
+    "archive_all_except_review": "Archiver tous les mails prêts",
+    "mark_ignored": "Ignorer la sélection",
+    "restore_archivable": "Rétablir les mails ignorés",
+    "reclassify": "Reclasser avec l'IA",
+    "background_mode": "Passer en arrière-plan",
     "open_project_folder": "Ouvrir dossier projet",
-    "export_project_html": "Exporter HTML projet",
+    "export_project_html": "Exporter le projet en HTML",
     "export_report": "Exporter rapport",
     "import_directory": "Importer annuaire Outlook",
-    "refresh_directory": "Rafraichir",
+    "refresh_directory": "Actualiser",
     "add_directory": "Ajouter entreprise",
     "delete_directory": "Supprimer entreprise",
     "rename_directory": "Renommer entreprise",
     "merge_directory": "Fusionner entreprise",
     "more_actions": "Plus",
     "tray_open": "Ouvrir MailFlow",
-    "tray_enable_watch": "Activer surveillance Outlook",
-    "tray_disable_watch": "Desactiver surveillance Outlook",
+    "tray_enable_watch": "Activer la surveillance Outlook",
+    "tray_disable_watch": "Désactiver la surveillance Outlook",
     "tray_watch_active": "surveillance active",
     "tray_watch_inactive": "surveillance inactive",
     "tray_quit": "Quitter",
@@ -110,7 +111,17 @@ def run_desktop_app(settings: AppSettings) -> int:
 
 def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     from PySide6.QtCore import Qt, QTimer
-    from PySide6.QtGui import QAction, QBrush, QColor, QFont, QIcon, QPainter, QPen, QPixmap
+    from PySide6.QtGui import (
+        QAction,
+        QBrush,
+        QColor,
+        QFont,
+        QIcon,
+        QKeySequence,
+        QPainter,
+        QPen,
+        QPixmap,
+    )
     from PySide6.QtWidgets import (
         QAbstractItemView,
         QApplication,
@@ -134,12 +145,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QMessageBox,
         QPushButton,
         QScrollArea,
+        QSizePolicy,
         QSplitter,
         QStackedWidget,
         QSystemTrayIcon,
         QTableWidget,
         QTableWidgetItem,
         QTableWidgetSelectionRange,
+        QTabWidget,
         QTextEdit,
         QToolButton,
         QTreeWidget,
@@ -161,6 +174,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     from mailflow.core.manual_review import suggested_manual_destination
     from mailflow.core.project_digest import build_project_digest
     from mailflow.resources import app_icon_path
+    from mailflow.ui.background_call import ResponsiveAiClassifier, run_with_event_loop
     from mailflow.ui.mail_preview import preview_row_to_html
     from mailflow.ui.preview_table import (
         DESTINATION_COLUMN,
@@ -177,6 +191,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         should_highlight_cell,
     )
     from mailflow.ui.project_digest_preview import project_digest_to_html
+    from mailflow.ui.theme import APP_STYLESHEET
 
     class MailFlowMainWindow(QMainWindow):
         def closeEvent(self, event: Any) -> None:
@@ -188,6 +203,34 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     controller_was_injected = controller is not None
     active_controller = controller or build_default_controller(settings)
+
+    def enable_responsive_ai() -> None:
+        pipeline = getattr(active_controller, "preview_pipeline", None)
+        if pipeline is None:
+            return
+        classifier = getattr(pipeline, "ai_classifier", None)
+        if classifier is not None and not isinstance(classifier, ResponsiveAiClassifier):
+            pipeline.ai_classifier = ResponsiveAiClassifier(classifier)
+
+    def apply_current_ai_settings() -> None:
+        pipeline = getattr(active_controller, "preview_pipeline", None)
+        if pipeline is None:
+            return
+        # Update the existing pipeline so saving privacy choices also applies to
+        # the watcher and reclassification, without discarding the current review.
+        pipeline.ai_mode = settings.ai_mode
+        pipeline.include_body_for_ai = settings.ai_include_body_excerpt
+        pipeline.privacy_mask_phone_numbers = settings.privacy_mask_phone_numbers
+        pipeline.ai_classifier = None
+        api_key = get_openai_api_key() if settings.ai_mode != AiMode.DISABLED else None
+        if api_key:
+            pipeline.ai_classifier = ResponsiveAiClassifier(AiClassifier(
+                api_key=api_key,
+                model=settings.ai_model,
+                timeout_seconds=settings.openai_timeout_seconds,
+            ))
+
+    enable_responsive_ai()
     window = MailFlowMainWindow()
     dynamic_window = cast(Any, window)
     window.setWindowTitle(UI_TEXT["window_title"])
@@ -197,28 +240,35 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     refreshing_outlook_options = False
     watch_paused_logged = False
     refreshing_directory_table = False
+    operation_in_progress = False
     watch_state = WatchState()
     review_queue = ReviewQueue()
     sent_review_reminders: set[str] = set()
     central = QWidget()
+    central.setObjectName("workspace")
     layout = QVBoxLayout(central)
-    layout.setContentsMargins(8, 8, 8, 8)
-    layout.setSpacing(6)
+    layout.setContentsMargins(18, 14, 18, 10)
+    layout.setSpacing(12)
+    window.setStyleSheet(APP_STYLESHEET)
     window.resize(1440, 900)
-    window.setMinimumSize(1100, 720)
+    window.setMinimumSize(1040, 720)
 
     top_bar = QWidget()
     top_layout = QHBoxLayout(top_bar)
     top_layout.setContentsMargins(0, 0, 0, 0)
     top_layout.setSpacing(8)
     app_title = QLabel("MailFlow")
-    app_title.setStyleSheet("font-size: 18px; font-weight: 700; color: #0f172a;")
+    app_title.setProperty("role", "title")
+    workflow_label = QLabel("1. Scanner   →   2. Vérifier   →   3. Archiver")
+    workflow_label.setProperty("role", "muted")
     account_combo = QComboBox()
     account_combo.setEditable(True)
-    account_combo.setMinimumWidth(230)
+    account_combo.setMinimumWidth(190)
+    account_combo.setAccessibleName("Compte Outlook")
     outlook_root_combo = QComboBox()
     outlook_root_combo.setEditable(True)
     outlook_root_combo.setMinimumWidth(180)
+    outlook_root_combo.setAccessibleName("Dossier source Outlook")
     year_input = QLineEdit(settings.selected_year or "")
     year_input.setPlaceholderText("Annee")
     year_input.setFixedWidth(82)
@@ -226,32 +276,49 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     project_input.setPlaceholderText("Projet")
     project_input.setFixedWidth(120)
     scan_button = QPushButton(UI_TEXT["scan_button"])
+    scan_button.setProperty("role", "primary")
+    scan_button.setToolTip("Analyser les dossiers sélectionnés (Ctrl+R)")
     reset_button = QPushButton(UI_TEXT["reset_workspace"])
     watch_checkbox = QCheckBox(UI_TEXT["watch_outlook"])
     scan_status_label = QLabel("")
-    scan_status_label.setMinimumWidth(180)
+    scan_status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    scan_status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     scan_status_label.setStyleSheet("QLabel { color: #64748b; }")
     top_layout.addWidget(app_title)
-    top_layout.addSpacing(8)
-    top_layout.addWidget(QLabel("Compte"))
-    top_layout.addWidget(account_combo, 2)
-    top_layout.addWidget(QLabel("Racine Outlook"))
-    top_layout.addWidget(outlook_root_combo, 2)
-    top_layout.addWidget(QLabel("Annee"))
-    top_layout.addWidget(year_input)
-    top_layout.addWidget(QLabel("Projet"))
-    top_layout.addWidget(project_input)
-    top_layout.addWidget(scan_button)
-    top_layout.addWidget(reset_button)
+    top_layout.addWidget(workflow_label)
+    top_layout.addStretch(1)
     top_layout.addWidget(watch_checkbox)
-    top_layout.addWidget(scan_status_label, 1)
     layout.addWidget(top_bar)
+
+    scan_panel = QWidget()
+    scan_panel.setObjectName("scanPanel")
+    scan_layout = QGridLayout(scan_panel)
+    scan_layout.setContentsMargins(14, 10, 14, 10)
+    scan_layout.setHorizontalSpacing(12)
+    for column, (label, field) in enumerate((
+        ("Compte Outlook", account_combo),
+        ("Dossier source", outlook_root_combo),
+        ("Année", year_input),
+        ("Projet (facultatif)", project_input),
+    )):
+        field_label = QLabel(label)
+        field_label.setBuddy(field)
+        field_label.setProperty("role", "muted")
+        scan_layout.addWidget(field_label, 0, column)
+        scan_layout.addWidget(field, 1, column)
+    scan_layout.setColumnStretch(0, 2)
+    scan_layout.setColumnStretch(1, 2)
+    scan_layout.addWidget(scan_button, 1, 4)
+    scan_layout.addWidget(reset_button, 1, 5)
+    layout.addWidget(scan_panel)
 
     content_splitter = QSplitter(Qt.Orientation.Horizontal)
     content_splitter.setChildrenCollapsible(False)
     navigation = QListWidget()
-    navigation.addItems(["Mails", "Arborescence", "Annuaire", "Reglages"])
-    navigation.setFixedWidth(150)
+    navigation.setObjectName("navigation")
+    navigation.setAccessibleName("Navigation principale")
+    navigation.addItems(["Mails", "Arborescence", "Annuaire", "Réglages"])
+    navigation.setFixedWidth(154)
     navigation.setCurrentRow(0)
     content_splitter.addWidget(navigation)
 
@@ -262,12 +329,41 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     mail_page = QWidget()
     mail_layout = QVBoxLayout(mail_page)
     mail_layout.setContentsMargins(0, 0, 0, 0)
-    mail_layout.setSpacing(6)
+    mail_layout.setSpacing(10)
+    mail_heading = QLabel("Votre espace de classement")
+    mail_heading.setProperty("role", "heading")
+    mail_layout.addWidget(mail_heading)
+    summary_label = QLabel("Prêt pour votre première analyse")
+    summary_label.setProperty("role", "summary")
+    summary_label.setWordWrap(True)
+    mail_layout.addWidget(summary_label)
+    filters = QWidget()
+    filter_layout = QHBoxLayout(filters)
+    filter_layout.setContentsMargins(0, 0, 0, 0)
+    search_input = QLineEdit()
+    search_input.setPlaceholderText("Rechercher un sujet, expéditeur, projet…")
+    search_input.setClearButtonEnabled(True)
+    search_input.setAccessibleName("Rechercher dans les mails")
+    search_input.setToolTip("Rechercher dans les mails affichés (Ctrl+F)")
+    status_filter = QComboBox()
+    status_filter.setAccessibleName("Filtrer les mails par état")
+    for label, value in (
+        ("Tous les états", "all"), ("À vérifier", "review"),
+        ("Prêts à archiver", "ready"), ("Ignorés", "ignore"), ("Archivés", "archived"),
+    ):
+        status_filter.addItem(label, value)
+    clear_filters_button = QPushButton("Effacer les filtres")
+    filter_layout.addWidget(search_input, 1)
+    filter_layout.addWidget(status_filter)
+    filter_layout.addWidget(clear_filters_button)
+    mail_layout.addWidget(filters)
     actions = QWidget()
     actions_layout = QHBoxLayout(actions)
     actions_layout.setContentsMargins(0, 0, 0, 0)
     archive_button = QToolButton()
     archive_button.setText(UI_TEXT["archive"])
+    archive_button.setProperty("role", "primary")
+    archive_button.setToolTip("Archiver les mails prêts de la sélection (Ctrl+Entrée)")
     archive_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
     archive_menu = QMenu(archive_button)
     archive_selection_action = QAction(UI_TEXT["archive_selection"], window)
@@ -283,6 +379,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     ignore_action = QAction(UI_TEXT["mark_ignored"], window)
     restore_archivable_action = QAction(UI_TEXT["restore_archivable"], window)
     reclassify_action = QAction(UI_TEXT["reclassify"], window)
+    detail_columns_action = QAction("Afficher les colonnes détaillées", window)
+    detail_columns_action.setCheckable(True)
+    inspector_action = QAction("Afficher l'aperçu du mail", window)
+    inspector_action.setCheckable(True)
+    inspector_action.setChecked(True)
     background_action = QAction(UI_TEXT["background_mode"], window)
     open_folder_action = QAction(UI_TEXT["open_project_folder"], window)
     report_action = QAction(UI_TEXT["export_report"], window)
@@ -290,12 +391,18 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     more_actions_menu.addAction(restore_archivable_action)
     more_actions_menu.addAction(reclassify_action)
     more_actions_menu.addSeparator()
+    more_actions_menu.addAction(detail_columns_action)
+    more_actions_menu.addAction(inspector_action)
+    more_actions_menu.addSeparator()
     more_actions_menu.addAction(background_action)
     more_actions_menu.addSeparator()
     more_actions_menu.addAction(open_folder_action)
     more_actions_menu.addAction(report_action)
     more_actions_button.setMenu(more_actions_menu)
     actions_layout.addWidget(archive_button)
+    review_button = QPushButton("Vérifier la sélection")
+    review_button.setToolTip("Modifier le classement du mail courant (Entrée)")
+    actions_layout.addWidget(review_button)
     actions_layout.addWidget(export_html_button)
     actions_layout.addWidget(more_actions_button)
     actions_layout.addStretch(1)
@@ -303,17 +410,66 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     table.setHorizontalHeaderLabels(list(PREVIEW_COLUMNS))
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-    table.setMinimumHeight(320)
+    table.setMinimumHeight(220)
+    table.setAlternatingRowColors(True)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    table.setShowGrid(False)
+    table.verticalHeader().hide()
+    table.verticalHeader().setDefaultSectionSize(38)
+    table.setAccessibleName("Mails analysés et propositions de classement")
     table.horizontalHeader().setSectionsMovable(True)
     table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    # Keep the information used to make a decision visible first on smaller displays.
+    for visual_index, logical_index in enumerate((4, 9, 3, 7)):
+        table.horizontalHeader().moveSection(
+            table.horizontalHeader().visualIndex(logical_index), visual_index
+        )
+    for column in (0, 1, 2, TYPE_COLUMN, INTERLOCUTOR_COLUMN, 8):
+        table.setColumnHidden(column, True)
     mail_layout.addWidget(actions)
-    mail_layout.addWidget(table, 1)
+    mail_results = QStackedWidget()
+    mail_results.addWidget(table)
+    empty_state = QWidget()
+    empty_state.setObjectName("emptyState")
+    empty_layout = QVBoxLayout(empty_state)
+    empty_layout.setContentsMargins(30, 24, 30, 24)
+    empty_layout.addStretch(1)
+    empty_title = QLabel("Commencez par une analyse Outlook")
+    empty_title.setProperty("role", "heading")
+    empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    empty_title.setWordWrap(True)
+    empty_body = QLabel(
+        "Choisissez votre compte et votre dossier source, puis cliquez sur Scanner Outlook.\n\n"
+        "Les propositions apparaîtront ici pour être vérifiées avant archivage."
+    )
+    empty_body.setProperty("role", "muted")
+    empty_body.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    empty_body.setWordWrap(True)
+    empty_settings_button = QPushButton("Configurer les dossiers et l'IA")
+    empty_layout.addWidget(empty_title)
+    empty_layout.addSpacing(12)
+    empty_layout.addWidget(empty_body)
+    empty_layout.addSpacing(18)
+    empty_layout.addWidget(empty_settings_button, 0, Qt.AlignmentFlag.AlignHCenter)
+    empty_layout.addStretch(1)
+    mail_results.addWidget(empty_state)
+    mail_results.setCurrentIndex(1)
+    mail_layout.addWidget(mail_results, 1)
+    selection_status = QLabel("Aucun mail sélectionné")
+    selection_status.setProperty("role", "muted")
+    mail_layout.addWidget(selection_status)
     pages.addWidget(mail_page)
 
     tree_widget = QWidget()
     tree_layout = QVBoxLayout(tree_widget)
     tree_layout.setContentsMargins(0, 0, 0, 0)
     tree_layout.setSpacing(6)
+    tree_heading = QLabel("Dossiers proposés")
+    tree_heading.setProperty("role", "heading")
+    tree_hint = QLabel("Organisez les destinations avant de lancer l'archivage.")
+    tree_hint.setProperty("role", "muted")
+    tree_layout.addWidget(tree_heading)
+    tree_layout.addWidget(tree_hint)
     folder_tree = QTreeWidget()
     folder_tree.setHeaderLabels(["Dossier propose", "Mails"])
     folder_tree.setMinimumHeight(320)
@@ -335,6 +491,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     directory_layout = QVBoxLayout(directory_page)
     directory_layout.setContentsMargins(0, 0, 0, 0)
     directory_layout.setSpacing(8)
+    directory_heading = QLabel("Votre annuaire d'entreprises")
+    directory_heading.setProperty("role", "heading")
+    directory_hint = QLabel("Les rôles enregistrés aident à proposer le bon classement.")
+    directory_hint.setProperty("role", "muted")
+    directory_layout.addWidget(directory_heading)
+    directory_layout.addWidget(directory_hint)
     directory_actions = QWidget()
     directory_actions_layout = QHBoxLayout(directory_actions)
     directory_actions_layout.setContentsMargins(0, 0, 0, 0)
@@ -347,16 +509,24 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     directory_actions_layout.addWidget(import_directory_button)
     directory_actions_layout.addWidget(refresh_directory_button)
     directory_actions_layout.addWidget(add_directory_button)
-    directory_actions_layout.addWidget(delete_directory_button)
-    directory_actions_layout.addWidget(rename_directory_button)
-    directory_actions_layout.addWidget(merge_directory_button)
     directory_actions_layout.addStretch(1)
+    directory_edit_actions = QWidget()
+    directory_edit_layout = QHBoxLayout(directory_edit_actions)
+    directory_edit_layout.setContentsMargins(0, 0, 0, 0)
+    directory_edit_layout.addWidget(rename_directory_button)
+    directory_edit_layout.addWidget(merge_directory_button)
+    directory_edit_layout.addWidget(delete_directory_button)
+    directory_edit_layout.addStretch(1)
     directory_table = QTableWidget(0, 5)
     directory_table.setHorizontalHeaderLabels(
         ["Entreprise", "Domaines", "Contacts", "Role global", "Projets"]
     )
     directory_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     directory_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+    directory_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    directory_table.setAlternatingRowColors(True)
+    directory_table.verticalHeader().hide()
+    directory_table.verticalHeader().setDefaultSectionSize(38)
     directory_table.horizontalHeader().setSectionsMovable(True)
     directory_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
     directory_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -373,6 +543,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     directory_status_label.setWordWrap(True)
     directory_status_label.setStyleSheet("QLabel { color: #334155; }")
     directory_layout.addWidget(directory_actions)
+    directory_layout.addWidget(directory_edit_actions)
     directory_layout.addWidget(directory_table, 1)
     directory_layout.addWidget(directory_status_label)
     pages.addWidget(directory_page)
@@ -381,9 +552,21 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     settings_layout = QVBoxLayout(settings_page)
     settings_layout.setContentsMargins(0, 0, 0, 0)
     settings_layout.setSpacing(8)
-    config = QGroupBox("Reglages")
+    settings_heading = QLabel("Réglages")
+    settings_heading.setProperty("role", "heading")
+    settings_layout.addWidget(settings_heading)
+    settings_hint = QLabel(
+        "Enregistrez pour appliquer les choix IA et confidentialité. "
+        "Le dossier local sera utilisé au prochain scan."
+    )
+    settings_hint.setProperty("role", "muted")
+    settings_hint.setWordWrap(True)
+    settings_layout.addWidget(settings_hint)
+    config = QGroupBox("Dossiers, intelligence artificielle et suivi")
     grid = QGridLayout(config)
-    grid.addWidget(QLabel("Racine projets locale"), 0, 0)
+    grid.setVerticalSpacing(14)
+    grid.setColumnStretch(1, 1)
+    grid.addWidget(QLabel("Dossier local des projets"), 0, 0)
     projects_root_input = QLineEdit(str(settings.local_projects_root))
     projects_root_picker = QWidget()
     projects_root_layout = QHBoxLayout(projects_root_picker)
@@ -401,19 +584,19 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     )
     set_combo_value_by_data(ai_mode_combo, selected_ai_mode.value)
     grid.addWidget(ai_mode_combo, 1, 1)
-    grid.addWidget(QLabel("Modele IA"), 2, 0)
+    grid.addWidget(QLabel("Modèle IA"), 2, 0)
     ai_model_input = QComboBox()
     ai_model_input.setEditable(True)
     ai_model_input.addItems(list(AI_MODEL_OPTIONS))
     set_combo_value_by_text(ai_model_input, settings.ai_model)
     grid.addWidget(ai_model_input, 2, 1)
-    grid.addWidget(QLabel("Cle API OpenAI"), 3, 0)
+    grid.addWidget(QLabel("Clé API OpenAI"), 3, 0)
     openai_key_widget = QWidget()
     openai_key_layout = QHBoxLayout(openai_key_widget)
     openai_key_layout.setContentsMargins(0, 0, 0, 0)
     openai_key_input = QLineEdit()
     openai_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-    openai_key_input.setPlaceholderText("Coller une nouvelle cle puis enregistrer")
+    openai_key_input.setPlaceholderText("Coller une nouvelle clé puis enregistrer")
     save_openai_key_button = QPushButton(UI_TEXT["save_openai_key"])
     test_openai_key_button = QPushButton(UI_TEXT["test_openai_key"])
     openai_key_status = QLabel(openai_key_status_text(get_openai_api_key() is not None))
@@ -421,19 +604,23 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     openai_key_layout.addWidget(openai_key_input)
     openai_key_layout.addWidget(save_openai_key_button)
     openai_key_layout.addWidget(test_openai_key_button)
-    openai_key_layout.addWidget(openai_key_status)
-    grid.addWidget(openai_key_widget, 3, 1)
-    ai_include_body_checkbox = QCheckBox("Envoyer l'extrait nettoye du corps a l'IA")
+    key_fields = QWidget()
+    key_fields_layout = QVBoxLayout(key_fields)
+    key_fields_layout.setContentsMargins(0, 0, 0, 0)
+    key_fields_layout.addWidget(openai_key_widget)
+    key_fields_layout.addWidget(openai_key_status)
+    grid.addWidget(key_fields, 3, 1)
+    ai_include_body_checkbox = QCheckBox("Envoyer l'extrait nettoyé du corps à l'IA")
     ai_include_body_checkbox.setChecked(settings.ai_include_body_excerpt)
     grid.addWidget(ai_include_body_checkbox, 4, 1)
-    privacy_phone_checkbox = QCheckBox("Masquer les numeros de telephone avant IA")
+    privacy_phone_checkbox = QCheckBox("Masquer les numéros de téléphone avant envoi")
     privacy_phone_checkbox.setChecked(settings.privacy_mask_phone_numbers)
     grid.addWidget(privacy_phone_checkbox, 5, 1)
-    grid.addWidget(QLabel("Rappels a verifier"), 6, 0)
+    grid.addWidget(QLabel("Horaires des rappels"), 6, 0)
     review_reminder_times_input = QLineEdit(format_reminder_times(settings.review_reminder_times))
     review_reminder_times_input.setPlaceholderText("09:00, 14:00, 16:30")
     grid.addWidget(review_reminder_times_input, 6, 1)
-    grid.addWidget(QLabel("Mises a jour"), 7, 0)
+    grid.addWidget(QLabel("Mises à jour"), 7, 0)
     update_widget = QWidget()
     update_layout = QHBoxLayout(update_widget)
     update_layout.setContentsMargins(0, 0, 0, 0)
@@ -445,6 +632,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     update_layout.addStretch(1)
     grid.addWidget(update_widget, 7, 1)
     save_settings_button = QPushButton(UI_TEXT["save_settings"])
+    save_settings_button.setProperty("role", "primary")
     grid.addWidget(save_settings_button, 8, 1)
     settings_layout.addWidget(config)
     settings_layout.addStretch(1)
@@ -453,9 +641,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     settings_scroll_area.setWidget(settings_page)
     pages.addWidget(settings_scroll_area)
 
-    preview = QGroupBox("Inspecteur")
+    preview = QGroupBox("Comprendre le classement")
     preview_layout = QVBoxLayout(preview)
-    preview_splitter = QSplitter(Qt.Orientation.Vertical)
+    preview_tabs = QTabWidget()
     project_digest_preview = QTextEdit()
     project_digest_preview.setReadOnly(True)
     project_digest_preview.setMinimumHeight(160)
@@ -463,11 +651,13 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     mail_preview = QTextEdit()
     mail_preview.setReadOnly(True)
     mail_preview.setMinimumWidth(300)
-    preview_splitter.addWidget(project_digest_preview)
-    preview_splitter.addWidget(mail_preview)
-    preview_splitter.setStretchFactor(0, 1)
-    preview_splitter.setStretchFactor(1, 2)
-    preview_layout.addWidget(preview_splitter)
+    mail_preview.setPlaceholderText(
+        "Sélectionnez un mail pour lire son contenu et comprendre le classement proposé.\n\n"
+        "Double-cliquez sur une ligne pour corriger et mémoriser votre choix."
+    )
+    preview_tabs.addTab(mail_preview, "Mail sélectionné")
+    preview_tabs.addTab(project_digest_preview, "Bilan du projet")
+    preview_layout.addWidget(preview_tabs)
 
     logs = QTextEdit()
     logs.setReadOnly(True)
@@ -482,12 +672,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     logs_header_layout.setContentsMargins(0, 0, 0, 0)
     logs_toggle = QToolButton()
     logs_toggle.setAutoRaise(True)
+    logs_toggle.setToolTip("Afficher ou masquer le journal d'activité")
     logs_toggle.setArrowType(Qt.ArrowType.RightArrow)
-    logs_label = QLabel(UI_TEXT["logs"])
+    logs_label = QLabel("Journal d'activité")
     logs_label.setStyleSheet("font-weight: 600;")
     logs_header_layout.addWidget(logs_toggle)
     logs_header_layout.addWidget(logs_label)
     logs_header_layout.addStretch(1)
+    logs_header_layout.addWidget(scan_status_label, 1)
     logs_layout.addWidget(logs_header)
     logs_layout.addWidget(logs)
     logs_panel.setMaximumHeight(32)
@@ -513,6 +705,18 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     layout.addWidget(content_splitter, 1)
     layout.addWidget(logs_panel)
     navigation.currentRowChanged.connect(pages.setCurrentIndex)
+    navigation.currentRowChanged.connect(
+        lambda index: preview.setVisible(index < 2 and inspector_action.isChecked())
+    )
+    inspector_action.toggled.connect(
+        lambda checked: preview.setVisible(checked and navigation.currentRow() < 2)
+    )
+    def show_detail_columns(checked: bool) -> None:
+        for column in (0, 1, 2, TYPE_COLUMN, INTERLOCUTOR_COLUMN, 8):
+            table.setColumnHidden(column, not checked)
+
+    detail_columns_action.toggled.connect(show_detail_columns)
+    empty_settings_button.clicked.connect(lambda: navigation.setCurrentRow(3))
     window.setCentralWidget(central)
     watch_timer = QTimer(window)
     watch_timer.setInterval(WATCH_INTERVAL_MS)
@@ -656,6 +860,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         )
 
     def quit_application() -> None:
+        if operation_in_progress:
+            return
         dynamic_window.mailflow_force_quit = True
         watch_timer.stop()
         review_reminder_timer.stop()
@@ -663,6 +869,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QApplication.quit()
 
     def handle_window_close(event: Any) -> None:
+        if operation_in_progress:
+            event.ignore()
+            set_scan_status("Opération en cours : patientez avant de fermer MailFlow.")
+            return
         if should_hide_to_tray(
             watch_enabled=watch_checkbox.isChecked(),
             tray_available=tray_available(),
@@ -687,6 +897,117 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         value = item.data(Qt.ItemDataRole.UserRole)
         return str(value) if value else None
 
+    def update_selection_actions() -> None:
+        selected = selected_table_row_indexes()
+        ready_selected = summarize_archive_selection(active_controller.preview_rows, selected)
+        ready_count = len(rows_to_archive(active_controller.preview_rows))
+        archive_button.setEnabled(ready_count > 0 and not operation_in_progress)
+        archive_selection_action.setEnabled(
+            ready_selected.can_archive and not operation_in_progress
+        )
+        archive_all_action.setEnabled(ready_count > 0 and not operation_in_progress)
+        editable_selection = (
+            len(selected) == 1
+            and active_controller.preview_rows[selected[0]].action != PreviewAction.ARCHIVED
+        )
+        review_button.setEnabled(editable_selection and not operation_in_progress)
+        ignore_action.setEnabled(bool(selected) and not operation_in_progress)
+        has_rows = bool(active_controller.preview_rows) and not operation_in_progress
+        reclassify_action.setEnabled(has_rows)
+        export_html_button.setEnabled(has_rows)
+        selection_status.setText(
+            f"{len(selected)} sélectionné(s) · {ready_selected.ready_count} prêt(s) à archiver"
+            if selected else "Sélectionnez un mail pour le vérifier · Ctrl+F pour rechercher"
+        )
+
+    def apply_mail_filters() -> None:
+        if refreshing_table:
+            return
+        terms = _normalize_choice(search_input.text()).split()
+        selected_status = status_filter.currentData()
+        visible_count = 0
+        for row_index, row in enumerate(active_controller.preview_rows):
+            search_text = _normalize_choice(" ".join(preview_row_to_cells(row)))
+            searchable = f"{search_text} {_normalize_choice(row.mail.sender_email)}"
+            status_matches = (
+                selected_status == "all"
+                or (selected_status == "ready" and bool(rows_to_archive([row])))
+                or (selected_status == "review" and row.action == PreviewAction.REVIEW)
+                or (selected_status == "ignore" and row.action == PreviewAction.IGNORE)
+                or (selected_status == "archived" and row.action == PreviewAction.ARCHIVED)
+            )
+            visible = status_matches and all(term in searchable for term in terms)
+            table.setRowHidden(row_index, not visible)
+            if visible:
+                visible_count += 1
+            else:
+                # Hidden selections must never be passed to archive or ignore actions.
+                table.setRangeSelected(
+                    QTableWidgetSelectionRange(row_index, 0, row_index, table.columnCount() - 1),
+                    False,
+                )
+        if table.currentRow() >= 0 and table.isRowHidden(table.currentRow()):
+            table.setCurrentCell(-1, -1)
+        total = len(active_controller.preview_rows)
+        ready = len(rows_to_archive(active_controller.preview_rows))
+        review = sum(row.action == PreviewAction.REVIEW for row in active_controller.preview_rows)
+        archived = sum(
+            row.action == PreviewAction.ARCHIVED for row in active_controller.preview_rows
+        )
+        summary_label.setText(
+            f"{visible_count} / {total} mails · {ready} prêts · "
+            f"{review} à vérifier · {archived} archivés"
+            if total else "Prêt pour votre première analyse"
+        )
+        mail_results.setCurrentIndex(0 if visible_count else 1)
+        if total:
+            empty_title.setText("Aucun mail ne correspond à vos filtres")
+            empty_body.setText(
+                "Modifiez votre recherche ou effacez les filtres pour retrouver vos mails."
+            )
+        else:
+            empty_title.setText("Commencez par une analyse Outlook")
+            empty_body.setText(
+                "Choisissez votre compte et votre dossier source, "
+                "puis cliquez sur Scanner Outlook.\n\n"
+                "Les propositions apparaîtront ici pour être vérifiées avant archivage."
+            )
+        empty_settings_button.setVisible(not total)
+        clear_filters_button.setEnabled(bool(terms) or selected_status != "all")
+        update_selection_actions()
+        update_preview_from_selection()
+
+    def clear_mail_filters() -> None:
+        search_input.clear()
+        status_filter.setCurrentIndex(0)
+
+    def set_operation_busy(busy: bool) -> None:
+        nonlocal operation_in_progress
+        operation_in_progress = busy
+        scan_panel.setEnabled(not busy)
+        pages.setEnabled(not busy)
+        watch_checkbox.setEnabled(not busy)
+        tray_watch_action.setEnabled(not busy)
+        tray_quit_action.setEnabled(not busy)
+        for action in (
+            restore_archivable_action, report_action, open_folder_action, background_action,
+        ):
+            action.setEnabled(not busy)
+        for shortcut_action in shortcut_actions:
+            shortcut_action.setEnabled(not busy)
+        update_selection_actions()
+
+    def exclusive_operation(callback: Callable[[], None]) -> Callable[[], None]:
+        def guarded() -> None:
+            if operation_in_progress:
+                return
+            set_operation_busy(True)
+            try:
+                callback()
+            finally:
+                set_operation_busy(False)
+        return guarded
+
     def refresh_table(*, preferred_row_index: int | None = None) -> None:
         nonlocal refreshing_table
         selected_entry_ids = {
@@ -707,6 +1028,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         if preferred_entry_id is not None:
             selected_entry_ids = {preferred_entry_id}
         refreshing_table = True
+        table.setUpdatesEnabled(False)
+        table.blockSignals(True)
         combo_by_cell.clear()
         table.clearContents()
         table.setColumnCount(len(PREVIEW_COLUMNS))
@@ -720,10 +1043,21 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                     if column_index == 0:
                         item.setData(Qt.ItemDataRole.UserRole, row.mail.entry_id)
                     if should_highlight_cell(row, column_index):
-                        item.setBackground(QColor("#fff3b0"))
+                        item.setBackground(QColor("#fff3d6"))
+                    if column_index == 9:
+                        foreground, background = {
+                            PreviewAction.ARCHIVE: ("#1c6546", "#e8f4ed"),
+                            PreviewAction.REVIEW: ("#865500", "#fff3d6"),
+                            PreviewAction.IGNORE: ("#596779", "#edf1f5"),
+                            PreviewAction.ARCHIVED: ("#245c8a", "#eaf1fa"),
+                        }[row.action]
+                        item.setForeground(QColor(foreground))
+                        item.setBackground(QColor(background))
+                    item.setToolTip(value)
                     table.setItem(row_index, column_index, item)
                     continue
                 combo = QComboBox()
+                combo.setEnabled(row.action != PreviewAction.ARCHIVED)
                 combo.addItems(list(options))
                 if value and value not in options:
                     combo.addItem(value)
@@ -732,13 +1066,17 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 elif value:
                     combo.setCurrentText(value)
                 if should_highlight_cell(row, column_index):
-                    combo.setStyleSheet("QComboBox { background-color: #fff3b0; }")
+                    combo.setStyleSheet("QComboBox { background-color: #fff3d6; }")
                 combo.currentTextChanged.connect(
                     lambda _text, row=row_index: open_manual_dialog(row)
                 )
                 table.setCellWidget(row_index, column_index, combo)
                 combo_by_cell[(row_index, column_index)] = combo
-        table.resizeColumnsToContents()
+        # Keep the user's column widths between edits; long subjects stay in tooltips.
+        if not dynamic_window.property("mailflow_columns_initialized"):
+            for column_index, width in enumerate((110, 140, 80, 155, 270, 155, 145, 235, 95, 110)):
+                table.setColumnWidth(column_index, width)
+            dynamic_window.setProperty("mailflow_columns_initialized", True)
         row_by_entry_id = {
             row.mail.entry_id: row_index
             for row_index, row in enumerate(active_controller.preview_rows)
@@ -772,9 +1110,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 target_row,
                 min(current_column, len(PREVIEW_COLUMNS) - 1),
             )
+        refreshing_table = False
+        apply_mail_filters()
         table.verticalScrollBar().setValue(vertical_scroll)
         table.horizontalScrollBar().setValue(horizontal_scroll)
-        refreshing_table = False
+        table.blockSignals(False)
+        table.setUpdatesEnabled(True)
         refresh_folder_tree()
         refresh_project_digest()
         sync_review_queue_from_preview()
@@ -899,7 +1240,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             projects_root_input.setText(selected)
 
     def update_mail_preview(row_index: int) -> None:
-        if row_index < 0 or row_index >= len(active_controller.preview_rows):
+        if (
+            row_index < 0 or row_index >= len(active_controller.preview_rows)
+            or table.isRowHidden(row_index)
+        ):
             mail_preview.clear()
             return
         mail_preview.setHtml(preview_row_to_html(active_controller.preview_rows[row_index]))
@@ -1187,7 +1531,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(f"Erreur fusion entreprise: {exc}")
 
     def open_manual_dialog(row_index: int) -> None:
-        if refreshing_table:
+        if refreshing_table or operation_in_progress:
+            return
+        if not 0 <= row_index < len(active_controller.preview_rows):
+            return
+        if active_controller.preview_rows[row_index].action == PreviewAction.ARCHIVED:
+            set_scan_status("Ce mail est déjà archivé. Son classement est conservé.")
             return
         update = ask_manual_classification(row_index)
         if update is None:
@@ -1292,7 +1641,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 mail_type_combo.blockSignals(False)
                 routing_warning.setText(
                     "Role fournisseur enregistre. Choisissez Demande de prix ou "
-                    "Commande, ou utilisez ensuite Reclassifier avec l'IA."
+                    "Commande, ou utilisez ensuite Reclasser avec l'IA."
                 )
             elif (
                 selected_role == InterlocutorType.FOURNISSEUR
@@ -1318,8 +1667,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         form.addRow("", routing_warning)
 
         learning_note = QLabel(
-            "Le role est memorise pour toute l'entreprise dans ce projet. Un classement "
-            "complet devient aussi un exemple verifie, sans creer de mot-cle."
+            "La correction s'applique à ce mail. Un classement complet devient un exemple "
+            "vérifié pour les prochaines analyses. Pour définir le rôle d'une entreprise "
+            "sur tous ses mails, utilisez l'Annuaire."
         )
         learning_note.setWordWrap(True)
         form.addRow("Apprentissage", learning_note)
@@ -1345,6 +1695,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             combo.setCurrentText(value)
 
     def update_projects_root() -> None:
+        reminder_times = parse_reminder_times(review_reminder_times_input.text())
         settings.local_projects_root = Path(projects_root_input.text())
         settings.selected_outlook_account = selected_account_identifier()
         settings.outlook_root_folder = current_outlook_root_folder()
@@ -1353,29 +1704,37 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         settings.ai_model = clean_optional_text(ai_model_input.currentText()) or DEFAULT_AI_MODEL
         settings.ai_include_body_excerpt = ai_include_body_checkbox.isChecked()
         settings.privacy_mask_phone_numbers = privacy_phone_checkbox.isChecked()
-        settings.review_reminder_times = parse_reminder_times(review_reminder_times_input.text())
+        settings.review_reminder_times = reminder_times
 
     def save_current_settings() -> None:
+        if operation_in_progress:
+            return
         try:
             update_projects_root()
+            apply_current_ai_settings()
             save_settings(settings)
-            append_log("Parametres enregistres.")
+            set_scan_status("Réglages enregistrés. Les choix IA et confidentialité sont appliqués.")
+            append_log("Réglages enregistrés et paramètres IA appliqués à la session.")
         except Exception as exc:
             append_log(f"Erreur enregistrement parametres: {exc}")
 
     def save_openai_key_from_input() -> None:
+        if operation_in_progress:
+            return
         api_key = clean_optional_text(openai_key_input.text())
         if api_key is None:
             append_log("Aucune nouvelle cle OpenAI a enregistrer.")
             return
         try:
             set_openai_api_key(api_key)
+            apply_current_ai_settings()
             openai_key_input.clear()
             update_openai_key_status(valid=None)
             append_log("Cle OpenAI enregistree dans le coffre du systeme.")
         except Exception as exc:
             append_log(f"Erreur enregistrement cle OpenAI: {exc}")
 
+    @exclusive_operation
     def test_openai_key_from_input() -> None:
         api_key = clean_optional_text(openai_key_input.text()) or get_openai_api_key()
         if api_key is None:
@@ -1387,7 +1746,13 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         test_openai_key_button.setEnabled(False)
         QApplication.processEvents()
         try:
-            result = AiClassifier(api_key=api_key, model=model).check_connection()
+            result = run_with_event_loop(
+                AiClassifier(api_key=api_key, model=model).check_connection
+            )
+        except Exception as exc:
+            set_openai_key_status(has_key=True, valid=False)
+            append_log(f"Test OpenAI impossible : {exc}")
+            return
         finally:
             test_openai_key_button.setEnabled(True)
         set_openai_key_status(has_key=True, valid=result.ok)
@@ -1403,6 +1768,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         update_status.setText(message)
         update_status.setStyleSheet(f"QLabel {{ color: {color}; }}")
 
+    @exclusive_operation
     def check_updates_from_ui() -> None:
         check_updates_button.setEnabled(False)
         set_update_status("Recherche en cours...")
@@ -1473,6 +1839,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log("Mode IA actif sans cle OpenAI: les lignes resteront a verifier.")
         if not controller_was_injected:
             active_controller = build_default_controller(settings)
+            enable_responsive_ai()
             dynamic_window.mailflow_controller = active_controller
         return active_controller.scan_and_preview(
             preview_request(project_numbers=project_numbers),
@@ -1536,6 +1903,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             if folder_list.item(index).checkState() == Qt.CheckState.Checked
         ]
 
+    @exclusive_operation
     def on_scan() -> None:
         scan_button.setEnabled(False)
         set_scan_status("Lecture des dossiers Outlook...")
@@ -1593,6 +1961,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             scan_button.setEnabled(True)
 
     def on_reset_workspace() -> None:
+        if operation_in_progress:
+            return
         try:
             if watch_checkbox.isChecked():
                 watch_checkbox.setChecked(False)
@@ -1605,12 +1975,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             mail_preview.clear()
             navigation.setCurrentRow(0)
             append_log(
-                "Espace de travail reinitialise. Reglages, annuaire et archives conserves."
+                "Espace de travail reinitialise. Réglages, annuaire et archives conserves."
             )
         except Exception as exc:
             append_log(f"Erreur reinitialisation: {exc}")
 
     def on_export_report() -> None:
+        if operation_in_progress:
+            return
         try:
             path = active_controller.export_report()
             append_log(f"Rapport exporte: {path}")
@@ -1618,6 +1990,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(f"Erreur export rapport: {exc}")
 
     def on_export_project_html() -> None:
+        if operation_in_progress:
+            return
         if not active_controller.preview_rows:
             append_log("Aucun mail en previsualisation.")
             return
@@ -1652,6 +2026,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(f"Erreur import annuaire: {exc}")
 
     def on_mark_ignored() -> None:
+        if operation_in_progress:
+            return
         indexes = selected_table_row_indexes()
         if not indexes:
             append_log("Aucune ligne selectionnee a ignorer.")
@@ -1661,10 +2037,13 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         append_log(f"{len(indexes)} ligne(s) marquee(s) comme ignoree(s).")
 
     def on_restore_archivable() -> None:
+        if operation_in_progress:
+            return
         active_controller.mark_all_archivable()
         refresh_table()
         append_log("Toutes les lignes archivables sont remises en Archiver.")
 
+    @exclusive_operation
     def on_reclassify() -> None:
         if not active_controller.preview_rows:
             append_log("Aucun mail a reclassifier.")
@@ -1732,6 +2111,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             sync_tray_watch_action(False)
             append_log(f"Impossible d'activer la surveillance Outlook: {exc}")
 
+    @exclusive_operation
     def run_watch_scan() -> None:
         nonlocal watch_paused_logged
         if should_pause_watch_scan(
@@ -1840,11 +2220,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         rows = {index.row() for index in selection_model.selectedRows()}
         if not rows:
             rows = {index.row() for index in table.selectedIndexes()}
-        return sorted(rows)
+        return sorted(row for row in rows if not table.isRowHidden(row))
 
     def update_preview_from_selection() -> None:
+        if refreshing_table:
+            return
         selected = selected_table_row_indexes()
         update_mail_preview(selected[0] if selected else table.currentRow())
+        update_selection_actions()
 
     def confirm_archive(summary: ArchiveSelectionSummary, *, title: str) -> bool:
         response = QMessageBox.question(
@@ -1857,10 +2240,15 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         return response == QMessageBox.StandardButton.Yes
 
     def on_archive_selection() -> None:
+        if operation_in_progress:
+            return
         indexes = selected_table_row_indexes()
         summary = summarize_archive_selection(active_controller.preview_rows, indexes)
         if summary.selected_count == 0:
             append_log("Aucune ligne selectionnee.")
+            set_scan_status(
+                "Sélectionnez des mails, ou utilisez le menu Archiver tous les mails prêts."
+            )
             return
         if not summary.can_archive:
             append_log("Aucune ligne selectionnee n'est prete a archiver.")
@@ -1878,8 +2266,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(f"Erreur archivage: {exc}")
 
     def on_archive_all_except_review() -> None:
-        active_controller.mark_all_archivable()
-        refresh_table()
+        if operation_in_progress:
+            return
         indexes = list(range(len(active_controller.preview_rows)))
         summary = summarize_archive_selection(active_controller.preview_rows, indexes)
         if summary.selected_count == 0:
@@ -1901,6 +2289,13 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(f"Erreur archivage global: {exc}")
 
     scan_button.clicked.connect(on_scan)
+    search_input.textChanged.connect(apply_mail_filters)
+    status_filter.currentIndexChanged.connect(apply_mail_filters)
+    clear_filters_button.clicked.connect(clear_mail_filters)
+    review_button.clicked.connect(
+        lambda: open_manual_dialog(selected_table_row_indexes()[0])
+        if len(selected_table_row_indexes()) == 1 else None
+    )
     reset_button.clicked.connect(on_reset_workspace)
     watch_checkbox.toggled.connect(on_watch_toggled)
     tray_watch_action.toggled.connect(request_watch_from_tray)
@@ -1946,6 +2341,24 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     table.cellDoubleClicked.connect(lambda row, _column: open_manual_dialog(row))
     table.currentCellChanged.connect(lambda row, _col, _old_row, _old_col: update_mail_preview(row))
     table.itemSelectionChanged.connect(update_preview_from_selection)
+    shortcut_actions: list[Any] = []
+    for sequence, callback in (
+        ("Ctrl+F", lambda: (navigation.setCurrentRow(0), search_input.setFocus())),
+        ("Ctrl+R", on_scan),
+        ("Ctrl+Return", on_archive_selection),
+        ("Ctrl+,", lambda: navigation.setCurrentRow(3)),
+    ):
+        shortcut_action = QAction(window)
+        shortcut_action.setShortcut(QKeySequence(sequence))
+        shortcut_action.triggered.connect(callback)
+        window.addAction(shortcut_action)
+        shortcut_actions.append(shortcut_action)
+    review_shortcut = QAction(table)
+    review_shortcut.setShortcut(QKeySequence("Return"))
+    review_shortcut.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
+    review_shortcut.triggered.connect(review_button.click)
+    table.addAction(review_shortcut)
+    shortcut_actions.append(review_shortcut)
     dynamic_window.mailflow_close_handler = handle_window_close
     populate_account_options()
     refresh_directory_table()
@@ -2011,6 +2424,20 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_workspace_splitter = workspace_splitter
     dynamic_window.mailflow_settings_scroll_area = settings_scroll_area
     dynamic_window.mailflow_logs_toggle = logs_toggle
+    dynamic_window.mailflow_search_input = search_input
+    dynamic_window.mailflow_status_filter = status_filter
+    dynamic_window.mailflow_clear_filters_button = clear_filters_button
+    dynamic_window.mailflow_summary_label = summary_label
+    dynamic_window.mailflow_review_button = review_button
+    dynamic_window.mailflow_mail_results = mail_results
+    dynamic_window.mailflow_preview_tabs = preview_tabs
+    dynamic_window.mailflow_inspector = preview
+    dynamic_window.mailflow_selection_status = selection_status
+    dynamic_window.mailflow_detail_columns_action = detail_columns_action
+    dynamic_window.mailflow_inspector_action = inspector_action
+    dynamic_window.mailflow_set_operation_busy = set_operation_busy
+    dynamic_window.mailflow_selected_table_row_indexes = selected_table_row_indexes
+    refresh_table()
     return window
 
 
@@ -2080,7 +2507,7 @@ def openai_key_status_style(
     return (
         f"QLabel {{ color: {color}; background: {background}; "
         "border: 1px solid rgba(15, 23, 42, 0.12); border-radius: 4px; "
-        "padding: 3px 6px; }}"
+        "padding: 3px 6px; }"
     )
 
 
@@ -2305,12 +2732,16 @@ def format_directory_import_result(result: object) -> str:
 
 
 def format_archive_result(result: ArchiveBatchResult) -> str:
-    return (
+    message = (
         "Archivage termine: "
         f"{result.exported_count} exporte(s), "
         f"{result.skipped_count} ignore(s), "
         f"{result.failure_count} erreur(s)."
     )
+    warnings = getattr(result, "warnings", [])
+    if warnings:
+        message += f" {len(warnings)} avertissement(s) : " + " ; ".join(warnings[:5])
+    return message
 
 
 def _same_choice(left: str, right: str) -> bool:

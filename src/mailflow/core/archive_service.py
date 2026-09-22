@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from mailflow.models import ArchiveDecision, ArchivedMailRecord, MailMetadata
@@ -16,7 +16,6 @@ class ArchiveService:
 
     def archive(self, item: Any, metadata: MailMetadata, decision: ArchiveDecision) -> ExportResult:
         result = self.exporter.export_mail(item, metadata, decision)
-        mark_archived(item)
         self.store.record_archived(
             ArchivedMailRecord(
                 outlook_entry_id=metadata.entry_id,
@@ -30,8 +29,14 @@ class ArchiveService:
                 target_folder=decision.target_relative_folder,
                 classification=decision.mail_type,
                 confidence=decision.confidence,
-                archived_at=datetime.utcnow(),
+                archived_at=datetime.now(UTC),
             )
         )
+        try:
+            mark_archived(item)
+        except Exception:
+            result.warnings.append(
+                f"{metadata.subject or metadata.entry_id} : archive locale enregistree, "
+                "mais la categorie Outlook n'a pas pu etre appliquee."
+            )
         return result
-

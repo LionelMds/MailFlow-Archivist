@@ -4,7 +4,7 @@ import html
 import unicodedata
 from dataclasses import dataclass
 
-from mailflow.models import Direction, PreviewRow
+from mailflow.models import Direction, PreviewAction, PreviewRow
 
 HIGHLIGHT_STYLE = "background-color: #fff176; color: #1f2933; font-weight: 600;"
 
@@ -16,15 +16,30 @@ class HighlightRange:
 
 
 def preview_row_to_html(row: PreviewRow) -> str:
-    text = preview_row_to_text(row)
+    mail = row.mail
     terms = classification_highlight_terms(row)
-    highlighted = highlight_terms_as_html(text, terms)
+    subject = highlight_terms_as_html(mail.subject or "(Sans objet)", terms)
+    body = highlight_terms_as_html(mail.body_excerpt or "Aucun extrait disponible.", terms)
     reason = html.escape(row.decision.reason)
     ai_details = ai_decision_html(row)
+    direction = "Envoyé" if mail.direction == Direction.SENT else "Reçu"
+    sender = html.escape(mail.sender_name or mail.sender_email or "Expéditeur inconnu")
+    sender_address = html.escape(mail.sender_email)
+    recipients = html.escape(", ".join(mail.recipients) or "Non renseignés")
+    attachments = html.escape(", ".join(mail.attachment_names) or "Aucune")
+    target = html.escape(row.decision.target_relative_folder)
     return (
-        "<div style='font-family: Segoe UI, Arial, sans-serif; font-size: 10pt;'>"
-        f"{highlighted}"
-        f"<p><b>Raison:</b> {reason}</p>"
+        "<div style='font-family: Segoe UI, Arial, sans-serif; font-size:10pt; color:#243247;'>"
+        f"<p style='color:#52647a;'>{html.escape(mail.project_number)} · "
+        f"{mail.sent_at:%d.%m.%Y à %H:%M} · {direction}</p>"
+        f"<h2 style='font-size:15pt; color:#182c40; margin-bottom:12px;'>{subject}</h2>"
+        f"<p><b>De :</b> {sender}<br><span style='color:#52647a;'>{sender_address}</span><br>"
+        f"<b>À :</b> {recipients}</p>"
+        f"<p><b>Pièces jointes :</b> {attachments}</p>"
+        "<hr style='color:#dce5ec;'>"
+        f"<p style='line-height:145%;'>{body}</p>"
+        "<hr style='color:#dce5ec;'>"
+        f"<p><b>Destination :</b> {target}<br><b>Raison:</b> {reason}</p>"
         f"{ai_details}"
         "</div>"
     )
@@ -58,24 +73,32 @@ def classification_highlight_terms(row: PreviewRow) -> list[str]:
 def ai_decision_html(row: PreviewRow) -> str:
     ai = row.classification.ai
     if ai is None:
+        if row.classification.ai_error:
+            return (
+                "<p style='color:#8a4b16; background:#fff4e3; padding:8px;'>"
+                f"<b>Analyse à relancer :</b> {html.escape(row.classification.ai_error)}</p>"
+            )
+        if row.action == PreviewAction.ARCHIVED:
+            return (
+                "<p style='color:#52647a;'>Mail déjà archivé. "
+                "Aucun nouvel appel IA nécessaire.</p>"
+            )
         return (
             "<p style='color:#5f6b7a;'>"
-            "<b>Decision IA:</b> IA non appelee pour cette ligne."
+            "<b>Décision IA :</b> IA non appelée pour cette ligne."
             "</p>"
         )
-    action = "a verifier" if ai.requires_review else "archiver"
-    summary = html.escape(
-        f"{action} | {ai.category} | {ai.organization_role} | "
-        f"{ai.target_folder} | {ai.confidence:.0%}"
-    )
+    action = "À vérifier" if ai.requires_review else "Classement proposé"
+    category = html.escape(ai.category)
+    role = html.escape(ai.organization_role)
     short_summary = html.escape(ai.short_summary)
     reason = html.escape(ai.reason)
     return (
-        "<div style='border-left:3px solid #1f6feb; "
-        "padding:6px 10px; margin:8px 0; background:#f6f8ff;'>"
-        f"<p style='margin:0 0 4px;'><b>Decision IA:</b> {summary}</p>"
-        f"<p style='margin:0 0 4px;'><b>Resume IA:</b> {short_summary}</p>"
-        f"<p style='margin:0;'><b>Pourquoi:</b> {reason}</p>"
+        "<div style='padding:8px 10px; margin:12px 0; background:#edf3f9;'>"
+        f"<p><b>Décision IA :</b> {category}</p>"
+        f"<p style='color:#52647a;'>{action} · {ai.confidence:.0%} de confiance · {role}</p>"
+        f"<p><b>Résumé :</b><br>{short_summary}</p>"
+        f"<p><b>Pourquoi :</b><br>{reason}</p>"
         "</div>"
     )
 

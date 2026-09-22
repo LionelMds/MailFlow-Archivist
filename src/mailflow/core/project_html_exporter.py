@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import filecmp
 import html
+import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -10,7 +12,7 @@ from typing import Any
 from urllib.parse import quote
 
 from mailflow.core.cloud_files import request_local_availability
-from mailflow.core.filenames import build_archive_stem, build_attachment_filename
+from mailflow.core.filenames import build_archive_stem, build_attachment_filename, suffix_copy_name
 from mailflow.core.folder_tree import FolderTreeNode, build_folder_tree, folder_sort_key
 from mailflow.core.project_digest import ProjectDigest, build_project_digest
 from mailflow.core.project_paths import local_project_path
@@ -122,7 +124,11 @@ def _export_one_project(
             )
         )
 
-    html_path.write_text(_render_project_html(project_number, entries), encoding="utf-8")
+    # Publish only a complete document; a failed refresh keeps the previous HTML usable.
+    with tempfile.TemporaryDirectory(prefix=".mailflow-html-", dir=correspondence_dir) as temp_dir:
+        staged_html = Path(temp_dir) / "correspondance.html"
+        staged_html.write_text(_render_project_html(project_number, entries), encoding="utf-8")
+        staged_html.replace(html_path)
     return ProjectHtmlExportResult(
         project_number=project_number,
         html_path=html_path,
@@ -169,8 +175,7 @@ def _export_attachment_links(
             continue
         attachment_dir.mkdir(parents=True, exist_ok=True)
         target = attachment_dir / build_attachment_filename(mail_stem, original_name)
-        if not target.exists():
-            attachment.SaveAsFile(str(target))
+        target = _save_attachment_without_overwrite(attachment, target)
         request_local_availability(target)
         links.append(
             HtmlAttachmentLink(
@@ -181,6 +186,31 @@ def _export_attachment_links(
             )
         )
     return links, inline_images
+
+
+def _save_attachment_without_overwrite(attachment: Any, target: Path) -> Path:
+    """Reuse identical content, otherwise retain both documents with distinct links."""
+    with tempfile.TemporaryDirectory(prefix=".mailflow-attachment-", dir=target.parent) as temp_dir:
+        staged = Path(temp_dir) / "attachment.bin"
+        attachment.SaveAsFile(str(staged))
+        candidate = target
+        copy_index = 1
+        while True:
+            if candidate.is_file() and filecmp.cmp(staged, candidate, shallow=False):
+                return candidate
+            try:
+                output = candidate.open("xb")
+            except FileExistsError:
+                copy_index += 1
+                candidate = target.with_name(suffix_copy_name(target.name, copy_index))
+                continue
+            try:
+                with output, staged.open("rb") as source:
+                    shutil.copyfileobj(source, output)
+            except BaseException:
+                candidate.unlink(missing_ok=True)
+                raise
+            return candidate
 
 
 def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> str:
@@ -883,7 +913,8 @@ def _inline_image_from_attachment(
 ) -> HtmlInlineImage | None:
     try:
         with tempfile.TemporaryDirectory(prefix="mailflow-inline-") as temp_dir:
-            temp_path = Path(temp_dir) / original_name
+            # Attachment names are untrusted and may contain absolute paths or '..'.
+            temp_path = Path(temp_dir) / "inline-image.bin"
             attachment.SaveAsFile(str(temp_path))
             data = temp_path.read_bytes()
     except Exception:

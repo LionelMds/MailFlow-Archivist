@@ -18,6 +18,10 @@ from mailflow.outlook.attachments import (
 from mailflow.outlook.categories import split_categories
 
 INTERNET_MESSAGE_ID_SCHEMA = "http://schemas.microsoft.com/mapi/proptag/0x1035001F"
+SMTP_ADDRESS_SCHEMAS = (
+    "http://schemas.microsoft.com/mapi/proptag/0x39FE001F",
+    "http://schemas.microsoft.com/mapi/proptag/0x39FE001E",
+)
 
 
 @dataclass(frozen=True)
@@ -28,7 +32,7 @@ class ScannedMail:
 
 class OutlookScanner:
     def __init__(self, *, account_email: str = "") -> None:
-        self.account_email = account_email.lower()
+        self.account_email = account_email.strip().casefold()
 
     def iter_project_folders(self, year_folder: Any) -> Iterable[Any]:
         for folder in iter_com_collection(getattr(year_folder, "Folders", [])):
@@ -179,7 +183,7 @@ class OutlookScanner:
         project_number: str,
         outlook_folder: str,
     ) -> MailMetadata:
-        sender_email = _text_attr(item, "SenderEmailAddress")
+        sender_email = _sender_email(item)
         sent_at = _coerce_datetime(
             getattr(item, "SentOn", None)
             or getattr(item, "ReceivedTime", None)
@@ -209,7 +213,7 @@ class OutlookScanner:
         project_number: str,
         outlook_folder: str,
     ) -> MailMetadata:
-        sender_email = _text_attr(item, "SenderEmailAddress")
+        sender_email = _sender_email(item)
         sent_at = _coerce_datetime(
             getattr(item, "SentOn", None)
             or getattr(item, "ReceivedTime", None)
@@ -266,7 +270,7 @@ def _iter_project_folders_recursive(
 
 
 def _direction(sender_email: str, account_email: str) -> Direction:
-    if account_email and sender_email.lower() == account_email:
+    if account_email and sender_email.strip().casefold() == account_email:
         return Direction.SENT
     return Direction.RECEIVED
 
@@ -278,8 +282,63 @@ def _recipient_names(recipients: Any) -> list[str]:
         key=lambda item: (_recipient_type_order(item[1]), item[0]),
     )
     for _index, recipient in ordered_recipients:
-        names.append(_text_attr(recipient, "Address") or _text_attr(recipient, "Name"))
+        raw_address = _text_attr(recipient, "Address")
+        if "@" in raw_address:
+            names.append(raw_address.strip())
+            continue
+        address = _smtp_from_address_entry(_safe_attr(recipient, "AddressEntry"))
+        names.append(
+            address or _smtp_property(recipient) or raw_address or _text_attr(recipient, "Name")
+        )
     return [name for name in names if name]
+
+
+def _sender_email(item: Any) -> str:
+    raw_address = _text_attr(item, "SenderEmailAddress").strip()
+    if "@" in raw_address:
+        return raw_address
+    return _smtp_from_address_entry(_safe_attr(item, "Sender")) or raw_address
+
+
+def _smtp_from_address_entry(entry: Any) -> str:
+    if entry is None:
+        return ""
+    address = str(_safe_attr(entry, "Address") or "").strip()
+    if "@" in address:
+        return address
+    for method_name in ("GetExchangeUser", "GetExchangeDistributionList"):
+        method = _safe_attr(entry, method_name)
+        if not callable(method):
+            continue
+        try:
+            exchange_entry = method()
+            address = str(_safe_attr(exchange_entry, "PrimarySmtpAddress") or "").strip()
+        except Exception:
+            continue
+        if "@" in address:
+            return address
+    return _smtp_property(entry)
+
+
+def _smtp_property(item: Any) -> str:
+    getter = _safe_attr(_safe_attr(item, "PropertyAccessor"), "GetProperty")
+    if callable(getter):
+        for schema in SMTP_ADDRESS_SCHEMAS:
+            try:
+                address = str(getter(schema) or "").strip()
+            except Exception:
+                continue
+            if "@" in address:
+                return address
+    return ""
+
+
+def _safe_attr(item: Any, name: str) -> Any:
+    try:
+        return getattr(item, name, None)
+    except Exception:
+        # An offline or deleted Exchange address may no longer resolve.
+        return None
 
 
 def _recipient_type_order(recipient: Any) -> int:

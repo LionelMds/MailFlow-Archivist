@@ -108,7 +108,7 @@ def test_preview_rows_to_matrix_formats_cells(tmp_path: Path) -> None:
     assert matrix[0] == [
         "2025-4893",
         "2026-05-06 10:30",
-        "Recu",
+        "Reçu",
         "Dupont",
         "Offre",
         "Demande de prix",
@@ -149,3 +149,10 @@ def test_review_rows_highlight_manual_cells_only(tmp_path: Path) -> None:
     assert should_highlight_cell(row, INTERLOCUTOR_COLUMN)
     assert should_highlight_cell(row, DESTINATION_COLUMN)
     assert not should_highlight_cell(row, 0)
+
+
+def test_archived_or_ignored_rows_do_not_request_manual_attention(tmp_path: Path) -> None:
+    for action in (PreviewAction.ARCHIVED, PreviewAction.IGNORE):
+        row = make_review_row(tmp_path).model_copy(update={"action": action})
+        assert not should_highlight_cell(row, TYPE_COLUMN)
+        assert not should_highlight_cell(row, DESTINATION_COLUMN)

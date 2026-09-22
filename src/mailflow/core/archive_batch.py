@@ -51,6 +51,10 @@ class ArchiveBatchResult:
     def failure_count(self) -> int:
         return len(self.failures)
 
+    @property
+    def warnings(self) -> list[str]:
+        return [warning for export in self.exported for warning in export.warnings]
+
 
 class ArchiveBatchExecutor:
     def __init__(self, archive_service: ArchiveServiceProtocol) -> None:

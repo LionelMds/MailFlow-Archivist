@@ -6,7 +6,7 @@ from pathlib import Path
 
 from mailflow.core.correspondence_hierarchy import is_safe_relative_folder, safe_folder_name
 from mailflow.core.project_paths import local_project_path
-from mailflow.models import PreviewRow
+from mailflow.models import PreviewAction, PreviewRow
 
 SPECIAL_FOLDERS = {"A verifier", "Ne pas archiver"}
 FOLDER_SORT_PRIORITY = {
@@ -143,6 +143,8 @@ def _rewrite_row_folder(
     projects_root: Path,
     reason: str,
 ) -> PreviewRow:
+    if row.action == PreviewAction.ARCHIVED:
+        return row
     current = row.decision.target_relative_folder
     if current != source and not current.startswith(f"{source}/"):
         return row

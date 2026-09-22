@@ -110,7 +110,7 @@ def test_preview_row_to_html_shows_ai_decision_when_available(tmp_path: Path) ->
 
     rendered = preview_row_to_html(row)
 
-    assert "Decision IA:" in rendered
+    assert "Décision IA :" in rendered
     assert "Offre fournisseur." in rendered
     assert "Le sujet indique une offre." in rendered
 
@@ -121,4 +121,4 @@ def test_ai_decision_html_says_when_ai_was_not_called(tmp_path: Path) -> None:
         update={"classification": row.classification.model_copy(update={"ai": None})}
     )
 
-    assert "IA non appelee" in ai_decision_html(without_ai)
+    assert "IA non appelée" in ai_decision_html(without_ai)

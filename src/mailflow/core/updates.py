@@ -20,6 +20,7 @@ class ReleaseAsset:
     name: str
     browser_download_url: str
     size: int
+    digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -151,10 +152,12 @@ def _fetch_json(api_url: str, timeout: float) -> Mapping[str, Any]:
 
 
 def _asset_from_json(data: Mapping[str, Any]) -> ReleaseAsset:
+    digest = data.get("digest")
     return ReleaseAsset(
         name=_required_string(data, "name"),
         browser_download_url=_required_string(data, "browser_download_url"),
         size=_optional_int(data.get("size")),
+        digest=digest if isinstance(digest, str) and digest else None,
     )
 
 

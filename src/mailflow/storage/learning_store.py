@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 from mailflow.models import (
@@ -11,6 +12,7 @@ from mailflow.models import (
     VerifiedRoutingExample,
     routing_category_for_mail_type,
 )
+from mailflow.storage.connection import database_connection
 
 LEARNING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS manual_learning_signals(
@@ -131,6 +133,12 @@ class SQLiteLearningStore:
                         signal.created_at.isoformat(),
                     ),
                 )
+            else:
+                # Keep the correction history, but revoke a formerly trusted routing example.
+                connection.execute(
+                    "DELETE FROM verified_routing_examples WHERE mail_id = ?",
+                    (signal.mail_id,),
+                )
 
     def count(self) -> int:
         self.initialize()
@@ -165,8 +173,8 @@ class SQLiteLearningStore:
             for row in rows
         ]
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+    def _connect(self) -> AbstractContextManager[sqlite3.Connection]:
+        return database_connection(self.db_path)
 
 
 def _ensure_column(

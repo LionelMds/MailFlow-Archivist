@@ -3,9 +3,67 @@ from __future__ import annotations
 from datetime import datetime
 from types import SimpleNamespace
 
+import pytest
+
 from mailflow.models import Direction
 from mailflow.outlook.attachments import PR_ATTACH_CONTENT_ID
-from mailflow.outlook.scanner import OutlookScanner
+from mailflow.outlook.scanner import SMTP_ADDRESS_SCHEMAS, OutlookScanner
+
+
+@pytest.mark.parametrize("directory_only", [False, True])
+def test_exchange_sender_smtp_address_identifies_sent_mail(directory_only: bool) -> None:
+    item = SimpleNamespace(**vars(mail_item("EXCHANGE")))
+    item.SenderEmailAddress = "/O=EXCHANGE/OU=GROUP/CN=RECIPIENTS/CN=LIONEL"
+    item.Sender = SimpleNamespace(
+        GetExchangeUser=lambda: SimpleNamespace(PrimarySmtpAddress="lionel@balzmetal.ch"),
+    )
+    scanner = OutlookScanner(account_email=" LIONEL@BALZMETAL.CH ")
+    convert = (
+        scanner.mail_item_to_directory_metadata if directory_only else scanner.mail_item_to_metadata
+    )
+
+    mail = convert(item, project_number="2025-4893", outlook_folder="Inbox")
+
+    assert mail.sender_email == "lionel@balzmetal.ch"
+    assert mail.direction == Direction.SENT
+
+
+def test_exchange_recipients_resolve_smtp_before_routing() -> None:
+    item = SimpleNamespace(**vars(mail_item("EXCHANGE")))
+    item.Recipients = [
+        SimpleNamespace(Type=2, Address="/O=EXCHANGE/CN=CC", AddressEntry=SimpleNamespace(
+            PropertyAccessor=FakePropertyAccessor({SMTP_ADDRESS_SCHEMAS[1]: "copy@client.test"}),
+        )),
+        SimpleNamespace(Type=1, Address="/O=EXCHANGE/CN=TO", AddressEntry=SimpleNamespace(
+            GetExchangeUser=lambda: SimpleNamespace(PrimarySmtpAddress="to@client.test"),
+        )),
+    ]
+
+    mail = OutlookScanner().mail_item_to_metadata(
+        item, project_number="2025-4893", outlook_folder="Inbox",
+    )
+
+    assert mail.recipients == ["to@client.test", "copy@client.test"]
+
+
+def test_unavailable_exchange_entry_keeps_original_address() -> None:
+    class UnavailableEntry:
+        def GetExchangeUser(self) -> None:
+            raise RuntimeError("offline")
+
+        @property
+        def PropertyAccessor(self) -> object:
+            raise RuntimeError("offline")
+
+    item = SimpleNamespace(**vars(mail_item("EXCHANGE")))
+    item.SenderEmailAddress = "/O=EXCHANGE/CN=UNKNOWN"
+    item.Sender = UnavailableEntry()
+
+    mail = OutlookScanner().mail_item_to_metadata(
+        item, project_number="2025-4893", outlook_folder="Inbox",
+    )
+
+    assert mail.sender_email == item.SenderEmailAddress
 
 
 class FakePropertyAccessor:
