@@ -1,5 +1,19 @@
 # Release
 
+## Version 0.10.0
+
+- annuaire alimenté automatiquement à chaque scan, manuel ou par la surveillance ;
+- un choix `Client` ou `Fournisseur` lors d'une correction devient le rôle de
+  l'entreprise dans l'annuaire et s'applique à ses autres mails ;
+- validation groupée : un seul classement appliqué à plusieurs mails sélectionnés ;
+- mesure de la précision de l'IA sur vos propres décisions (`scripts/evaluate_ai.py`),
+  sans stocker de contenu de mail ;
+- modèle OpenAI `gpt-6-luna` disponible dans les réglages ;
+- une seule instance de MailFlow à la fois ;
+- réglages illisibles mis de côté au démarrage au lieu de bloquer l'application,
+  enregistrement des réglages sans risque de fichier tronqué ;
+- versionnage du schéma SQLite pour les évolutions futures.
+
 ## Version 0.9.1
 
 - choix entre OpenAI et Ollama local, avec modèles et réglages indépendants ;
