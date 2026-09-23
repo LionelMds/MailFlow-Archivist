@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from mailflow.config import AI_MODEL_OPTIONS, AppPaths, AppSettings, load_settings, save_settings
+from mailflow.config import (
+    AI_MODEL_OPTIONS,
+    AppPaths,
+    AppSettings,
+    load_settings,
+    load_settings_with_recovery,
+    save_settings,
+)
 from mailflow.models import AiMode
 
 
@@ -23,8 +30,53 @@ def test_settings_round_trip_without_api_key(tmp_path: Path) -> None:
     assert loaded.local_projects_root == tmp_path / "Clients"
     assert loaded.selected_year == "2025"
     assert loaded.review_reminder_times == ["09:00", "14:00"]
-    assert loaded.client_email_domains == ["gva.ch"]
     assert "openai_api_key" not in (tmp_path / "config.json").read_text(encoding="utf-8")
+    assert [path.name for path in tmp_path.iterdir()] == ["config.json"]
+
+
+def test_default_projects_root_follows_current_user() -> None:
+    assert AppSettings().local_projects_root == (
+        Path.home() / "OneDrive - Balz Metal Sa" / "Clients"
+    )
+
+
+def test_retired_and_unknown_keys_are_ignored(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "selected_year": "2025",
+        "openai_api_key": "sk-never-loaded",
+        "client_email_domains": ["gva.ch"],
+        "rule_confidence_threshold": 0.8,
+        "setting_from_a_newer_version": True,
+    }), encoding="utf-8")
+
+    assert load_settings(config_path).selected_year == "2025"
+
+
+@pytest.mark.parametrize("content", ["{not json", "[]", '{"ai_mode": "unknown"}'])
+def test_unreadable_settings_are_set_aside(tmp_path: Path, content: str) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(content, encoding="utf-8")
+
+    settings, warning = load_settings_with_recovery(config_path)
+
+    assert settings == AppSettings()
+    assert warning is not None
+    assert not config_path.exists()
+    backups = list(tmp_path.glob("config.corrupt-*.json"))
+    assert len(backups) == 1
+    assert backups[0].name in warning
+    assert backups[0].read_text(encoding="utf-8") == content
+
+
+def test_readable_settings_load_without_warning(tmp_path: Path) -> None:
+    settings = AppSettings(paths=AppPaths(data_dir=tmp_path), selected_year="2024")
+    save_settings(settings)
+
+    loaded, warning = load_settings_with_recovery(tmp_path / "config.json")
+
+    assert warning is None
+    assert loaded.selected_year == "2024"
 
 
 def test_settings_default_ai_model_is_astra() -> None:

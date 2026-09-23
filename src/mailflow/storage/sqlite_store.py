@@ -7,6 +7,7 @@ from pathlib import Path
 
 from mailflow.models import ArchivedMailRecord
 from mailflow.storage.connection import database_connection
+from mailflow.storage.migrations import apply_migrations, script
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS archived_mails(
@@ -30,6 +31,8 @@ CREATE INDEX IF NOT EXISTS idx_archived_project
   ON archived_mails(project_number);
 """
 
+ARCHIVE_MIGRATIONS = (script(SCHEMA),)
+
 
 class SQLiteArchiveStore:
     def __init__(self, db_path: Path) -> None:
@@ -41,7 +44,7 @@ class SQLiteArchiveStore:
             return
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
-            connection.executescript(SCHEMA)
+            apply_migrations(connection, "archive", ARCHIVE_MIGRATIONS)
         self._initialized = True
 
     def is_archived(self, outlook_entry_id: str) -> bool:

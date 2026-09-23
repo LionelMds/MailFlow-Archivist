@@ -142,7 +142,7 @@ Les anciens roles projet coherents sont repris automatiquement lors de la mise a
 L'import peut aussi etre lance en ligne de commande :
 
 ```powershell
-python -m mailflow --import-contact-directory --account "lionel@balzmetal.ch" --outlook-root "Boite de reception"
+python -m mailflow --import-contact-directory --account "prenom.nom@balzmetal.ch" --outlook-root "Boite de reception"
 ```
 
 ## Mode IA

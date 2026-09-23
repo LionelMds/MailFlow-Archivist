@@ -11,6 +11,7 @@ from mailflow.core.correspondence_hierarchy import (
 from mailflow.core.mail_file_plan import planned_msg_path
 from mailflow.core.project_paths import local_project_path
 from mailflow.models import (
+    REVIEW_CONFIDENCE_THRESHOLD,
     AiMailClassification,
     ArchiveDecision,
     DuplicateStatus,
@@ -21,7 +22,7 @@ from mailflow.models import (
 )
 from mailflow.outlook.categories import ARCHIVED_CATEGORY
 
-DEFAULT_CONFIDENCE_THRESHOLD = 0.80
+DEFAULT_CONFIDENCE_THRESHOLD = REVIEW_CONFIDENCE_THRESHOLD
 
 
 class ArchiveState(Protocol):

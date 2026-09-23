@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from mailflow.models import AiMode
+from mailflow.models import REVIEW_CONFIDENCE_THRESHOLD, AiMode
 
 APP_NAME = "MailFlow Archivist"
 KEYRING_SERVICE = "mailflow-archivist"
@@ -37,6 +39,10 @@ def _default_data_dir() -> Path:
         return Path(user_data_path(APP_NAME, "Balz Metal Sa"))
     except Exception:
         return Path(os.environ.get("APPDATA", Path.home())) / APP_NAME
+
+
+def _default_projects_root() -> Path:
+    return Path.home() / "OneDrive - Balz Metal Sa" / "Clients"
 
 
 def validate_ollama_base_url(value: str) -> str:
@@ -85,7 +91,7 @@ class AppSettings(BaseModel):
 
     settings_version: int = Field(default=SETTINGS_VERSION, ge=1)
     paths: AppPaths = Field(default_factory=AppPaths)
-    local_projects_root: Path = Path(r"C:\Users\Lionel\OneDrive - Balz Metal Sa\Clients")
+    local_projects_root: Path = Field(default_factory=_default_projects_root)
     outlook_root_folder: str = "Boite de reception"
     selected_outlook_account: str | None = None
     selected_year: str | None = None
@@ -99,9 +105,9 @@ class AppSettings(BaseModel):
     ai_include_body_excerpt: bool = True
     privacy_mask_phone_numbers: bool = False
     review_reminder_times: list[str] = Field(default_factory=lambda: ["09:00", "14:00"])
-    client_email_domains: list[str] = Field(default_factory=lambda: ["gva.ch"])
-    rule_confidence_threshold: float = 0.80
-    decision_confidence_threshold: float = 0.80
+    decision_confidence_threshold: float = Field(
+        default=REVIEW_CONFIDENCE_THRESHOLD, ge=0.0, le=1.0,
+    )
 
     @field_validator("ollama_base_url")
     @classmethod
@@ -115,7 +121,10 @@ def load_settings(path: Path | None = None) -> AppSettings:
     if not config_path.exists():
         return base
     raw = json.loads(config_path.read_text(encoding="utf-8"))
-    raw.pop("openai_api_key", None)
+    if not isinstance(raw, dict):
+        raise ValueError("Le fichier de reglages ne contient pas un objet JSON.")
+    # Drop retired or future keys (e.g. after a downgrade) instead of rejecting the file.
+    raw = {key: value for key, value in raw.items() if key in AppSettings.model_fields}
     if raw.get("settings_version", 0) == 0:
         # Only replace the former default. Saving the version makes this migration
         # one-time and lets users subsequently select the legacy model explicitly.
@@ -129,12 +138,55 @@ def load_settings(path: Path | None = None) -> AppSettings:
     return AppSettings.model_validate(raw)
 
 
+def load_settings_with_recovery(path: Path | None = None) -> tuple[AppSettings, str | None]:
+    """Load settings; set an unreadable file aside and start from defaults.
+
+    Returns the settings and, when recovery happened, a message for the user.
+    """
+    config_path = path or AppSettings().paths.config_file
+    try:
+        return load_settings(config_path), None
+    except (OSError, ValueError) as exc:
+        # json.JSONDecodeError and pydantic.ValidationError are both ValueError.
+        reason = type(exc).__name__
+    backup = config_path.with_name(
+        f"{config_path.stem}.corrupt-{datetime.now():%Y%m%d-%H%M%S}{config_path.suffix}"
+    )
+    try:
+        config_path.replace(backup)
+    except OSError:
+        return AppSettings(), (
+            f"Les reglages n'ont pas pu etre lus ({reason}) et le fichier n'a pas pu "
+            f"etre mis de cote : {config_path}. Les reglages par defaut sont utilises."
+        )
+    return AppSettings(), (
+        f"Les reglages n'ont pas pu etre lus ({reason}). Le fichier a ete conserve sous "
+        f"{backup.name} et les reglages par defaut sont utilises."
+    )
+
+
 def save_settings(settings: AppSettings, path: Path | None = None) -> None:
     config_path = path or settings.paths.config_file
     config_path.parent.mkdir(parents=True, exist_ok=True)
     data: dict[str, Any] = settings.model_dump(mode="json")
     data.pop("openai_api_key", None)
-    config_path.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
+    content = json.dumps(data, ensure_ascii=True, indent=2)
+    # Write a sibling file, then swap it in, so a crash never leaves a truncated config.
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=config_path.parent,
+        prefix=f".{config_path.name}.", suffix=".tmp", delete=False,
+    ) as stream:
+        temp_path = Path(stream.name)
+        try:
+            stream.write(content)
+        except BaseException:
+            stream.close()
+            temp_path.unlink(missing_ok=True)
+            raise
+    try:
+        temp_path.replace(config_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def get_openai_api_key() -> str | None:

@@ -64,7 +64,16 @@ les lignes masquées ; l'archivage global indique son périmètre dans la confir
 Le réaffichage restaure les identifiants de mail, la sélection et le défilement.
 
 `storage.connection` gère explicitement transaction et fermeture des connexions
-SQLite. Les décisions ignorées restent ignorées après reclassification ; les
+SQLite. `storage.migrations` versionne le schéma de chaque magasin (`archive`,
+`directory`, `learning`) dans la table `schema_versions` du fichier partagé : une
+évolution de schéma s'ajoute en fin de liste, reste idempotente et ne modifie jamais
+une migration déjà publiée. Une base plus récente que l'application est laissée intacte.
+
+Les réglages sont écrits par remplacement atomique. Un `config.json` illisible est
+renommé en `config.corrupt-<date>.json` et l'application démarre avec les réglages par
+défaut en l'indiquant à l'utilisateur ; les clés retirées ou inconnues sont ignorées.
+`ui.single_instance` empêche deux fenêtres MailFlow de surveiller et d'archiver en
+parallèle. Les décisions ignorées restent ignorées après reclassification ; les
 destinations déjà archivées ne sont pas réécrites lors d'une modification d'annuaire.
 L'export HTML publie le document terminé par remplacement atomique. Les pièces jointes
 homonymes sont comparées par contenu et reçoivent un suffixe si elles diffèrent.

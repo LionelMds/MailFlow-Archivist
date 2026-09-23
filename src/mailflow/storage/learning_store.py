@@ -13,6 +13,7 @@ from mailflow.models import (
     routing_category_for_mail_type,
 )
 from mailflow.storage.connection import database_connection
+from mailflow.storage.migrations import Migration, apply_migrations, script
 
 LEARNING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS manual_learning_signals(
@@ -61,9 +62,7 @@ class SQLiteLearningStore:
     def initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
-            connection.executescript(LEARNING_SCHEMA)
-            _ensure_column(connection, "manual_learning_signals", "misleading_term", "TEXT")
-            connection.executescript(LEARNING_MIGRATIONS)
+            apply_migrations(connection, "learning", LEARNING_VERSIONS)
 
     def record(self, signal: ManualLearningSignal) -> None:
         self.initialize()
@@ -189,3 +188,15 @@ def _ensure_column(
     }
     if column not in columns:
         connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
+
+def _add_misleading_term(connection: sqlite3.Connection) -> None:
+    # Databases created before this column existed only have the v1 table.
+    _ensure_column(connection, "manual_learning_signals", "misleading_term", "TEXT")
+    connection.executescript(LEARNING_MIGRATIONS)
+
+
+LEARNING_VERSIONS: tuple[Migration, ...] = (
+    script(LEARNING_SCHEMA),
+    _add_misleading_term,
+)

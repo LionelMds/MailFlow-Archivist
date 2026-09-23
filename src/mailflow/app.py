@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import sys
 
-from mailflow.config import load_settings
+from mailflow.config import load_settings_with_recovery
 from mailflow.core.app_controller import build_default_controller
 from mailflow.core.contact_directory import DirectoryImportResult
 from mailflow.diagnostics import collect_outlook_diagnostics, format_outlook_diagnostics
@@ -33,8 +35,12 @@ def main() -> int:
         help="Dossier Outlook racine a scanner pour l'import annuaire.",
     )
     args = parser.parse_args()
-    settings = load_settings()
+    settings, settings_warning = load_settings_with_recovery()
     configure_logging(settings.paths.log_dir)
+    if settings_warning:
+        logging.getLogger(__name__).warning(settings_warning)
+        if args.diagnose_outlook or args.import_contact_directory:
+            print(settings_warning, file=sys.stderr)
     if args.diagnose_outlook:
         print(format_outlook_diagnostics(collect_outlook_diagnostics()))
         return 0
@@ -46,7 +52,7 @@ def main() -> int:
         )
         print(format_directory_import_result(result))
         return 0
-    return run_desktop_app(settings)
+    return run_desktop_app(settings, startup_warning=settings_warning)
 
 
 def format_directory_import_result(result: DirectoryImportResult) -> str:

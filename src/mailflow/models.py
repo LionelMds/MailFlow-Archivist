@@ -7,6 +7,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# Below this confidence a mail always goes to manual review. Settings may raise the
+# bar for archive decisions, but the AI contract never accepts less.
+REVIEW_CONFIDENCE_THRESHOLD = 0.80
+
 
 class MailType(StrEnum):
     DEMANDE_DE_PRIX = "demande_de_prix"
@@ -152,7 +156,10 @@ class AiMailClassification(BaseModel):
 
     @model_validator(mode="after")
     def enforce_review_constraints(self) -> AiMailClassification:
-        if self.confidence < 0.80 or self.organization_role == "inconnu":
+        if (
+            self.confidence < REVIEW_CONFIDENCE_THRESHOLD
+            or self.organization_role == "inconnu"
+        ):
             self.requires_review = True
         return self
 

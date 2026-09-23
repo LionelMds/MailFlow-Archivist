@@ -240,6 +240,8 @@ def test_directory_store_migrates_consistent_legacy_project_role_once(
         connection.execute(
             "DELETE FROM directory_meta WHERE key = 'global_organization_roles_v1'"
         )
+        # A database from before schema versioning has no recorded version either.
+        connection.execute("DELETE FROM schema_versions WHERE component = 'directory'")
 
     migrated = SQLiteDirectoryStore(db_path).list_organizations()
 

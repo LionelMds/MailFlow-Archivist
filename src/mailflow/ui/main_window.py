@@ -96,17 +96,33 @@ class ArchiveSelectionSummary:
         return self.ready_count > 0
 
 
-def run_desktop_app(settings: AppSettings) -> int:
+def run_desktop_app(settings: AppSettings, *, startup_warning: str | None = None) -> int:
     try:
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        from mailflow.ui.single_instance import acquire_instance_lock
     except Exception as exc:
         msg = "PySide6 est requis pour lancer l'interface desktop"
         raise RuntimeError(msg) from exc
 
     app = QApplication([])
-    window = MainWindow(settings)
-    window.show()
-    return int(app.exec())
+    instance_lock = acquire_instance_lock(settings.paths.data_dir)
+    if instance_lock is None:
+        QMessageBox.information(
+            None,
+            "MailFlow Archivist",
+            "MailFlow est deja ouvert. Retrouvez-le dans la barre des taches "
+            "ou dans la zone de notification.",
+        )
+        return 0
+    try:
+        window = MainWindow(settings)
+        window.show()
+        if startup_warning:
+            QMessageBox.warning(window, "Reglages reinitialises", startup_warning)
+        return int(app.exec())
+    finally:
+        instance_lock.unlock()
 
 
 def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:

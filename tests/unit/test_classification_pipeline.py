@@ -6,7 +6,12 @@ from typing import Any, Literal
 
 import pytest
 
-from mailflow.classifier.pipeline import ClassificationPipeline, should_call_ai
+from mailflow.classifier.pipeline import (
+    ClassificationPipeline,
+    apply_routing_guardrails,
+    should_call_ai,
+)
+from mailflow.classifier.routing_context import ResolvedCounterparty
 from mailflow.core.project_digest import build_project_digest
 from mailflow.core.project_html_exporter import export_project_correspondence_html
 from mailflow.models import (
@@ -413,3 +418,19 @@ def test_preview_reports_progress_for_every_ai_decision(tmp_path: Path) -> None:
     )
 
     assert progress == [(1, 2), (2, 2)]
+
+
+def test_guardrails_use_configured_confidence_threshold() -> None:
+    supplier = ResolvedCounterparty(
+        email="sales@metal.test",
+        organization_name="Metal Factory",
+        role=InterlocutorType.FOURNISSEUR,
+        organization_locked=True,
+        source="annuaire",
+    )
+    result = ai_result("Commande", "fournisseur", company="Metal Factory", confidence=0.85)
+
+    assert not apply_routing_guardrails(result, supplier).requires_review
+    assert apply_routing_guardrails(
+        result, supplier, confidence_threshold=0.90,
+    ).requires_review

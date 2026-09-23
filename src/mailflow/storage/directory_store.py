@@ -14,6 +14,7 @@ from mailflow.core.contact_directory import (
 from mailflow.core.correspondence_hierarchy import safe_folder_name
 from mailflow.models import InterlocutorType
 from mailflow.storage.connection import database_connection
+from mailflow.storage.migrations import Migration, apply_migrations, script
 
 DIRECTORY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS organizations(
@@ -78,8 +79,7 @@ class SQLiteDirectoryStore:
     def initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
-            connection.executescript(DIRECTORY_SCHEMA)
-            _migrate_legacy_project_roles_once(connection)
+            apply_migrations(connection, "directory", DIRECTORY_MIGRATIONS)
 
     def record_observation(self, observation: ContactObservation) -> DirectoryUpsertOutcome:
         self.initialize()
@@ -827,3 +827,10 @@ def _domain_from_email(email: str) -> str | None:
         return None
     domain = email.rsplit("@", 1)[1].strip(". ").casefold()
     return domain or None
+
+
+DIRECTORY_MIGRATIONS: tuple[Migration, ...] = (
+    script(DIRECTORY_SCHEMA),
+    # Guarded by its own directory_meta marker for databases created before versioning.
+    _migrate_legacy_project_roles_once,
+)

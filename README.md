@@ -147,7 +147,7 @@ python -m pytest
 python -m ruff check .
 python -m mypy src tests
 python -m mailflow --diagnose-outlook
-python -m mailflow --import-contact-directory --account "lionel@balzmetal.ch" --outlook-root "Boite de reception"
+python -m mailflow --import-contact-directory --account "prenom.nom@balzmetal.ch" --outlook-root "Boite de reception"
 ```
 
 Sur ce poste, si `python` pointe vers l'alias Microsoft Store, utiliser un Python 3.11+ explicite ou le runtime configure dans Codex.

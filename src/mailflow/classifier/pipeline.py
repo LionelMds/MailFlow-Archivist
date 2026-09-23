@@ -4,7 +4,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
-from mailflow.classifier.decision_engine import ArchiveState, decide_archive
+from mailflow.classifier.decision_engine import (
+    DEFAULT_CONFIDENCE_THRESHOLD,
+    ArchiveState,
+    decide_archive,
+)
 from mailflow.classifier.ollama_classifier import OllamaError
 from mailflow.classifier.routing_context import (
     ResolvedCounterparty,
@@ -58,7 +62,7 @@ class ClassificationPipeline:
         archive_state: ArchiveState | None = None,
         ai_mode: AiMode = AiMode.AMBIGUOUS_ONLY,
         ai_classifier: AiClassifierProtocol | None = None,
-        decision_confidence_threshold: float = 0.80,
+        decision_confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
         include_body_for_ai: bool = True,
         privacy_mask_phone_numbers: bool = False,
         organization_directory: RoutingDirectoryProtocol | None = None,
@@ -215,12 +219,19 @@ class ClassificationPipeline:
             else:
                 error = "Analyse IA échouée : testez la connexion dans Réglages puis réessayez."
             return None, error
-        return apply_routing_guardrails(result, counterparty), None
+        guarded = apply_routing_guardrails(
+            result,
+            counterparty,
+            confidence_threshold=self.decision_confidence_threshold,
+        )
+        return guarded, None
 
 
 def apply_routing_guardrails(
     ai: AiMailClassification,
     counterparty: ResolvedCounterparty,
+    *,
+    confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
 ) -> AiMailClassification:
     updates: dict[str, Any] = {}
     reason_notes: list[str] = []
@@ -247,7 +258,7 @@ def apply_routing_guardrails(
         updates["requires_review"] = True
         reason_notes.append("Role client/fournisseur a confirmer dans l'annuaire global.")
 
-    if ai.confidence < 0.80:
+    if ai.confidence < confidence_threshold:
         updates["requires_review"] = True
     if reason_notes:
         updates["reason"] = _append_reason(ai.reason, reason_notes)
