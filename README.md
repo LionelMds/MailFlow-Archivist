@@ -75,6 +75,11 @@ une adresse ou un domaine connu, par exemple `@gva.ch`, prend le pas sur les
 heuristiques de nom et permet de classer directement sous l'entreprise officielle.
 L'onglet `Annuaire` permet aussi d'attribuer un role global a chaque entreprise ;
 ce role devient la regle de base pour tous les projets existants et futurs.
+Chaque scan, manuel ou par la surveillance, enregistre automatiquement dans l'annuaire
+les contacts externes des mails lus. Lors d'une correction manuelle, choisir `Client`
+ou `Fournisseur` enregistre ce role pour l'entreprise et l'applique aussitot aux autres
+mails de cette entreprise dans la previsualisation (hors mails archives), puis aux
+scans suivants.
 Le journal HTML permet aussi de filtrer par dossier cible.
 
 Avant un scan manuel, MailFlow affiche tous les dossiers projet Outlook de l'annee

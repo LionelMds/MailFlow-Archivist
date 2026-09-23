@@ -115,6 +115,37 @@ def import_contact_directory_from_mails(
     )
 
 
+def scanned_contact_observations(mails: Sequence[MailMetadata]) -> list[ContactObservation]:
+    """External contacts worth keeping from a scan, once per project and address."""
+    observations: list[ContactObservation] = []
+    for mail in mails:
+        for contact in contact_references_from_mail(mail):
+            observation = contact_observation_from_reference(
+                project_number=mail.project_number,
+                contact=contact,
+            )
+            if observation is not None and not _should_skip_generic_contact(observation):
+                observations.append(observation)
+    return unique_observations(observations)
+
+
+def observation_for_email(mail: MailMetadata, email: str) -> ContactObservation | None:
+    """The mail's contact for this address, kept even on a generic domain.
+
+    A manual role choice identifies the contact explicitly; a generic domain is
+    still never mapped to the organization (allow_domain_mapping stays False).
+    """
+    wanted = email.strip().casefold()
+    for contact in contact_references_from_mail(mail):
+        observation = contact_observation_from_reference(
+            project_number=mail.project_number,
+            contact=contact,
+        )
+        if observation is not None and observation.email.casefold() == wanted:
+            return observation
+    return None
+
+
 def contact_references_from_mail(mail: MailMetadata) -> list[str]:
     references = [format_contact_reference(mail.sender_name, mail.sender_email)]
     references.extend(mail.recipients)

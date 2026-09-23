@@ -945,7 +945,7 @@ def test_controller_manual_update_uses_directory_for_company_folder(tmp_path: Pa
     assert updated.decision.target_relative_folder == "Correspondance/AIG"
 
 
-def test_controller_manual_supplier_role_does_not_change_global_directory_role(
+def test_controller_manual_supplier_role_sets_global_directory_role(
     tmp_path: Path,
 ) -> None:
     row = make_row(tmp_path, PreviewAction.REVIEW).model_copy(
@@ -978,7 +978,9 @@ def test_controller_manual_supplier_role_does_not_change_global_directory_role(
         ),
     )
 
-    assert directory_store.global_roles == {}
+    assert directory_store.global_roles == {1: InterlocutorType.FOURNISSEUR}
+    assert controller.last_directory_role_change is not None
+    assert controller.last_directory_role_change.organization_name == "AIG"
     assert updated.decision.interlocutor == InterlocutorType.FOURNISSEUR
     assert updated.decision.mail_type == MailType.A_VERIFIER
     assert updated.decision.target_relative_folder == "A verifier"

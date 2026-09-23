@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -29,6 +31,8 @@ from mailflow.core.contact_directory import (
     DirectoryImportResult,
     OrganizationDirectoryEntry,
     import_contact_directory_from_mails,
+    observation_for_email,
+    scanned_contact_observations,
 )
 from mailflow.core.correspondence_hierarchy import (
     OrganizationDirectoryProtocol,
@@ -74,6 +78,10 @@ from mailflow.storage.learning_store import SQLiteLearningStore
 from mailflow.storage.sqlite_store import SQLiteArchiveStore
 
 ScanProgressCallback = Callable[[str], None]
+
+logger = logging.getLogger(__name__)
+
+BUSINESS_ROLES = frozenset({InterlocutorType.CLIENT, InterlocutorType.FOURNISSEUR})
 
 
 class ScanServiceProtocol(Protocol):
@@ -168,6 +176,24 @@ class DirectoryStoreProtocol(
 
 
 @dataclass(frozen=True)
+class ScanDirectoryUpdate:
+    """Contacts from the last scan written to the directory."""
+
+    contact_count: int
+    new_organizations: int
+    new_contacts: int
+
+
+@dataclass(frozen=True)
+class DirectoryRoleChange:
+    """A manual client/supplier choice saved as the company's global role."""
+
+    organization_name: str
+    role: InterlocutorType
+    updated_row_count: int
+
+
+@dataclass(frozen=True)
 class PreviewRequest:
     account_identifier: str | None
     outlook_root_folder: str
@@ -197,6 +223,8 @@ class AppController:
         self.directory_store = directory_store
         self.preview_rows: list[PreviewRow] = []
         self.outlook_items: dict[str, object] = {}
+        self.last_scan_directory_update: ScanDirectoryUpdate | None = None
+        self.last_directory_role_change: DirectoryRoleChange | None = None
 
     def scan_and_preview(
         self,
@@ -217,6 +245,8 @@ class AppController:
             )
         )
         mails = [item.metadata for item in scanned]
+        # Before classification, so newly seen companies already name their folders.
+        self._record_scanned_contacts(mails)
         if progress_callback is not None:
             progress_callback(f"{len(mails)} mail(s) lus. Classification en cours...")
         preview_rows = self.preview_pipeline.preview(
@@ -284,6 +314,7 @@ class AppController:
             )
         )
         mails = [item.metadata for item in scanned]
+        self._record_scanned_contacts(mails)
         new_rows = self.preview_pipeline.preview(
             mails,
             progress_callback=(
@@ -418,13 +449,46 @@ class AppController:
             if hasattr(self.directory_store, "organization_name_for_email")
             else None
         )
+        row = self.preview_rows[row_index]
+        # Validate the manual choice before touching the shared directory.
         updated_row, signal = apply_manual_classification(
-            self.preview_rows[row_index],
+            row,
             update,
             projects_root=self.projects_root,
             organization_directory=organization_directory,
         )
+        self.last_directory_role_change = None
+        organization_name = self._save_manual_role(row, update.interlocutor)
+        if organization_name is not None:
+            # The company may just have been added: name its folder from the directory.
+            updated_row, signal = apply_manual_classification(
+                row,
+                update,
+                projects_root=self.projects_root,
+                organization_directory=organization_directory,
+            )
         self.preview_rows[row_index] = updated_row
+        if organization_name is not None and self.directory_store is not None:
+            before = list(self.preview_rows)
+            self.preview_rows = apply_directory_roles_to_rows(
+                self.preview_rows,
+                self.directory_store,
+                self.projects_root,
+            )
+            # The user's explicit choice for this mail stays exactly as entered.
+            self.preview_rows[row_index] = updated_row
+            self.last_directory_role_change = DirectoryRoleChange(
+                organization_name=organization_name,
+                role=update.interlocutor,
+                updated_row_count=sum(
+                    1
+                    for index, (old, new) in enumerate(
+                        zip(before, self.preview_rows, strict=True)
+                    )
+                    if index != row_index
+                    and old.decision.interlocutor != new.decision.interlocutor
+                ),
+            )
         refreshed_examples = False
         if self.learning_store is not None:
             self.learning_store.record(signal)
@@ -437,6 +501,61 @@ class AppController:
         if not refreshed_examples and example is not None and callable(add_example):
             add_example(example)
         return self.preview_rows[row_index]
+
+    def _record_scanned_contacts(self, mails: Sequence[MailMetadata]) -> None:
+        self.last_scan_directory_update = None
+        store = self.directory_store
+        if store is None:
+            return
+        observations = scanned_contact_observations(mails)
+        if not observations:
+            return
+        record_many = getattr(store, "record_observations", None)
+        try:
+            outcomes = (
+                list(record_many(observations))
+                if callable(record_many)
+                else [store.record_observation(observation) for observation in observations]
+            )
+        except (sqlite3.Error, OSError):
+            # The directory is an aid: a storage error must not block the scan itself.
+            logger.warning("Enregistrement automatique de l'annuaire impossible", exc_info=True)
+            return
+        self.last_scan_directory_update = ScanDirectoryUpdate(
+            contact_count=len(observations),
+            new_organizations=sum(outcome.new_organization for outcome in outcomes),
+            new_contacts=sum(outcome.new_contact for outcome in outcomes),
+        )
+
+    def _save_manual_role(self, row: PreviewRow, role: InterlocutorType) -> str | None:
+        """Store a manual client/supplier choice as the company's global role.
+
+        Returns the company name when the directory changed, otherwise None.
+        """
+        store = self.directory_store
+        find_organization = getattr(store, "organization_id_for_email", None)
+        if role not in BUSINESS_ROLES or store is None or not callable(find_organization):
+            return None
+        email = primary_external_email(row.mail)
+        if email is None:
+            return None
+        try:
+            organization_id = find_organization(email)
+            if organization_id is None:
+                observation = observation_for_email(row.mail, email)
+                if observation is None:
+                    return None
+                store.record_observation(observation)
+                organization_id = find_organization(email)
+            if organization_id is None:
+                return None
+            if store.interlocutor_for_email(row.mail.project_number, email) == role:
+                return None
+            store.set_organization_role(int(organization_id), role)
+            return store.organization_name_for_email(email) or email
+        except (sqlite3.Error, OSError, ValueError):
+            logger.warning("Role manuel non enregistre dans l'annuaire", exc_info=True)
+            return None
 
     def suggested_account_identifier(self) -> str | None:
         return None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -82,24 +83,44 @@ class SQLiteDirectoryStore:
             apply_migrations(connection, "directory", DIRECTORY_MIGRATIONS)
 
     def record_observation(self, observation: ContactObservation) -> DirectoryUpsertOutcome:
+        return self.record_observations([observation])[0]
+
+    def record_observations(
+        self,
+        observations: Sequence[ContactObservation],
+    ) -> list[DirectoryUpsertOutcome]:
+        """Record a scan's contacts in one transaction instead of one per contact."""
+        if not observations:
+            return []
         self.initialize()
         now = datetime.now(UTC).isoformat()
         with self._connect() as connection:
-            organization_id, new_organization = self._resolve_organization(
-                connection,
-                observation,
-                now,
-            )
-            new_domain = False
-            if observation.allow_domain_mapping:
-                new_domain = self._upsert_domain(connection, organization_id, observation, now)
-            new_contact = self._upsert_contact(connection, organization_id, observation, now)
-            new_participant = self._upsert_project_participant(
-                connection,
-                organization_id,
-                observation.project_number,
-                now,
-            )
+            return [
+                self._record_observation(connection, observation, now)
+                for observation in observations
+            ]
+
+    def _record_observation(
+        self,
+        connection: sqlite3.Connection,
+        observation: ContactObservation,
+        now: str,
+    ) -> DirectoryUpsertOutcome:
+        organization_id, new_organization = self._resolve_organization(
+            connection,
+            observation,
+            now,
+        )
+        new_domain = False
+        if observation.allow_domain_mapping:
+            new_domain = self._upsert_domain(connection, organization_id, observation, now)
+        new_contact = self._upsert_contact(connection, organization_id, observation, now)
+        new_participant = self._upsert_project_participant(
+            connection,
+            organization_id,
+            observation.project_number,
+            now,
+        )
         return DirectoryUpsertOutcome(
             new_organization=new_organization,
             new_domain=new_domain,

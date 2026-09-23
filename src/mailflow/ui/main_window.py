@@ -1622,6 +1622,18 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         except Exception as exc:
             append_log(f"Erreur fusion entreprise: {exc}")
 
+    def log_scan_directory_update() -> bool:
+        """Log what the last scan added to the directory; True if it changed."""
+        update = getattr(active_controller, "last_scan_directory_update", None)
+        if update is None:
+            return False
+        append_log(
+            f"Annuaire mis a jour : {update.contact_count} contact(s) vus, "
+            f"{update.new_organizations} nouvelle(s) entreprise(s), "
+            f"{update.new_contacts} nouveau(x) contact(s)."
+        )
+        return bool(update.new_organizations or update.new_contacts)
+
     def open_manual_dialog(row_index: int) -> None:
         if refreshing_table or operation_in_progress:
             return
@@ -1643,6 +1655,16 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 f"{updated.decision.mail_type.value} -> "
                 f"{updated.decision.target_relative_folder}."
             )
+            role_change = getattr(active_controller, "last_directory_role_change", None)
+            if role_change is not None:
+                refresh_directory_table()
+                message = (
+                    f"Annuaire : {role_change.organization_name} enregistre comme "
+                    f"{role_change.role.value}. {role_change.updated_row_count} autre(s) "
+                    "mail(s) de cette entreprise mis a jour."
+                )
+                append_log(message)
+                set_scan_status(message, success=True)
         except Exception as exc:
             refresh_table(preferred_row_index=row_index)
             append_log(f"Erreur classement manuel: {exc}")
@@ -2118,6 +2140,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             navigation.setCurrentRow(0)
             set_scan_status(f"{len(rows)} mail(s) charges.", success=True)
             append_log(f"{len(rows)} mails charges en previsualisation.")
+            log_scan_directory_update()
         except Exception as exc:
             set_scan_status("Erreur scan Outlook", success=False)
             expand_logs()
@@ -2321,6 +2344,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 QSystemTrayIcon.MessageIcon.Warning,
             )
             return
+        if log_scan_directory_update():
+            refresh_directory_table()
         archive_result = ArchiveBatchResult()
         try:
             archive_result = archive_new_ready_rows(change.new_entry_ids)
