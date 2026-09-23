@@ -144,6 +144,36 @@ desactivee pour n'envoyer que sujet, metadonnees et noms des pieces jointes.
 Quand l'IA intervient, l'apercu du mail affiche la decision IA, son resume court et
 l'explication en quelques mots.
 
+## Mesurer la precision de l'IA
+
+`scripts/evaluate_ai.py` compare les propositions de l'IA a vos propres decisions : les
+corrections manuelles et les mails deja archives servent de reference. Chaque mail est
+relu dans Outlook (lecture seule) puis classe a nouveau, sans historique ni exemples
+pour ne pas souffler la reponse. Aucun contenu de mail n'est stocke pour cette mesure.
+
+```powershell
+.venv312\Scripts\python.exe scripts/evaluate_ai.py
+.venv312\Scripts\python.exe scripts/evaluate_ai.py --run --provider ollama --limit 50 --output
+.venv312\Scripts\python.exe scripts/evaluate_ai.py --run --provider openai --limit 50 --output
+```
+
+Pour estimer le cout OpenAI, ajouter `--price-input` et `--price-output` avec les tarifs
+du modele par million de tokens, tels qu'affiches sur la page de prix d'OpenAI.
+
+Sans `--run`, le script indique seulement le nombre de mails de reference. Avec
+`--provider openai`, les mails sont envoyes a OpenAI comme lors d'un classement normal
+et les appels sont factures. Le resultat donne la precision par categorie, les mails
+classes automatiquement a tort (le chiffre le plus important), la part envoyee en
+verification, la matrice des confusions, le temps par mail et, pour OpenAI, les tokens
+et un cout estime a partir des prix indiques. Garder la meme `--seed` et le meme
+`--limit` pour comparer deux moteurs sur les memes mails.
+
+## Validation groupee
+
+Selectionner plusieurs mails puis `Verifier les N mails` ouvre une seule fenetre de
+classement et applique le choix a toute la selection. Chaque mail garde le dossier de
+sa propre entreprise ; les mails archives ne sont jamais modifies.
+
 ## Commandes utiles
 
 ```powershell

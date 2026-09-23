@@ -23,6 +23,7 @@ DEFAULT_OLLAMA_TIMEOUT_SECONDS = 180.0
 SETTINGS_VERSION = 1
 AI_MODEL_OPTIONS = (
     DEFAULT_AI_MODEL,
+    "gpt-6-luna",
     "gpt-5.4-nano",
     "gpt-5.4-mini",
     "gpt-5.4",

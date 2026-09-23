@@ -226,3 +226,29 @@ def test_recipient_priority_skips_internal_copies_before_external_recipient() ->
     )
     assert payload["recipient_priority"]["primary_recipient_is_internal"] is False
     assert payload["body_excerpt"] == ""
+
+
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6-luna", "gpt-6-luna-2026-09-01"])
+def test_gpt6_models_use_low_reasoning(model: str) -> None:
+    responses = FakeResponses(AiMailClassification.model_validate(_classification_payload()))
+    classifier = AiClassifier(
+        api_key="synthetic-test-key", model=model, client=SimpleNamespace(responses=responses),
+    )
+
+    classifier.classify(_connection_test_mail())
+
+    assert responses.kwargs is not None
+    assert responses.kwargs["reasoning"] == {"effort": "low"}
+
+
+def test_lunar_lookalike_models_do_not_receive_reasoning() -> None:
+    responses = FakeResponses(AiMailClassification.model_validate(_classification_payload()))
+    classifier = AiClassifier(
+        api_key="synthetic-test-key", model="gpt-6-lunatic",
+        client=SimpleNamespace(responses=responses),
+    )
+
+    classifier.classify(_connection_test_mail())
+
+    assert responses.kwargs is not None
+    assert "reasoning" not in responses.kwargs

@@ -12,6 +12,8 @@ from mailflow.classifier.prompt import SYSTEM_PROMPT, build_ai_payload
 from mailflow.config import DEFAULT_AI_MODEL, DEFAULT_OPENAI_TIMEOUT_SECONDS
 from mailflow.models import AiMailClassification, Direction, MailMetadata
 
+LOW_REASONING_MODEL_FAMILIES = ("gpt-6-astra", "gpt-6-luna")
+
 
 class ResponsesClient(Protocol):
     @property
@@ -49,6 +51,8 @@ class AiClassifier:
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._client: Any = client
+        # (input, output) tokens of the last successful call, for cost estimates.
+        self.last_usage: tuple[int, int] | None = None
 
     def classify(
         self,
@@ -77,7 +81,7 @@ class AiClassifier:
             store=False,
             max_output_tokens=4096,
         )
-        if self._model == DEFAULT_AI_MODEL or self._model.startswith("gpt-6-astra-"):
+        if _uses_low_reasoning(self._model):
             request["reasoning"] = {"effort": "low"}
         try:
             response = self._client_or_create().responses.parse(**request)
@@ -98,6 +102,14 @@ class AiClassifier:
         parsed = getattr(response, "output_parsed", None)
         if not isinstance(parsed, AiMailClassification):
             raise AiResponseError("La reponse IA ne contient aucune classification exploitable.")
+        usage = getattr(response, "usage", None)
+        input_tokens = getattr(usage, "input_tokens", None)
+        output_tokens = getattr(usage, "output_tokens", None)
+        self.last_usage = (
+            (input_tokens, output_tokens)
+            if isinstance(input_tokens, int) and isinstance(output_tokens, int)
+            else None
+        )
         return parsed
 
     def check_connection(self) -> AiConnectionCheck:
@@ -131,6 +143,14 @@ class AiClassifier:
             max_retries=1,
         )
         return self._client
+
+
+def _uses_low_reasoning(model: str) -> bool:
+    # A three-way routing choice needs little reasoning; low keeps it fast and cheap.
+    return any(
+        model == family or model.startswith(f"{family}-")
+        for family in LOW_REASONING_MODEL_FAMILIES
+    )
 
 
 def _connection_test_mail() -> MailMetadata:
