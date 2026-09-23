@@ -421,7 +421,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     more_actions_button.setMenu(more_actions_menu)
     actions_layout.addWidget(archive_button)
     review_button = QPushButton("Vérifier la sélection")
-    review_button.setToolTip("Modifier le classement du mail courant (Entrée)")
+    review_button.setToolTip(
+        "Modifier le classement du mail sélectionné, ou appliquer le même classement "
+        "à plusieurs mails sélectionnés (Entrée)"
+    )
     actions_layout.addWidget(review_button)
     actions_layout.addWidget(export_html_button)
     actions_layout.addWidget(more_actions_button)
@@ -998,11 +1001,15 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             ready_selected.can_archive and not operation_in_progress
         )
         archive_all_action.setEnabled(ready_count > 0 and not operation_in_progress)
-        editable_selection = (
-            len(selected) == 1
-            and active_controller.preview_rows[selected[0]].action != PreviewAction.ARCHIVED
+        editable_count = sum(
+            active_controller.preview_rows[index].action != PreviewAction.ARCHIVED
+            for index in selected
         )
-        review_button.setEnabled(editable_selection and not operation_in_progress)
+        review_button.setEnabled(editable_count > 0 and not operation_in_progress)
+        review_button.setText(
+            f"Vérifier les {editable_count} mails" if editable_count > 1
+            else "Vérifier la sélection"
+        )
         ignore_action.setEnabled(bool(selected) and not operation_in_progress)
         has_rows = bool(active_controller.preview_rows) and not operation_in_progress
         reclassify_action.setEnabled(has_rows)
@@ -1669,14 +1676,68 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             refresh_table(preferred_row_index=row_index)
             append_log(f"Erreur classement manuel: {exc}")
 
-    def ask_manual_classification(row_index: int) -> ManualClassificationUpdate | None:
+    def open_bulk_manual_dialog(row_indexes: Sequence[int]) -> None:
+        if refreshing_table or operation_in_progress:
+            return
+        editable = [
+            index for index in row_indexes
+            if 0 <= index < len(active_controller.preview_rows)
+            and active_controller.preview_rows[index].action != PreviewAction.ARCHIVED
+        ]
+        if len(editable) <= 1:
+            if editable:
+                open_manual_dialog(editable[0])
+            return
+        update = ask_manual_classification(editable[0], selection_count=len(editable))
+        if update is None:
+            refresh_table(preferred_row_index=editable[0])
+            return
+        try:
+            result = active_controller.apply_manual_updates(editable, update)
+        except Exception as exc:
+            refresh_table(preferred_row_index=editable[0])
+            append_log(f"Erreur classement groupe: {exc}")
+            return
+        refresh_table(preferred_row_index=editable[0])
+        message = f"Classement manuel applique a {result.updated_count} mail(s)."
+        if result.skipped_archived_count:
+            message += f" {result.skipped_archived_count} mail(s) archive(s) inchange(s)."
+        append_log(message)
+        for change in result.role_changes:
+            append_log(
+                f"Annuaire : {change.organization_name} enregistre comme {change.role.value}."
+            )
+        for error in result.errors:
+            append_log(f"Erreur classement manuel: {error}")
+        if result.role_changes:
+            refresh_directory_table()
+        set_scan_status(message, success=not result.errors)
+
+    def ask_manual_classification(
+        row_index: int,
+        *,
+        selection_count: int = 1,
+    ) -> ManualClassificationUpdate | None:
         if row_index < 0 or row_index >= len(active_controller.preview_rows):
             return None
         row = active_controller.preview_rows[row_index]
         dialog = QDialog(window)
-        dialog.setWindowTitle("Classement manuel")
+        dialog.setWindowTitle(
+            "Classement manuel"
+            if selection_count == 1
+            else f"Classement manuel de {selection_count} mails"
+        )
         dialog.setMinimumWidth(560)
         form = QFormLayout(dialog)
+        if selection_count > 1:
+            bulk_note = QLabel(
+                f"Ce classement sera appliqué aux {selection_count} mails sélectionnés. "
+                "Chaque mail garde le dossier de sa propre entreprise ; le mail "
+                "ci-dessous sert d'exemple."
+            )
+            bulk_note.setWordWrap(True)
+            bulk_note.setStyleSheet("QLabel { font-weight: 600; }")
+            form.addRow(bulk_note)
 
         subject_label = QLabel(row.mail.subject)
         subject_label.setWordWrap(True)
@@ -1781,9 +1842,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         form.addRow("", routing_warning)
 
         learning_note = QLabel(
-            "La correction s'applique à ce mail. Un classement complet devient un exemple "
-            "vérifié pour les prochaines analyses. Pour définir le rôle d'une entreprise "
-            "sur tous ses mails, utilisez l'Annuaire."
+            "Un classement complet devient un exemple vérifié pour les prochaines "
+            "analyses. Choisir Client ou Fournisseur enregistre aussi ce rôle pour "
+            "l'entreprise dans l'Annuaire et l'applique à ses autres mails."
         )
         learning_note.setWordWrap(True)
         form.addRow("Apprentissage", learning_note)
@@ -2484,8 +2545,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     status_filter.currentIndexChanged.connect(apply_mail_filters)
     clear_filters_button.clicked.connect(clear_mail_filters)
     review_button.clicked.connect(
-        lambda: open_manual_dialog(selected_table_row_indexes()[0])
-        if len(selected_table_row_indexes()) == 1 else None
+        lambda: open_bulk_manual_dialog(selected_table_row_indexes())
     )
     reset_button.clicked.connect(on_reset_workspace)
     watch_checkbox.toggled.connect(on_watch_toggled)

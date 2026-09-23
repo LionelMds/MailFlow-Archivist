@@ -299,3 +299,97 @@ def test_manual_client_choice_is_logged_and_shown_in_directory(
     directory = window.mailflow_directory_table
     names = [directory.item(row, 0).text() for row in range(directory.rowCount())]
     assert "Acme Metal" in names
+
+
+def supplier_order() -> ManualClassificationUpdate:
+    return ManualClassificationUpdate(
+        mail_type=MailType.COMMANDE,
+        interlocutor=InterlocutorType.FOURNISSEUR,
+        target_relative_folder="Fournisseurs/Commande",
+    )
+
+
+def test_bulk_update_classifies_each_mail_under_its_own_company(tmp_path: Path) -> None:
+    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
+    mails = [
+        mail("1", "jean@acme-metal.ch"),
+        mail("2", "info@steel-supply.ch"),
+        mail("3", "paul@acme-metal.ch"),
+        mail("4", "jean@acme-metal.ch"),
+    ]
+    app = controller(tmp_path, store, mails)
+    app.scan_and_preview(request())
+    app.preview_rows = [review_row(tmp_path, item) for item in mails]
+
+    result = app.apply_manual_updates([0, 1, 1, 99], supplier_order())
+
+    assert result.updated_count == 2
+    assert result.errors == ()
+    assert {change.organization_name for change in result.role_changes} == {
+        "Acme Metal", "Steel Supply",
+    }
+    targets = [row.decision.target_relative_folder for row in app.preview_rows[:2]]
+    assert targets == ["Fournisseurs/Commande/Acme Metal", "Fournisseurs/Commande/Steel Supply"]
+    assert all(row.action == PreviewAction.ARCHIVE for row in app.preview_rows[:2])
+    # Unselected mails of the same company only receive the company role.
+    assert app.preview_rows[2].decision.interlocutor == InterlocutorType.FOURNISSEUR
+    assert app.preview_rows[2].action == PreviewAction.REVIEW
+    assert app.last_directory_role_change is None
+
+
+def test_bulk_update_never_changes_archived_mails(tmp_path: Path) -> None:
+    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
+    mails = [mail("1", "jean@acme-metal.ch"), mail("2", "paul@acme-metal.ch")]
+    app = controller(tmp_path, store, mails)
+    app.preview_rows = [
+        review_row(tmp_path, mails[0]),
+        review_row(tmp_path, mails[1], PreviewAction.ARCHIVED),
+    ]
+    archived_before = app.preview_rows[1]
+
+    result = app.apply_manual_updates([0, 1], client_update())
+
+    assert (result.updated_count, result.skipped_archived_count) == (1, 1)
+    assert app.preview_rows[1] == archived_before
+
+
+def test_review_button_applies_one_choice_to_the_whole_selection(
+    qapp: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PySide6.QtCore import QItemSelectionModel
+    from PySide6.QtWidgets import QComboBox, QDialog
+
+    from mailflow.ui.main_window import MainWindow
+    from mailflow.ui.preview_table import interlocutor_option_label
+
+    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
+    mails = [mail(str(index), f"contact{index}@acme-metal.ch") for index in range(3)]
+    app = controller(tmp_path, store, mails)
+    app.scan_and_preview(request())
+    app.preview_rows = [review_row(tmp_path, item) for item in mails]
+    titles: list[str] = []
+
+    def choose_client(dialog: QDialog) -> int:
+        titles.append(dialog.windowTitle())
+        interlocutor = dialog.findChildren(QComboBox)[1]
+        interlocutor.setCurrentText(interlocutor_option_label(InterlocutorType.CLIENT))
+        return int(QDialog.DialogCode.Accepted.value)
+
+    monkeypatch.setattr(QDialog, "exec", choose_client)
+    window = cast(Any, MainWindow(
+        AppSettings(paths=AppPaths(data_dir=tmp_path)), controller=app,
+    ))
+    window.mailflow_refresh_table()
+    table = window.mailflow_preview_table
+    flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+    for row in (0, 2):
+        table.selectionModel().select(table.model().index(row, 0), flags)
+
+    assert window.mailflow_review_button.text() == "Vérifier les 2 mails"
+    window.mailflow_review_button.click()
+
+    assert titles == ["Classement manuel de 2 mails"]
+    actions = [row.action for row in app.preview_rows]
+    assert actions[0] == actions[2] == PreviewAction.ARCHIVE
+    assert app.preview_rows[1].decision.interlocutor == InterlocutorType.CLIENT
+    assert "Classement manuel applique a 2 mail(s)." in window.mailflow_logs.toPlainText()

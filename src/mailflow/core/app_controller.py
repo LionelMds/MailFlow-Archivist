@@ -194,6 +194,16 @@ class DirectoryRoleChange:
 
 
 @dataclass(frozen=True)
+class BulkManualResult:
+    """Outcome of one manual classification applied to several mails."""
+
+    updated_count: int
+    skipped_archived_count: int
+    role_changes: tuple[DirectoryRoleChange, ...]
+    errors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class PreviewRequest:
     account_identifier: str | None
     outlook_root_folder: str
@@ -501,6 +511,42 @@ class AppController:
         if not refreshed_examples and example is not None and callable(add_example):
             add_example(example)
         return self.preview_rows[row_index]
+
+    def apply_manual_updates(
+        self,
+        row_indexes: Sequence[int],
+        update: ManualClassificationUpdate,
+    ) -> BulkManualResult:
+        """Apply the same manual choice to each selected mail.
+
+        Each mail keeps its own company folder; archived mails are never changed.
+        """
+        updated = 0
+        skipped = 0
+        role_changes: list[DirectoryRoleChange] = []
+        errors: list[str] = []
+        for index in dict.fromkeys(row_indexes):
+            if not 0 <= index < len(self.preview_rows):
+                continue
+            row = self.preview_rows[index]
+            if row.action == PreviewAction.ARCHIVED:
+                skipped += 1
+                continue
+            try:
+                self.apply_manual_update(index, update)
+            except ValueError as exc:
+                errors.append(f"{row.mail.subject or row.mail.entry_id} : {exc}")
+                continue
+            updated += 1
+            if self.last_directory_role_change is not None:
+                role_changes.append(self.last_directory_role_change)
+        self.last_directory_role_change = None
+        return BulkManualResult(
+            updated_count=updated,
+            skipped_archived_count=skipped,
+            role_changes=tuple(role_changes),
+            errors=tuple(errors),
+        )
 
     def _record_scanned_contacts(self, mails: Sequence[MailMetadata]) -> None:
         self.last_scan_directory_update = None
