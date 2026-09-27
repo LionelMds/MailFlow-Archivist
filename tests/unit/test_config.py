@@ -163,3 +163,45 @@ def test_ollama_supports_ipv6_loopback() -> None:
     assert AppSettings(ollama_base_url="http://[::1]:11434").ollama_base_url == (
         "http://[::1]:11434"
     )
+
+
+def test_jev_settings_round_trip_without_key(tmp_path: Path) -> None:
+    settings = AppSettings(
+        paths=AppPaths(data_dir=tmp_path), ai_provider="jev", jev_model="jev-custom",
+    )
+
+    save_settings(settings)
+
+    loaded = load_settings(tmp_path / "config.json")
+    assert loaded == settings
+    assert loaded.jev_timeout_seconds == 20.0
+    assert "api_key" not in (tmp_path / "config.json").read_text(encoding="utf-8")
+    with pytest.raises(ValueError):
+        AppSettings(jev_model="")
+
+
+def test_jev_and_openai_keys_use_separate_keyring_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    from mailflow import config
+
+    store: dict[tuple[str, str], str] = {}
+    fake_keyring = SimpleNamespace(
+        get_password=lambda service, user: store.get((service, user)),
+        set_password=lambda service, user, secret: store.update({(service, user): secret}),
+    )
+    monkeypatch.setitem(sys.modules, "keyring", fake_keyring)
+
+    assert config.get_jev_api_key() is None
+    config.set_jev_api_key("ts-key")
+    config.set_openai_api_key("sk-key")
+
+    assert config.get_jev_api_key() == "ts-key"
+    assert config.get_openai_api_key() == "sk-key"
+    assert store == {
+        ("mailflow-archivist", "typesafe-jev-api-key"): "ts-key",
+        ("mailflow-archivist", "openai-api-key"): "sk-key",
+    }

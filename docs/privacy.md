@@ -7,8 +7,11 @@ localement et refuse les modèles cloud avant de transmettre un mail. Une erreur
 laisse le mail à vérifier, sans bascule vers OpenAI. Le téléchargement initial
 d'Ollama et du modèle nécessite Internet ; la classification locale n'en a pas besoin.
 
-Le moteur **OpenAI (API)** transmet les mêmes données à OpenAI. Le choix du moteur
-est explicite dans les réglages ; les anciennes configurations conservent OpenAI.
+Le moteur **OpenAI (API)** transmet les mêmes données à OpenAI. Le moteur
+**Jev (TypeSafe)** transmet les mêmes données à l'API de TypeSafe
+(`https://api.typesafe.ai`), sans suivre de redirection. Le choix du moteur est
+explicite dans les réglages ; les anciennes configurations conservent OpenAI. Une panne
+d'un moteur ne déclenche jamais d'envoi à un autre.
 
 MailFlow limite les données transmises au moteur choisi :
 
@@ -30,11 +33,18 @@ journaux côté fournisseur dépendent des conditions du compte OpenAI ; cette o
 ne signifie pas « aucune rétention ». Les erreurs de classification affichées dans
 la prévisualisation utilisent des messages locaux sans recopier la requête distante.
 
-La cle API OpenAI est stockee via `keyring`, dans le coffre du systeme, et n'est
-jamais ecrite dans les logs ou le fichier de configuration JSON.
+En mode Jev, le schéma public de l'API ne documente aucune option équivalente à
+`store=False` ; la conservation éventuelle des requêtes dépend des conditions du compte
+TypeSafe. Les
+réponses d'erreur de Jev, qui peuvent recopier la requête, ne sont jamais affichées.
 
-Le bouton `Tester IA` utilise uniquement un mail fictif de diagnostic. Aucun mail
-Outlook reel ni piece jointe n'est envoye pour verifier la validite de la cle.
+Les cles API OpenAI et Jev sont stockees via `keyring`, dans le coffre du systeme, sous
+deux entrees distinctes, et ne sont jamais ecrites dans les logs ou le fichier de
+configuration JSON.
+
+Les boutons `Tester IA` et `Tester Jev` utilisent uniquement un mail fictif de
+diagnostic. Aucun mail Outlook reel ni piece jointe n'est envoye pour verifier la
+validite de la cle.
 
 L'import annuaire Outlook reste local. Il stocke dans SQLite les adresses e-mail,
 domaines, noms affiches et projets associes pour ameliorer le tri, sans envoyer ces

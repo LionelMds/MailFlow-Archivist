@@ -15,11 +15,16 @@ from mailflow.models import REVIEW_CONFIDENCE_THRESHOLD, AiMode
 APP_NAME = "MailFlow Archivist"
 KEYRING_SERVICE = "mailflow-archivist"
 KEYRING_OPENAI_USERNAME = "openai-api-key"
+KEYRING_JEV_USERNAME = "typesafe-jev-api-key"
 DEFAULT_AI_MODEL = "gpt-6-astra"
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60.0
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_OLLAMA_TIMEOUT_SECONDS = 180.0
+JEV_API_BASE_URL = "https://api.typesafe.ai"
+DEFAULT_JEV_MODEL = "jev-latest"
+DEFAULT_JEV_TIMEOUT_SECONDS = 20.0
+JEV_MODEL_OPTIONS = (DEFAULT_JEV_MODEL,)
 SETTINGS_VERSION = 1
 AI_MODEL_OPTIONS = (
     DEFAULT_AI_MODEL,
@@ -97,12 +102,14 @@ class AppSettings(BaseModel):
     selected_outlook_account: str | None = None
     selected_year: str | None = None
     ai_mode: AiMode = AiMode.ALL
-    ai_provider: Literal["openai", "ollama"] = "openai"
+    ai_provider: Literal["openai", "ollama", "jev"] = "openai"
     ai_model: str = DEFAULT_AI_MODEL
     openai_timeout_seconds: float = Field(default=DEFAULT_OPENAI_TIMEOUT_SECONDS, gt=0)
     ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
     ollama_model: str = Field(default=DEFAULT_OLLAMA_MODEL, min_length=1)
     ollama_timeout_seconds: float = Field(default=DEFAULT_OLLAMA_TIMEOUT_SECONDS, gt=0)
+    jev_model: str = Field(default=DEFAULT_JEV_MODEL, min_length=1)
+    jev_timeout_seconds: float = Field(default=DEFAULT_JEV_TIMEOUT_SECONDS, gt=0)
     ai_include_body_excerpt: bool = True
     privacy_mask_phone_numbers: bool = False
     review_reminder_times: list[str] = Field(default_factory=lambda: ["09:00", "14:00"])
@@ -191,19 +198,35 @@ def save_settings(settings: AppSettings, path: Path | None = None) -> None:
 
 
 def get_openai_api_key() -> str | None:
+    return _get_keyring_secret(KEYRING_OPENAI_USERNAME)
+
+
+def set_openai_api_key(api_key: str) -> None:
+    _set_keyring_secret(KEYRING_OPENAI_USERNAME, api_key, label="OpenAI")
+
+
+def get_jev_api_key() -> str | None:
+    return _get_keyring_secret(KEYRING_JEV_USERNAME)
+
+
+def set_jev_api_key(api_key: str) -> None:
+    _set_keyring_secret(KEYRING_JEV_USERNAME, api_key, label="Jev")
+
+
+def _get_keyring_secret(username: str) -> str | None:
     try:
         import keyring
 
-        password = keyring.get_password(KEYRING_SERVICE, KEYRING_OPENAI_USERNAME)
+        password = keyring.get_password(KEYRING_SERVICE, username)
         return str(password) if password is not None else None
     except Exception:
         return None
 
 
-def set_openai_api_key(api_key: str) -> None:
+def _set_keyring_secret(username: str, secret: str, *, label: str) -> None:
     try:
         import keyring
     except Exception as exc:
-        msg = "keyring is required to store the OpenAI API key"
+        msg = f"keyring is required to store the {label} API key"
         raise RuntimeError(msg) from exc
-    keyring.set_password(KEYRING_SERVICE, KEYRING_OPENAI_USERNAME, api_key)
+    keyring.set_password(KEYRING_SERVICE, username, secret)

@@ -26,10 +26,10 @@ de l'annuaire, la phase commerciale est proposée par l'IA, puis les contrôles 
 valident la décision avant l'archivage. Le contexte est chronologique par projet et
 entreprise ; il inclut les corrections manuelles vérifiées.
 
-`AppSettings.ai_provider` sélectionne explicitement `openai` ou `ollama`.
-`build_ai_classifier` construit uniquement le moteur choisi ; il ne lit pas la clé
-OpenAI en mode local. Les deux adaptateurs partagent `build_ai_payload`, le prompt
-métier et le contrat `AiMailClassification`, puis les mêmes contrôles d'archivage.
+`AppSettings.ai_provider` sélectionne explicitement `openai`, `ollama` ou `jev`.
+`build_ai_classifier` construit uniquement le moteur choisi et ne lit que sa propre
+clé. Les adaptateurs partagent `build_ai_payload` et le contrat
+`AiMailClassification`, puis les mêmes garde-fous et contrôles d'archivage.
 
 `OllamaClassifier` appelle l'API native `/api/chat` avec un schéma JSON, sans streaming
 ni raisonnement exposé. Le schéma reprend les contraintes déjà imposées par l'annuaire
@@ -39,6 +39,15 @@ commerciale du fournisseur à partir du mail et de son historique.
 Le client HTTP ignore les proxys et redirections, valide
 l'adresse locale et les métadonnées du modèle. Une sortie invalide ou tronquée,
 un modèle absent ou une indisponibilité n'entraîne aucune bascule vers OpenAI.
+
+`JevClassifier` appelle `POST /v1/systemone` de TypeSafe avec `httpx`. Jev renvoie des
+probabilités sur une liste fermée : une seule question `choice` propose les phases
+permises par le rôle de l'annuaire (`SUPPLIER_PHASES`, `CLIENT_PHASES` ou, rôle
+inconnu, `UNKNOWN_ROLE_PHASES`). La probabilité d'une catégorie est la somme de ses
+phases et sert de confiance ; un client reçoit `Correspondance` avec une confiance de
+1. Le résumé et la raison sont écrits localement à partir de la phase retenue. Les
+codes HTTP sont traduits en messages locaux (`JevError`) sans reprendre le corps de
+réponse ; un seul nouvel essai est fait pour 408, 429, 5xx, délai ou coupure réseau.
 
 `AiClassifier` utilise Responses API et `AiMailClassification` comme contrat de sortie.
 GPT-6 Astra est le défaut, avec `reasoning.effort=low`, `store=False` et une limite de

@@ -10,6 +10,7 @@ SETTINGS_FIELDS = (
     "ollama_base_url",
     "ollama_model",
     "ollama_timeout_seconds",
+    "jev_model",
     "ai_include_body_excerpt",
     "privacy_mask_phone_numbers",
 )

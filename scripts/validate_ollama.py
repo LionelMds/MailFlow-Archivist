@@ -24,6 +24,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from mailflow.classifier.ollama_classifier import OllamaClassifier
+from mailflow.classifier.pipeline import AiClassifierProtocol
 from mailflow.classifier.routing_context import ResolvedCounterparty, build_routing_context
 from mailflow.config import (
     DEFAULT_OLLAMA_BASE_URL,
@@ -103,7 +104,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def evaluate_case(classifier: OllamaClassifier, case: SyntheticCase) -> dict[str, Any]:
+def evaluate_case(classifier: AiClassifierProtocol, case: SyntheticCase) -> dict[str, Any]:
     counterparty = ResolvedCounterparty(**case.counterparty.model_dump())
     context = build_routing_context(
         case.mail, counterparty, history=case.history, verified_examples=[]

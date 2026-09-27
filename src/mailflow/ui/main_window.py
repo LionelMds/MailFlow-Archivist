@@ -42,6 +42,7 @@ UI_TEXT = {
     "save_settings": "Enregistrer les réglages",
     "save_openai_key": "Enregistrer la clé",
     "test_openai_key": "Tester IA",
+    "test_jev_key": "Tester Jev",
     "check_updates": "Rechercher une mise à jour",
     "archive_selection": "Archiver la sélection",
     "archive": "Archiver",
@@ -180,14 +181,19 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     from mailflow import __version__
     from mailflow.classifier.ai_classifier import AiClassifier
+    from mailflow.classifier.jev_classifier import JevClassifier
     from mailflow.classifier.ollama_classifier import OllamaClassifier
     from mailflow.config import (
         AI_MODEL_OPTIONS,
         DEFAULT_AI_MODEL,
+        DEFAULT_JEV_MODEL,
         DEFAULT_OLLAMA_BASE_URL,
         DEFAULT_OLLAMA_MODEL,
+        JEV_MODEL_OPTIONS,
+        get_jev_api_key,
         get_openai_api_key,
         save_settings,
+        set_jev_api_key,
         set_openai_api_key,
     )
     from mailflow.core.app_controller import (
@@ -611,6 +617,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     ai_provider_combo = QComboBox()
     ai_provider_combo.addItem("OpenAI — API", "openai")
     ai_provider_combo.addItem("Ollama — IA locale sur ce PC", "ollama")
+    ai_provider_combo.addItem("Jev (TypeSafe) — API de classification", "jev")
     set_combo_value_by_data(ai_provider_combo, settings.ai_provider)
     grid.addWidget(ai_provider_combo, 2, 1)
     ai_model_label = QLabel("Modèle OpenAI")
@@ -679,21 +686,53 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     ollama_status.setWordWrap(True)
     ollama_test_layout.addWidget(ollama_status)
     grid.addWidget(ollama_test_widget, 7, 1)
+    jev_model_label = QLabel("Modèle Jev")
+    grid.addWidget(jev_model_label, 8, 0)
+    jev_model_input = QComboBox()
+    jev_model_input.setEditable(True)
+    jev_model_input.addItems(list(JEV_MODEL_OPTIONS))
+    set_combo_value_by_text(jev_model_input, settings.jev_model)
+    jev_model_input.setToolTip(
+        "jev-latest suit la dernière version de Jev. Le test affiche le modèle qui a "
+        "répondu : saisir ce nom fige la version."
+    )
+    grid.addWidget(jev_model_input, 8, 1)
+    jev_key_label = QLabel("Clé API Jev (TypeSafe)")
+    grid.addWidget(jev_key_label, 9, 0)
+    jev_key_widget = QWidget()
+    jev_key_layout = QHBoxLayout(jev_key_widget)
+    jev_key_layout.setContentsMargins(0, 0, 0, 0)
+    jev_key_input = QLineEdit()
+    jev_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+    jev_key_input.setPlaceholderText("Coller la clé de console.typesafe.ai puis enregistrer")
+    save_jev_key_button = QPushButton(UI_TEXT["save_openai_key"])
+    test_jev_key_button = QPushButton(UI_TEXT["test_jev_key"])
+    test_jev_key_button.setToolTip("Classer un mail fictif avec Jev pour vérifier la clé.")
+    jev_key_status = QLabel()
+    jev_key_layout.addWidget(jev_key_input)
+    jev_key_layout.addWidget(save_jev_key_button)
+    jev_key_layout.addWidget(test_jev_key_button)
+    jev_key_fields = QWidget()
+    jev_key_fields_layout = QVBoxLayout(jev_key_fields)
+    jev_key_fields_layout.setContentsMargins(0, 0, 0, 0)
+    jev_key_fields_layout.addWidget(jev_key_widget)
+    jev_key_fields_layout.addWidget(jev_key_status)
+    grid.addWidget(jev_key_fields, 9, 1)
     ai_provider_hint = QLabel()
     ai_provider_hint.setWordWrap(True)
     ai_provider_hint.setProperty("role", "muted")
-    grid.addWidget(ai_provider_hint, 8, 1)
+    grid.addWidget(ai_provider_hint, 10, 1)
     ai_include_body_checkbox = QCheckBox("Inclure l'extrait nettoyé du corps dans l'analyse IA")
     ai_include_body_checkbox.setChecked(settings.ai_include_body_excerpt)
-    grid.addWidget(ai_include_body_checkbox, 9, 1)
+    grid.addWidget(ai_include_body_checkbox, 11, 1)
     privacy_phone_checkbox = QCheckBox("Masquer les numéros de téléphone avant l'analyse IA")
     privacy_phone_checkbox.setChecked(settings.privacy_mask_phone_numbers)
-    grid.addWidget(privacy_phone_checkbox, 10, 1)
-    grid.addWidget(QLabel("Horaires des rappels"), 11, 0)
+    grid.addWidget(privacy_phone_checkbox, 12, 1)
+    grid.addWidget(QLabel("Horaires des rappels"), 13, 0)
     review_reminder_times_input = QLineEdit(format_reminder_times(settings.review_reminder_times))
     review_reminder_times_input.setPlaceholderText("09:00, 14:00, 16:30")
-    grid.addWidget(review_reminder_times_input, 11, 1)
-    grid.addWidget(QLabel("Mises à jour"), 12, 0)
+    grid.addWidget(review_reminder_times_input, 13, 1)
+    grid.addWidget(QLabel("Mises à jour"), 14, 0)
     update_widget = QWidget()
     update_layout = QHBoxLayout(update_widget)
     update_layout.setContentsMargins(0, 0, 0, 0)
@@ -703,10 +742,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     update_layout.addWidget(check_updates_button)
     update_layout.addWidget(update_status)
     update_layout.addStretch(1)
-    grid.addWidget(update_widget, 12, 1)
+    grid.addWidget(update_widget, 14, 1)
     save_settings_button = QPushButton(UI_TEXT["save_settings"])
     save_settings_button.setProperty("role", "primary")
-    grid.addWidget(save_settings_button, 13, 1)
+    grid.addWidget(save_settings_button, 15, 1)
     settings_layout.addWidget(config)
     settings_layout.addStretch(1)
     settings_scroll_area = QScrollArea()
@@ -873,25 +912,44 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     def update_openai_key_status(*, valid: bool | None = None) -> None:
         set_openai_key_status(has_key=has_openai_api_key(), valid=valid)
 
-    def update_ai_provider_fields() -> None:
-        local = ai_provider_combo.currentData() == "ollama"
-        for widget in (ai_model_label, ai_model_input, openai_key_label, key_fields):
-            widget.setVisible(not local)
-            widget.setEnabled(not local)
-        for widget in (
-            ollama_model_label, ollama_models_widget, ollama_url_label,
-            ollama_address_widget, ollama_test_widget,
-        ):
-            widget.setVisible(local)
-            widget.setEnabled(local)
-        ai_provider_hint.setText(
-            "Les mails sont analysés sur ce PC. Aucune clé API requise ; aucun envoi à OpenAI. "
-            "Ollama doit être démarré et le modèle installé."
-            if local else
-            "Les informations utilisées pour le classement sont envoyées à l'API OpenAI."
+    def has_jev_api_key() -> bool:
+        return get_jev_api_key() is not None
+
+    def set_jev_key_status(
+        *,
+        has_key: bool,
+        valid: bool | None = None,
+        testing: bool = False,
+    ) -> None:
+        jev_key_status.setText(
+            openai_key_status_text(has_key=has_key, valid=valid, testing=testing)
         )
-        if not local:
+        jev_key_status.setStyleSheet(
+            openai_key_status_style(has_key=has_key, valid=valid, testing=testing)
+        )
+
+    def update_jev_key_status(*, valid: bool | None = None) -> None:
+        set_jev_key_status(has_key=has_jev_api_key(), valid=valid)
+
+    def update_ai_provider_fields() -> None:
+        provider = str(ai_provider_combo.currentData())
+        widgets_by_provider: dict[str, tuple[Any, ...]] = {
+            "openai": (ai_model_label, ai_model_input, openai_key_label, key_fields),
+            "ollama": (
+                ollama_model_label, ollama_models_widget, ollama_url_label,
+                ollama_address_widget, ollama_test_widget,
+            ),
+            "jev": (jev_model_label, jev_model_input, jev_key_label, jev_key_fields),
+        }
+        for widget_provider, widgets in widgets_by_provider.items():
+            for widget in widgets:
+                widget.setVisible(widget_provider == provider)
+                widget.setEnabled(widget_provider == provider)
+        ai_provider_hint.setText(ai_provider_hint_text(provider))
+        if provider == "openai":
             update_openai_key_status()
+        elif provider == "jev":
+            update_jev_key_status()
 
     update_ai_provider_fields()
 
@@ -1886,6 +1944,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 clean_optional_text(ollama_base_url_input.text()) or DEFAULT_OLLAMA_BASE_URL
             ),
             "ollama_timeout_seconds": ollama_timeout_input.value(),
+            "jev_model": clean_optional_text(jev_model_input.currentText()) or DEFAULT_JEV_MODEL,
             "ai_include_body_excerpt": ai_include_body_checkbox.isChecked(),
             "privacy_mask_phone_numbers": privacy_phone_checkbox.isChecked(),
             "review_reminder_times": reminder_times,
@@ -1949,6 +2008,48 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             test_openai_key_button.setEnabled(True)
         set_openai_key_status(has_key=True, valid=result.ok)
         append_log(f"Test OpenAI: {result.message}")
+
+    def save_jev_key_from_input() -> None:
+        if operation_in_progress or ai_provider_combo.currentData() != "jev":
+            return
+        api_key = clean_optional_text(jev_key_input.text())
+        if api_key is None:
+            append_log("Aucune nouvelle cle Jev a enregistrer.")
+            return
+        try:
+            set_jev_api_key(api_key)
+            apply_current_ai_settings()
+            jev_key_input.clear()
+            update_jev_key_status(valid=None)
+            append_log("Cle Jev enregistree dans le coffre du systeme.")
+        except Exception as exc:
+            append_log(f"Erreur enregistrement cle Jev: {exc}")
+
+    @exclusive_operation
+    def test_jev_key_from_input() -> None:
+        if ai_provider_combo.currentData() != "jev":
+            return
+        api_key = clean_optional_text(jev_key_input.text()) or get_jev_api_key()
+        if api_key is None:
+            set_jev_key_status(has_key=False, valid=False)
+            append_log("Aucune cle Jev a tester.")
+            return
+        model = clean_optional_text(jev_model_input.currentText()) or DEFAULT_JEV_MODEL
+        set_jev_key_status(has_key=True, testing=True)
+        QApplication.processEvents()
+        try:
+            result = run_with_event_loop(
+                JevClassifier(
+                    api_key=api_key, model=model,
+                    timeout_seconds=settings.jev_timeout_seconds,
+                ).check_connection
+            )
+        except Exception:
+            set_jev_key_status(has_key=True, valid=False)
+            append_log("Test Jev impossible.")
+            return
+        set_jev_key_status(has_key=True, valid=result.ok)
+        append_log(f"Test Jev : {result.message}")
 
     def ollama_classifier_from_input() -> OllamaClassifier:
         return OllamaClassifier(
@@ -2083,9 +2184,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     ) -> list[PreviewRow]:
         nonlocal active_controller
         update_projects_root()
-        if (settings.ai_mode != AiMode.DISABLED and settings.ai_provider == "openai"
-                and not has_openai_api_key()):
-            append_log("Mode IA actif sans cle OpenAI: les lignes resteront a verifier.")
+        if settings.ai_mode != AiMode.DISABLED:
+            if settings.ai_provider == "openai" and not has_openai_api_key():
+                append_log("Mode IA actif sans cle OpenAI: les lignes resteront a verifier.")
+            elif settings.ai_provider == "jev" and not has_jev_api_key():
+                append_log("Mode IA actif sans cle Jev: les lignes resteront a verifier.")
         if not controller_was_injected:
             active_controller = build_default_controller(settings)
             enable_responsive_ai()
@@ -2583,6 +2686,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     )
     save_openai_key_button.clicked.connect(save_openai_key_from_input)
     test_openai_key_button.clicked.connect(test_openai_key_from_input)
+    save_jev_key_button.clicked.connect(save_jev_key_from_input)
+    test_jev_key_button.clicked.connect(test_jev_key_from_input)
     ai_provider_combo.currentIndexChanged.connect(update_ai_provider_fields)
     ollama_model_input.currentTextChanged.connect(reset_ollama_status)
     ollama_base_url_input.textChanged.connect(reset_ollama_status)
@@ -2670,6 +2775,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_openai_key_status = openai_key_status
     dynamic_window.mailflow_save_openai_key_button = save_openai_key_button
     dynamic_window.mailflow_test_openai_key_button = test_openai_key_button
+    dynamic_window.mailflow_jev_model_input = jev_model_input
+    dynamic_window.mailflow_jev_key_input = jev_key_input
+    dynamic_window.mailflow_jev_key_status = jev_key_status
+    dynamic_window.mailflow_save_jev_key_button = save_jev_key_button
+    dynamic_window.mailflow_test_jev_key_button = test_jev_key_button
     dynamic_window.mailflow_check_updates_button = check_updates_button
     dynamic_window.mailflow_update_status = update_status
     dynamic_window.mailflow_ai_include_body_checkbox = ai_include_body_checkbox
@@ -2731,6 +2841,21 @@ def ai_mode_label(mode: AiMode) -> str:
 
 def interlocutor_label(interlocutor: InterlocutorType) -> str:
     return interlocutor.value
+
+
+def ai_provider_hint_text(provider: str) -> str:
+    if provider == "ollama":
+        return (
+            "Les mails sont analysés sur ce PC. Aucune clé API requise ; aucun envoi à OpenAI. "
+            "Ollama doit être démarré et le modèle installé."
+        )
+    if provider == "jev":
+        return (
+            "Les informations utilisées pour le classement sont envoyées à l'API Jev de "
+            "TypeSafe. Jev choisit la phase commerciale parmi des options fixes et donne "
+            "ses probabilités ; il ne rédige pas de texte. Aucun envoi à OpenAI."
+        )
+    return "Les informations utilisées pour le classement sont envoyées à l'API OpenAI."
 
 
 def openai_key_status_text(

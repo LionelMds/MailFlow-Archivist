@@ -10,10 +10,11 @@ from typing import Protocol, cast
 
 from mailflow.classifier.ai_classifier import AiClassifier
 from mailflow.classifier.decision_engine import destination_for
+from mailflow.classifier.jev_classifier import JevClassifier
 from mailflow.classifier.ollama_classifier import OllamaClassifier
 from mailflow.classifier.pipeline import ClassificationPipeline, action_from_decision
 from mailflow.classifier.routing_context import primary_external_email
-from mailflow.config import AppSettings, get_openai_api_key
+from mailflow.config import AppSettings, get_jev_api_key, get_openai_api_key
 from mailflow.core.archive_actions import (
     mark_rows_archivable,
     mark_rows_ignored,
@@ -863,7 +864,10 @@ class OutlookAppController(AppController):
         return self.outlook_client.list_root_folder_paths(account_identifier)
 
 
-def build_ai_classifier(settings: AppSettings) -> AiClassifier | OllamaClassifier | None:
+def build_ai_classifier(
+    settings: AppSettings,
+) -> AiClassifier | OllamaClassifier | JevClassifier | None:
+    # Only the selected engine is built, and only its own key is read.
     if settings.ai_mode == AiMode.DISABLED:
         return None
     if settings.ai_provider == "ollama":
@@ -871,6 +875,15 @@ def build_ai_classifier(settings: AppSettings) -> AiClassifier | OllamaClassifie
             base_url=settings.ollama_base_url,
             model=settings.ollama_model,
             timeout_seconds=settings.ollama_timeout_seconds,
+        )
+    if settings.ai_provider == "jev":
+        jev_key = get_jev_api_key()
+        if not jev_key:
+            return None
+        return JevClassifier(
+            api_key=jev_key,
+            model=settings.jev_model,
+            timeout_seconds=settings.jev_timeout_seconds,
         )
     api_key = get_openai_api_key()
     if not api_key:

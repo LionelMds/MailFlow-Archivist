@@ -983,6 +983,95 @@ def test_local_ai_test_is_responsive_and_never_reads_key_or_uses_openai(
     app.processEvents()
 
 
+def test_jev_settings_key_and_test_never_touch_openai(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication, QLineEdit
+
+    from mailflow import config
+    from mailflow.classifier import ai_classifier, jev_classifier
+    from mailflow.classifier.ai_classifier import AiConnectionCheck
+    from mailflow.config import AppPaths, load_settings
+    from mailflow.core import app_controller
+    from mailflow.ui.background_call import ResponsiveAiClassifier
+    from mailflow.ui.main_window import MainWindow
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("Jev mode must not access OpenAI or its key")
+
+    key_store: dict[str, str | None] = {"key": None}
+    built: list[dict[str, Any]] = []
+
+    def make_jev(**kwargs: Any) -> Any:
+        built.append(kwargs)
+        return SimpleNamespace(
+            **kwargs,
+            check_connection=lambda: AiConnectionCheck(
+                ok=True, message="Connexion Jev OK (jev-2026-09-15 : Commande, 97%).",
+            ),
+        )
+
+    monkeypatch.setattr(config, "get_openai_api_key", forbidden)
+    monkeypatch.setattr(app_controller, "get_openai_api_key", forbidden)
+    monkeypatch.setattr(ai_classifier, "AiClassifier", forbidden)
+    monkeypatch.setattr(app_controller, "AiClassifier", forbidden)
+    monkeypatch.setattr(config, "get_jev_api_key", lambda: key_store["key"])
+    monkeypatch.setattr(app_controller, "get_jev_api_key", lambda: key_store["key"])
+    monkeypatch.setattr(config, "set_jev_api_key", lambda key: key_store.update(key=key))
+    monkeypatch.setattr(jev_classifier, "JevClassifier", make_jev)
+    monkeypatch.setattr(app_controller, "JevClassifier", make_jev)
+    app = QApplication.instance() or QApplication([])
+    settings = AppSettings(paths=AppPaths(data_dir=tmp_path), ai_provider="jev")
+    controller = FakeController()
+    pipeline = SimpleNamespace(ai_classifier=None, ai_mode=AiMode.ALL)
+    cast(Any, controller).preview_pipeline = pipeline
+    window = MainWindow(settings, controller=controller)
+
+    assert window.mailflow_ai_provider_combo.currentIndex() == 2
+    assert window.mailflow_ai_provider_combo.currentData() == "jev"
+    assert "TypeSafe" in window.mailflow_ai_provider_hint.text()
+    assert "Aucun envoi à OpenAI" in window.mailflow_ai_provider_hint.text()
+    assert window.mailflow_jev_key_input.isEnabled()
+    assert window.mailflow_jev_key_input.echoMode() == QLineEdit.EchoMode.Password
+    assert not window.mailflow_openai_key_input.isEnabled()
+    assert window.mailflow_ai_model_input.isHidden()
+    assert not window.mailflow_ollama_model_input.isEnabled()
+    assert window.mailflow_jev_key_status.text() == "Aucune cle"
+
+    window.mailflow_jev_model_input.setCurrentText("jev-2026-09-15")
+    window.mailflow_save_settings_button.click()
+    assert settings.ai_provider == "jev"
+    assert settings.jev_model == "jev-2026-09-15"
+    assert pipeline.ai_classifier is None
+
+    window.mailflow_jev_key_input.setText("  ts-test-key  ")
+    window.mailflow_save_jev_key_button.click()
+    assert key_store["key"] == "ts-test-key"
+    assert window.mailflow_jev_key_input.text() == ""
+    assert window.mailflow_jev_key_status.text() == "Cle enregistree (non testee)"
+    assert isinstance(pipeline.ai_classifier, ResponsiveAiClassifier)
+    assert built[-1] == {
+        "api_key": "ts-test-key", "model": "jev-2026-09-15", "timeout_seconds": 20.0,
+    }
+
+    window.mailflow_test_jev_key_button.click()
+    assert built[-1]["model"] == "jev-2026-09-15"
+    assert window.mailflow_jev_key_status.text() == "Cle valide - IA OK"
+    assert "Connexion Jev OK" in window.mailflow_logs.toPlainText()
+    assert "ts-test-key" not in window.mailflow_logs.toPlainText()
+
+    reloaded = load_settings(settings.paths.config_file)
+    assert reloaded.ai_provider == "jev"
+    assert reloaded.jev_model == "jev-2026-09-15"
+    window.close()
+    second_window = MainWindow(reloaded, controller=FakeController())
+    assert second_window.mailflow_ai_provider_combo.currentData() == "jev"
+    assert second_window.mailflow_jev_model_input.currentText() == "jev-2026-09-15"
+    second_window.close()
+    app.processEvents()
+
+
 @pytest.mark.parametrize("models", [["qwen3.5:4b", "custom:4b"], [], ["another:4b"]])
 def test_refresh_local_models_preserves_selection_and_reports_installed_models(
     models: list[str], monkeypatch: pytest.MonkeyPatch,

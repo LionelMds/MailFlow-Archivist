@@ -8,10 +8,11 @@ Examples (Windows, from the repository, with Outlook open):
     .venv312\\Scripts\\python.exe scripts/evaluate_ai.py
     .venv312\\Scripts\\python.exe scripts/evaluate_ai.py --run --provider ollama --limit 50
     .venv312\\Scripts\\python.exe scripts/evaluate_ai.py --run --provider openai --limit 50
+    .venv312\\Scripts\\python.exe scripts/evaluate_ai.py --run --provider jev --limit 50
 
 Without --run nothing is read from Outlook and no AI is called: only the number of
-reference mails is shown. With --provider openai, the mails are sent to OpenAI exactly
-as during a normal classification, and the calls are billed to your account.
+reference mails is shown. With --provider openai or jev, the mails are sent to that
+API exactly as during a normal classification, and the calls are billed to your account.
 Nothing is archived, moved, renamed or recategorised; the report written with
 --output contains identifiers and categories only, never subjects or bodies.
 """
@@ -50,7 +51,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--run", action="store_true", help="Lire Outlook et appeler l'IA.")
     parser.add_argument(
-        "--provider", choices=("openai", "ollama"),
+        "--provider", choices=("openai", "ollama", "jev"),
         help="Moteur a mesurer (par defaut celui des reglages).",
     )
     parser.add_argument("--model", help="Modele a mesurer (par defaut celui des reglages).")
@@ -62,11 +63,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=1, help="Graine du tirage, pour comparer.")
     parser.add_argument(
         "--price-input", type=float,
-        help="Prix OpenAI par million de tokens en entree, pour estimer le cout.",
+        help="Prix par million de tokens en entree, pour estimer le cout.",
     )
     parser.add_argument(
         "--price-output", type=float,
-        help="Prix OpenAI par million de tokens en sortie, pour estimer le cout.",
+        help="Prix par million de tokens en sortie, pour estimer le cout.",
     )
     parser.add_argument(
         "--output", type=Path, nargs="?", const=REPOSITORY_ROOT / "build" / "ai-evaluation.json",
@@ -138,17 +139,20 @@ def main() -> int:
     if args.provider:
         updates["ai_provider"] = args.provider
     provider = args.provider or settings.ai_provider
+    model_field = {"ollama": "ollama_model", "jev": "jev_model"}.get(provider, "ai_model")
     if args.model:
-        updates["ollama_model" if provider == "ollama" else "ai_model"] = args.model
+        updates[model_field] = args.model
     settings = settings.model_copy(update=updates)
     classifier = build_ai_classifier(settings)
     if classifier is None:
-        print("Moteur IA indisponible : verifier la cle OpenAI dans les reglages.")
+        api = "Jev" if provider == "jev" else "OpenAI"
+        print(f"Moteur IA indisponible : verifier la cle {api} dans les reglages.")
         return 2
-    model = settings.ollama_model if provider == "ollama" else settings.ai_model
+    model = str(getattr(settings, model_field))
     engine = f"{provider} / {model}"
-    if provider == "openai":
-        print(f"Les {len(cases)} mails vont etre envoyes a OpenAI ({model}); appels factures.")
+    if provider in {"openai", "jev"}:
+        api = "Jev (TypeSafe)" if provider == "jev" else "OpenAI"
+        print(f"Les {len(cases)} mails vont etre envoyes a {api} ({model}); appels factures.")
 
     fetch, projects = outlook_fetcher(settings.selected_outlook_account or "")
     projects.update({case.entry_id: case.project_number for case in cases})

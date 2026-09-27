@@ -25,8 +25,10 @@ La CI (`.github/workflows/ci.yml`) lance ces trois contrôles sur Windows et mac
   L'annuaire fixe l'entreprise et son rôle ; l'IA ne choisit que la phase commerciale.
 - Un client va toujours en Correspondance, un fournisseur jamais.
 - Aucun classement de secours par mots-clés ; un échec IA laisse le mail à vérifier.
-- Une panne Ollama ne bascule jamais vers OpenAI.
-- La clé OpenAI reste dans `keyring`, jamais dans `config.json` ni dans les logs.
+- Une panne d'un moteur (OpenAI, Ollama, Jev) ne bascule jamais vers un autre.
+- Les clés OpenAI et Jev restent dans `keyring`, jamais dans `config.json` ni dans les logs.
+- Jev (`classifier/jev_classifier.py`) ne reçoit que les phases permises par le rôle de
+  l'annuaire ; la confiance est la somme des probabilités des phases d'une catégorie.
 
 ## Conventions
 

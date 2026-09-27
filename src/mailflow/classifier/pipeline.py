@@ -9,6 +9,7 @@ from mailflow.classifier.decision_engine import (
     ArchiveState,
     decide_archive,
 )
+from mailflow.classifier.jev_classifier import JevError
 from mailflow.classifier.ollama_classifier import OllamaError
 from mailflow.classifier.routing_context import (
     ResolvedCounterparty,
@@ -206,7 +207,7 @@ class ClassificationPipeline:
             # API exception strings can contain request bodies or credentials.
             # Display only locally authored messages; leave the mail in review.
             status_code = getattr(exc, "status_code", None)
-            if isinstance(exc, OllamaError):
+            if isinstance(exc, OllamaError | JevError):
                 error = str(exc)
             elif status_code in {401, 403}:
                 error = "Accès OpenAI refusé : vérifiez la clé et l'accès au modèle dans Réglages."

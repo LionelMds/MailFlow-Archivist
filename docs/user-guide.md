@@ -60,6 +60,16 @@ mails restent à vérifier. Ouvrir Ollama et refaire le test. Le guide
 [Ollama](ollama.md) explique l'installation et les diagnostics.
 Pour revenir à l'API, choisir **OpenAI (API)** ; son modèle et sa clé sont conservés.
 
+## Choisir Jev (TypeSafe)
+
+Dans **Réglages**, choisir **Jev (TypeSafe) — API de classification**, coller la clé
+créée sur la console TypeSafe, cliquer sur **Enregistrer la clé**, puis **Tester Jev**
+et enfin **Enregistrer les réglages**. Jev choisit la phase commerciale parmi les
+options permises par le rôle de l'entreprise et donne ses probabilités ; l'aperçu du
+mail affiche la phase retenue et la répartition entre catégories. Sous 80 % de
+confiance, le mail reste à vérifier. Le guide [Jev](jev.md) détaille le fonctionnement
+et la mesure de précision sur vos propres mails.
+
 ## Hierarchie des dossiers
 
 Apres la classification, MailFlow propose une destination par entreprise

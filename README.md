@@ -29,7 +29,8 @@ Cette premiere tranche met en place :
   puis entreprise ;
 - annuaire SQLite evolutif alimente par les domaines et contacts Outlook ;
 - previsualisateur d'arborescence avec renommage et fusion avant archivage ;
-- choix OpenAI ou Ollama local dans l'interface, clé OpenAI dans `keyring` et test visuel ;
+- choix OpenAI, Ollama local ou Jev (TypeSafe) dans l'interface, clés API dans `keyring`
+  et test visuel ;
 - recherche de mises a jour depuis l'application avec lancement de l'installateur ;
 - logo officiel MailFlow utilise dans l'application, l'icone Windows et l'app macOS ;
 - resume projet automatique dans l'inspecteur et dans le journal HTML ;
@@ -114,12 +115,22 @@ L'annuaire fixe l'entreprise et son role global. L'IA choisit uniquement entre
 et les corrections manuelles verifiees lui sont transmis comme contexte. Une
 correction apprend une decision complete, jamais un terme isole.
 
-Le moteur se choisit dans `Réglages` : **OpenAI (API)** ou **Ollama (local)**.
+Le moteur se choisit dans `Réglages` : **OpenAI (API)**, **Ollama (local)** ou
+**Jev (TypeSafe)**.
 Ollama utilise un modèle installé sur le PC sans clé API ; les mails restent sur cette
 machine. Le modèle local proposé est **Qwen3.5 4B** (`qwen3.5:4b`). Le bouton
 d'actualisation liste les modèles installés et le test local classe un mail fictif.
 Une panne locale ne déclenche jamais un appel OpenAI. Les réglages de chaque moteur
 sont conservés séparément. Voir [l'installation locale](docs/ollama.md).
+
+**Jev** est un modèle de décision : il ne rédige rien et donne une probabilité pour
+chaque option d'une liste fermée. MailFlow lui propose uniquement les phases permises
+par le rôle de l'annuaire (consultation, offre, commande, suivi, facture, réclamation
+pour un fournisseur), puis additionne les probabilités par catégorie : cette somme est
+la confiance comparée au seuil de vérification. Un client reste en `Correspondance`.
+La clé TypeSafe est enregistrée dans `keyring` et le bouton `Tester Jev` classe un
+mail fictif. Une panne Jev laisse le mail à vérifier, sans bascule vers un autre
+moteur. Voir [le guide Jev](docs/jev.md).
 
 Pour OpenAI, le modèle par défaut est **GPT-6 Astra** (`gpt-6-astra`), appelé via Responses API
 avec une sortie structurée stricte et un effort de raisonnement `low`. Le délai réseau
@@ -155,10 +166,12 @@ pour ne pas souffler la reponse. Aucun contenu de mail n'est stocke pour cette m
 .venv312\Scripts\python.exe scripts/evaluate_ai.py
 .venv312\Scripts\python.exe scripts/evaluate_ai.py --run --provider ollama --limit 50 --output
 .venv312\Scripts\python.exe scripts/evaluate_ai.py --run --provider openai --limit 50 --output
+.venv312\Scripts\python.exe scripts/evaluate_ai.py --run --provider jev --limit 50 --output
 ```
 
-Pour estimer le cout OpenAI, ajouter `--price-input` et `--price-output` avec les tarifs
-du modele par million de tokens, tels qu'affiches sur la page de prix d'OpenAI.
+Pour estimer le cout OpenAI ou Jev, ajouter `--price-input` et `--price-output` avec les
+tarifs du modele par million de tokens, tels qu'affiches par le fournisseur (Jev ne
+facture pas les tokens de sortie : `--price-output 0`).
 
 Sans `--run`, le script indique seulement le nombre de mails de reference. Avec
 `--provider openai`, les mails sont envoyes a OpenAI comme lors d'un classement normal
