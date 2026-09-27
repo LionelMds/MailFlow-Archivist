@@ -1,5 +1,23 @@
 # Release
 
+## Version 0.12.0
+
+- rôle suggéré par Jev pour les entreprises inconnues, dans une nouvelle colonne de
+  l'onglet Annuaire, avec un bouton `Valider` par entreprise et `Valider les suggestions
+  sûres` pour toutes celles d'au moins 80 %, après confirmation ;
+- un rôle validé ou choisi dans l'Annuaire s'applique aussitôt aux mails, sans nouvel
+  appel à l'IA ; les corrections manuelles ne sont jamais modifiées ;
+- nouveau bouton `Actualiser les rôles des mails` (et `Plus` → `Actualiser les rôles
+  (sans IA)`) pour réappliquer l'annuaire à tout le lot ;
+- listes déroulantes à nouveau lisibles quand Windows est en mode sombre : MailFlow
+  garde toujours son thème clair ;
+- la liste de l'Annuaire garde sa position de défilement et sa sélection après un
+  changement de rôle ;
+- la molette de la souris fait défiler les tableaux au lieu de changer par erreur la
+  valeur d'une liste déroulante ;
+- les dossiers renommés ou fusionnés dans l'Arborescence sont conservés quand les rôles
+  de l'annuaire sont réappliqués.
+
 ## Version 0.11.0
 
 - nouveau moteur de classification **Jev (TypeSafe)**, au choix avec OpenAI et Ollama ;

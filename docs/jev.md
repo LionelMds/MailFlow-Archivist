@@ -54,6 +54,35 @@ Comme Jev ne rédige rien, MailFlow construit lui-même les textes affichés :
 
 Aucun extrait du mail n'est surligné comme preuve : Jev ne cite pas le texte.
 
+## Rôles suggérés et application immédiate
+
+Un mail n'est archivé automatiquement que si l'annuaire connaît le rôle de l'entreprise.
+Pour une entreprise encore inconnue, le même appel à Jev pose trois questions de plus :
+
+- **quel est son rôle ?** fournisseur, client, ou ni l'un ni l'autre ;
+- **quelle serait la phase si c'est un fournisseur ?**
+- **quelle serait la nature de l'échange si c'est un client ?**
+
+L'onglet **Annuaire** affiche alors une colonne **Rôle suggéré**, par exemple
+`Fournisseur · 96% · 12 mails` : c'est la moyenne des estimations sur les mails de cette
+entreprise. Rien n'est enregistré sans vous :
+
+- **Valider**, sur la ligne, enregistre le rôle de cette entreprise ;
+- **Valider les suggestions sûres** enregistre, après confirmation, toutes les
+  suggestions fournisseur ou client d'au moins 80 %.
+
+Un rôle validé, ou choisi dans la colonne **Rôle global**, s'applique **aussitôt** aux
+mails affichés, sans nouvel appel à Jev : MailFlow reprend la réponse déjà donnée pour ce
+rôle, puis les mêmes contrôles (entreprise confirmée, confiance d'au moins 80 %). Les
+mails sûrs passent en **Prêt** dans le bon dossier ; les autres restent à vérifier. Vos
+corrections manuelles ne sont jamais modifiées.
+
+Le bouton **Actualiser les rôles des mails** (aussi dans **Plus** → *Actualiser les rôles
+(sans IA)*) réapplique l'annuaire à tous les mails affichés, sans appeler l'IA : utile
+après avoir modifié plusieurs rôles. **Reclasser avec l'IA** reste disponible pour les
+mails analysés avant cette version, ou avec un autre moteur, qui n'ont pas de réponse
+par rôle.
+
 ## Erreurs et réseau
 
 MailFlow appelle directement `https://api.typesafe.ai/v1/systemone` avec `httpx`, déjà

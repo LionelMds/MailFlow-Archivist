@@ -29,6 +29,7 @@ from mailflow.models import (
     MailType,
     PreviewAction,
     PreviewRow,
+    RoleEstimate,
     RoutingCategory,
     RuleClassification,
     VerifiedRoutingExample,
@@ -149,7 +150,7 @@ class ClassificationPipeline:
         # Outlook's category proves that a mail was archived, but doesn't contain
         # its classification. Keep analysis for category-only historic archives.
         resolved = counterparty or resolve_counterparty(mail, self.organization_directory)
-        ai, ai_error = self._classify_with_ai(mail, resolved, history or [])
+        ai, ai_error, role_estimate = self._classify_with_ai(mail, resolved, history or [])
         rule = _neutral_rule()
         decision = decide_archive(
             mail,
@@ -165,7 +166,9 @@ class ClassificationPipeline:
             )
         row = PreviewRow(
             mail=mail,
-            classification=ClassificationResult(rule=rule, ai=ai, ai_error=ai_error),
+            classification=ClassificationResult(
+                rule=rule, ai=ai, ai_error=ai_error, role_estimate=role_estimate,
+            ),
             decision=decision,
             action=action_from_decision(
                 archive=decision.archive,
@@ -187,9 +190,9 @@ class ClassificationPipeline:
         mail: MailMetadata,
         counterparty: ResolvedCounterparty,
         history: list[dict[str, str]],
-    ) -> tuple[AiMailClassification | None, str | None]:
+    ) -> tuple[AiMailClassification | None, str | None, RoleEstimate | None]:
         if not should_call_ai(ai_mode=self.ai_mode) or self.ai_classifier is None:
-            return None, None
+            return None, None, None
         context = build_routing_context(
             mail,
             counterparty,
@@ -219,13 +222,23 @@ class ClassificationPipeline:
                 error = "Délai OpenAI dépassé : relancez l'analyse de ce mail."
             else:
                 error = "Analyse IA échouée : testez la connexion dans Réglages puis réessayez."
-            return None, error
+            return None, error, None
         guarded = apply_routing_guardrails(
             result,
             counterparty,
             confidence_threshold=self.decision_confidence_threshold,
         )
-        return guarded, None
+        return guarded, None, _role_estimate(self.ai_classifier, counterparty)
+
+
+def _role_estimate(
+    classifier: AiClassifierProtocol, counterparty: ResolvedCounterparty,
+) -> RoleEstimate | None:
+    """Read the engine's answers kept for a company whose role the directory lacks."""
+    if counterparty.role in {InterlocutorType.CLIENT, InterlocutorType.FOURNISSEUR}:
+        return None
+    estimate = getattr(classifier, "last_role_estimate", None)
+    return estimate if isinstance(estimate, RoleEstimate) else None
 
 
 def apply_routing_guardrails(

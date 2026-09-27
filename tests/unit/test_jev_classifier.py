@@ -430,3 +430,112 @@ def test_other_engines_never_read_the_jev_key(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr("mailflow.core.app_controller.get_openai_api_key", lambda: "sk-test")
     build_ai_classifier(AppSettings())
     build_ai_classifier(AppSettings(ai_provider="ollama"))
+
+
+def choice_answer(probabilities: dict[str, float]) -> dict[str, Any]:
+    return {
+        "type": "choice",
+        "choice": max(probabilities, key=lambda name: probabilities[name]),
+        "confidence": max(probabilities.values()),
+        "probabilities": probabilities,
+    }
+
+
+def unknown_company_response() -> dict[str, Any]:
+    response = jev_response(spread(UNKNOWN_ROLE_PHASES, suivi_commande=0.9))
+    response["answers"].update({
+        "role": choice_answer({"fournisseur": 0.94, "client": 0.04, "autre": 0.02}),
+        "phase_si_fournisseur": choice_answer(spread(SUPPLIER_PHASES, suivi_commande=0.92)),
+        "phase_si_client": choice_answer(spread(CLIENT_PHASES, execution=0.7)),
+    })
+    return response
+
+
+def test_unknown_company_gets_role_estimate_and_answers_for_each_role() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=unknown_company_response())
+
+    classifier, client = classifier_for(handle)
+    with client:
+        result = classifier.classify(
+            supplier_mail(), known_context=context("inconnu", "Gyso AG"),
+        )
+
+    questions = requests[0]["questions"]
+    assert set(questions) == {"phase", "role", "phase_si_fournisseur", "phase_si_client"}
+    assert set(questions["role"]["criteria"]) == {"fournisseur", "client", "autre"}
+    assert "Hypothèse" in questions["phase_si_fournisseur"]["instructions"]
+    assert set(questions["phase_si_fournisseur"]["criteria"]) == set(SUPPLIER_PHASES)
+    assert set(questions["phase_si_client"]["criteria"]) == set(CLIENT_PHASES)
+    # The displayed answer is unchanged: the role stays unknown until validated.
+    assert result.organization_role == "inconnu"
+    assert result.requires_review is True
+    estimate = classifier.last_role_estimate
+    assert estimate is not None
+    assert estimate.probabilities == pytest.approx(
+        {"fournisseur": 0.94, "client": 0.04, "autre": 0.02}
+    )
+    supplier = estimate.classifications["fournisseur"]
+    assert supplier.category == "Commande"
+    assert supplier.organization_role == "fournisseur"
+    assert supplier.confidence == pytest.approx(0.92 + 0.08 / 5 * 3)
+    assert supplier.organization_name == "Gyso AG"
+    assert estimate.classifications["client"].category == "Correspondance"
+
+
+def test_known_role_asks_a_single_question() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=jev_response(spread(SUPPLIER_PHASES, commande=0.9)))
+
+    classifier, client = classifier_for(handle)
+    with client:
+        classifier.classify(supplier_mail(), known_context=context("fournisseur"))
+
+    assert set(requests[0]["questions"]) == {"phase"}
+    assert classifier.last_role_estimate is None
+
+
+def test_invalid_optional_answers_do_not_block_the_classification() -> None:
+    response = unknown_company_response()
+    response["answers"]["role"]["probabilities"] = {"fournisseur": 2.0}
+    del response["answers"]["phase_si_client"]
+    classifier, client = classifier_for(lambda _request: httpx.Response(200, json=response))
+    with client:
+        result = classifier.classify(supplier_mail(), known_context=context("inconnu"))
+
+    assert result.category == "Commande"
+    estimate = classifier.last_role_estimate
+    assert estimate is not None
+    assert estimate.probabilities == {}
+    assert set(estimate.classifications) == {"fournisseur"}
+
+
+def test_pipeline_keeps_the_estimate_only_for_an_unknown_company(tmp_path: Path) -> None:
+    (tmp_path / "2025" / "2025-4893").mkdir(parents=True)
+    classifier, client = classifier_for(
+        lambda _request: httpx.Response(200, json=unknown_company_response()),
+    )
+    with client:
+        pipeline = ClassificationPipeline(projects_root=tmp_path, ai_classifier=classifier)
+        unknown = pipeline.preview_one(supplier_mail())
+    assert unknown.classification.role_estimate is not None
+    assert unknown.action == PreviewAction.REVIEW
+
+    classifier, client = classifier_for(
+        lambda _request: httpx.Response(200, json=jev_response(
+            spread(SUPPLIER_PHASES, commande=0.9),
+        )),
+    )
+    with client:
+        pipeline = ClassificationPipeline(
+            projects_root=tmp_path, ai_classifier=classifier,
+            organization_directory=SupplierDirectory(),
+        )
+        known = pipeline.preview_one(supplier_mail())
+    assert known.classification.role_estimate is None

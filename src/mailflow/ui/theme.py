@@ -1,6 +1,27 @@
 """Shared desktop presentation tokens; no Qt import is needed to inspect them."""
 
+from typing import Any
+
 from mailflow.resources import ASSETS_DIR
+
+# The stylesheet is designed for a light palette. Windows dark mode would otherwise
+# give unstyled parts, such as open drop-down lists, dark backgrounds under dark text.
+LIGHT_PALETTE = {
+    "Window": "#f3f6fa",
+    "WindowText": "#243247",
+    "Base": "#ffffff",
+    "AlternateBase": "#f7f9fc",
+    "Text": "#243247",
+    "PlaceholderText": "#728094",
+    "Button": "#ffffff",
+    "ButtonText": "#243247",
+    "BrightText": "#ffffff",
+    "Highlight": "#dbeafe",
+    "HighlightedText": "#173653",
+    "ToolTipBase": "#173653",
+    "ToolTipText": "#ffffff",
+    "Link": "#17618f",
+}
 
 APP_STYLESHEET = """
 QMainWindow, QWidget#workspace { background: #f3f6fa; color: #243247; }
@@ -22,6 +43,8 @@ QLineEdit:focus, QComboBox:focus { border: 2px solid #246b9e; padding: 5px 8px; 
 QComboBox::drop-down { width: 22px; border: none; }
 QComboBox::down-arrow { image: url("__CHEVRON_DOWN__"); width: 14px; height: 14px; }
 QComboBox:disabled { background: #edf1f5; color: #728094; }
+QComboBox QAbstractItemView { background: white; color: #243247; border: 1px solid #bccbda;
+    selection-background-color: #dbeafe; selection-color: #173653; outline: none; }
 QPushButton, QToolButton { background: white; color: #243247; border: 1px solid #bccbda;
     border-radius: 5px; padding: 7px 12px; min-height: 18px; }
 QPushButton:hover, QToolButton:hover { background: #eaf1f8; border-color: #718ba4; }
@@ -58,3 +81,21 @@ QMenu::item:selected { background: #dbeafe; }
 QMenu::item:disabled { color: #728094; }
 QToolTip { background: #173653; color: white; border: none; padding: 6px; }
 """.replace("__CHEVRON_DOWN__", (ASSETS_DIR / "chevron-down.svg").as_posix())
+
+
+def apply_light_theme(app: Any) -> None:
+    """Keep MailFlow light even when the operating system uses a dark theme."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QPalette
+
+    hints = app.styleHints()
+    if hasattr(hints, "setColorScheme"):  # Qt 6.8 and later
+        hints.setColorScheme(Qt.ColorScheme.Light)
+    palette = QPalette()
+    for role_name, color in LIGHT_PALETTE.items():
+        role = getattr(QPalette.ColorRole, role_name)
+        palette.setColor(QPalette.ColorGroup.All, role, QColor(color))
+    for role_name in ("WindowText", "Text", "ButtonText"):
+        role = getattr(QPalette.ColorRole, role_name)
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor("#728094"))
+    app.setPalette(palette)

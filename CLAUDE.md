@@ -29,6 +29,10 @@ La CI (`.github/workflows/ci.yml`) lance ces trois contrôles sur Windows et mac
 - Les clés OpenAI et Jev restent dans `keyring`, jamais dans `config.json` ni dans les logs.
 - Jev (`classifier/jev_classifier.py`) ne reçoit que les phases permises par le rôle de
   l'annuaire ; la confiance est la somme des probabilités des phases d'une catégorie.
+- `RoleEstimate` (rôle suggéré, réponse par rôle) ne classe jamais seul : seul un rôle
+  enregistré dans l'annuaire l'active ; une correction manuelle n'est jamais écrasée.
+- Le thème est clair par conception : `ui.theme.apply_light_theme` l'impose même quand
+  Windows est en mode sombre.
 
 ## Conventions
 

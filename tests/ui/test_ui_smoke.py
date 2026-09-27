@@ -1170,3 +1170,29 @@ def test_saving_invalid_local_address_keeps_settings_and_pipeline_unchanged(
     assert "non enregistrés" in window.mailflow_scan_status_label.text()
     window.close()
     app.processEvents()
+
+
+def test_light_theme_is_forced_for_dark_windows_sessions() -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow.ui.theme import APP_STYLESHEET, apply_light_theme
+
+    app = cast(QApplication, QApplication.instance() or QApplication([]))
+    original = app.palette()
+    dark = QPalette()
+    for role in (QPalette.ColorRole.Window, QPalette.ColorRole.Base):
+        dark.setColor(role, QColor("#202020"))
+    dark.setColor(QPalette.ColorRole.Text, QColor("#ffffff"))
+    app.setPalette(dark)
+    try:
+        apply_light_theme(app)
+        palette = app.palette()
+        assert palette.color(QPalette.ColorRole.Base).name() == "#ffffff"
+        assert palette.color(QPalette.ColorRole.Text).name() == "#243247"
+        assert palette.color(QPalette.ColorRole.Window).name() == "#f3f6fa"
+    finally:
+        app.setPalette(original)
+    # Open drop-down lists get explicit colors whatever the system theme.
+    assert "QComboBox QAbstractItemView { background: white; color: #243247;" in APP_STYLESHEET

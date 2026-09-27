@@ -130,7 +130,10 @@ pour un fournisseur), puis additionne les probabilités par catégorie : cette s
 la confiance comparée au seuil de vérification. Un client reste en `Correspondance`.
 La clé TypeSafe est enregistrée dans `keyring` et le bouton `Tester Jev` classe un
 mail fictif. Une panne Jev laisse le mail à vérifier, sans bascule vers un autre
-moteur. Voir [le guide Jev](docs/jev.md).
+moteur. Pour une entreprise sans rôle, Jev suggère fournisseur ou client dans l'onglet
+`Annuaire` ; un rôle validé s'applique aussitôt aux mails, sans nouvel appel à l'IA, et
+`Actualiser les rôles des mails` réapplique l'annuaire à tout le lot. Voir
+[le guide Jev](docs/jev.md).
 
 Pour OpenAI, le modèle par défaut est **GPT-6 Astra** (`gpt-6-astra`), appelé via Responses API
 avec une sortie structurée stricte et un effort de raisonnement `low`. Le délai réseau

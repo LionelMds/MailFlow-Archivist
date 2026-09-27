@@ -227,12 +227,27 @@ class ArchivedMailRecord(BaseModel):
     archived_at: datetime
 
 
+class RoleEstimate(BaseModel):
+    """Engine answers kept for a company that the directory does not know yet.
+
+    ``probabilities`` suggests a role to the user (fournisseur, client, autre); it never
+    routes a mail. ``classifications`` holds the engine answer for each business role,
+    so a role validated later in the directory applies at once, without a new AI call.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    probabilities: dict[str, float] = Field(default_factory=dict)
+    classifications: dict[str, AiMailClassification] = Field(default_factory=dict)
+
+
 class ClassificationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rule: RuleClassification
     ai: AiMailClassification | None = None
     ai_error: str | None = None
+    role_estimate: RoleEstimate | None = None
 
 
 class PreviewRow(BaseModel):

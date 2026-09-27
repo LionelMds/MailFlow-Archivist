@@ -69,6 +69,11 @@ def folder_sort_key(relative_folder: str) -> tuple[tuple[int, str], ...]:
     )
 
 
+FOLDER_RENAME_REASON = "Nom de dossier corrige dans l'arborescence."
+FOLDER_MERGE_REASON = "Dossier fusionne dans l'arborescence."
+USER_FOLDER_REASONS = (FOLDER_RENAME_REASON, FOLDER_MERGE_REASON)
+
+
 def rename_folder_leaf(
     rows: list[PreviewRow],
     source_relative_folder: str,
@@ -82,7 +87,7 @@ def rename_folder_leaf(
         source_relative_folder,
         target_relative_folder,
         projects_root=projects_root,
-        reason="Nom de dossier corrige dans l'arborescence.",
+        reason=FOLDER_RENAME_REASON,
     )
 
 
@@ -98,7 +103,7 @@ def merge_folder(
         source_relative_folder,
         target_relative_folder,
         projects_root=projects_root,
-        reason="Dossier fusionne dans l'arborescence.",
+        reason=FOLDER_MERGE_REASON,
     )
 
 

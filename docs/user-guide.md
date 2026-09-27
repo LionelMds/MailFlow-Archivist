@@ -70,6 +70,12 @@ mail affiche la phase retenue et la répartition entre catégories. Sous 80 % de
 confiance, le mail reste à vérifier. Le guide [Jev](jev.md) détaille le fonctionnement
 et la mesure de précision sur vos propres mails.
 
+Si les mails restent « À vérifier » avec « Rôle client/fournisseur à confirmer dans
+l'annuaire », ouvrir l'onglet **Annuaire** : la colonne **Rôle suggéré** propose un rôle
+pour chaque entreprise inconnue. **Valider** (ou **Valider les suggestions sûres**)
+enregistre le rôle, et les mails sont mis à jour aussitôt, sans nouvel appel à l'IA.
+**Actualiser les rôles des mails** réapplique l'annuaire à tous les mails affichés.
+
 ## Hierarchie des dossiers
 
 Apres la classification, MailFlow propose une destination par entreprise

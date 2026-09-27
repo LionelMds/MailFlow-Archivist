@@ -4,6 +4,7 @@ import html
 import unicodedata
 from dataclasses import dataclass
 
+from mailflow.core.role_suggestions import ROLE_LABELS
 from mailflow.models import Direction, PreviewAction, PreviewRow
 
 HIGHLIGHT_STYLE = "background-color: #fff176; color: #1f2933; font-weight: 600;"
@@ -99,7 +100,21 @@ def ai_decision_html(row: PreviewRow) -> str:
         f"<p style='color:#52647a;'>{action} · {ai.confidence:.0%} de confiance · {role}</p>"
         f"<p><b>Résumé :</b><br>{short_summary}</p>"
         f"<p><b>Pourquoi :</b><br>{reason}</p>"
+        f"{role_suggestion_html(row)}"
         "</div>"
+    )
+
+
+def role_suggestion_html(row: PreviewRow) -> str:
+    estimate = row.classification.role_estimate
+    probabilities = estimate.probabilities if estimate is not None else {}
+    if not probabilities:
+        return ""
+    key = max(probabilities, key=lambda name: probabilities[name])
+    label = html.escape(ROLE_LABELS.get(key, key))
+    return (
+        f"<p><b>Rôle suggéré :</b> {label} ({probabilities[key]:.0%}). "
+        "À valider dans l'onglet Annuaire.</p>"
     )
 
 

@@ -13,7 +13,7 @@ from typing import Any, TypeVar, cast
 from PySide6.QtCore import QCoreApplication, QEventLoop, QThread
 
 from mailflow.classifier.pipeline import AiClassifierProtocol
-from mailflow.models import AiMailClassification, MailMetadata
+from mailflow.models import AiMailClassification, MailMetadata, RoleEstimate
 
 T = TypeVar("T")
 
@@ -59,6 +59,12 @@ class ResponsiveAiClassifier:
 
     def __init__(self, classifier: AiClassifierProtocol) -> None:
         self.classifier = classifier
+
+    @property
+    def last_role_estimate(self) -> RoleEstimate | None:
+        # Set by the worker thread, which has finished once classify() returns.
+        value = getattr(self.classifier, "last_role_estimate", None)
+        return value if isinstance(value, RoleEstimate) else None
 
     def classify(
         self,

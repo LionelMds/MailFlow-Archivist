@@ -2,18 +2,26 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol, cast
 
 from mailflow.classifier.ai_classifier import AiClassifier
-from mailflow.classifier.decision_engine import destination_for
+from mailflow.classifier.decision_engine import (
+    DEFAULT_CONFIDENCE_THRESHOLD,
+    decide_archive,
+    destination_for,
+)
 from mailflow.classifier.jev_classifier import JevClassifier
 from mailflow.classifier.ollama_classifier import OllamaClassifier
-from mailflow.classifier.pipeline import ClassificationPipeline, action_from_decision
-from mailflow.classifier.routing_context import primary_external_email
+from mailflow.classifier.pipeline import (
+    ClassificationPipeline,
+    action_from_decision,
+    apply_routing_guardrails,
+)
+from mailflow.classifier.routing_context import primary_external_email, resolve_counterparty
 from mailflow.config import AppSettings, get_jev_api_key, get_openai_api_key
 from mailflow.core.archive_actions import (
     mark_rows_archivable,
@@ -40,6 +48,7 @@ from mailflow.core.correspondence_hierarchy import (
     apply_correspondence_hierarchy,
 )
 from mailflow.core.folder_tree import (
+    USER_FOLDER_REASONS,
     FolderPathSummary,
     FolderTreeNode,
     build_folder_tree,
@@ -47,13 +56,18 @@ from mailflow.core.folder_tree import (
     merge_folder,
     rename_folder_leaf,
 )
-from mailflow.core.manual_review import apply_manual_classification, verified_example_from_signal
+from mailflow.core.manual_review import (
+    MANUAL_DECISION_REASON,
+    apply_manual_classification,
+    verified_example_from_signal,
+)
 from mailflow.core.project_html_exporter import (
     ProjectHtmlExportResult,
     export_project_correspondence_html,
 )
 from mailflow.core.project_paths import local_project_path
 from mailflow.core.reporting import export_preview_report
+from mailflow.core.role_suggestions import RoleSuggestion, suggest_roles
 from mailflow.core.scan_service import (
     DirectoryScanRequest,
     OutlookScanService,
@@ -61,6 +75,7 @@ from mailflow.core.scan_service import (
     ScanRequest,
 )
 from mailflow.models import (
+    AiMailClassification,
     AiMode,
     InterlocutorType,
     MailMetadata,
@@ -485,6 +500,7 @@ class AppController:
                 self.preview_rows,
                 self.directory_store,
                 self.projects_root,
+                confidence_threshold=self._decision_threshold(),
             )
             # The user's explicit choice for this mail stays exactly as entered.
             self.preview_rows[row_index] = updated_row
@@ -665,6 +681,7 @@ class AppController:
             self.preview_rows,
             self.directory_store,
             self.projects_root,
+            confidence_threshold=self._decision_threshold(),
         )
         return organization_id
 
@@ -681,8 +698,76 @@ class AppController:
             self.preview_rows,
             self.directory_store,
             self.projects_root,
+            confidence_threshold=self._decision_threshold(),
         )
         return self.preview_rows
+
+    def set_directory_organization_roles(
+        self,
+        roles: Mapping[int, InterlocutorType],
+    ) -> list[PreviewRow]:
+        """Apply several validated roles, then update the mails once."""
+        if self.directory_store is None:
+            msg = "Aucun annuaire n'est configure"
+            raise RuntimeError(msg)
+        for organization_id, role in roles.items():
+            self.directory_store.set_organization_role(organization_id, role)
+        self.preview_rows = apply_directory_roles_to_rows(
+            self.preview_rows,
+            self.directory_store,
+            self.projects_root,
+            confidence_threshold=self._decision_threshold(),
+        )
+        return self.preview_rows
+
+    def refresh_directory_roles(self) -> list[PreviewRow]:
+        """Apply the current directory roles to the mails, without any AI call."""
+        if self.directory_store is None:
+            msg = "Aucun annuaire n'est configure"
+            raise RuntimeError(msg)
+        self.preview_rows = apply_directory_roles_to_rows(
+            self.preview_rows,
+            self.directory_store,
+            self.projects_root,
+            confidence_threshold=self._decision_threshold(),
+        )
+        return self.preview_rows
+
+    def _decision_threshold(self) -> float:
+        threshold = getattr(self.preview_pipeline, "decision_confidence_threshold", None)
+        return float(threshold) if isinstance(threshold, int | float) else (
+            DEFAULT_CONFIDENCE_THRESHOLD
+        )
+
+    def directory_role_suggestions(self) -> dict[int, RoleSuggestion]:
+        """Suggested roles for companies whose directory role is not client or supplier."""
+        store = self.directory_store
+        find_organization = getattr(store, "organization_id_for_email", None)
+        if store is None or not callable(find_organization):
+            return {}
+        cache: dict[str, int | None] = {}
+
+        def organization_id_for_email(email: str) -> int | None:
+            if email not in cache:
+                found = find_organization(email)
+                cache[email] = int(found) if found is not None else None
+            return cache[email]
+
+        try:
+            suggestions = suggest_roles(self.preview_rows, organization_id_for_email)
+            known = {
+                entry.organization_id
+                for entry in store.list_organizations()
+                if entry.default_role in BUSINESS_ROLES
+            }
+        except (sqlite3.Error, OSError):
+            logger.warning("Suggestions de role indisponibles", exc_info=True)
+            return {}
+        return {
+            organization_id: suggestion
+            for organization_id, suggestion in suggestions.items()
+            if organization_id not in known
+        }
 
     def delete_directory_organization(self, organization_id: int) -> None:
         if self.directory_store is None:
@@ -929,17 +1014,29 @@ def apply_directory_roles_to_rows(
     rows: list[PreviewRow],
     directory_store: DirectoryStoreProtocol,
     projects_root: Path,
+    *,
+    confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
 ) -> list[PreviewRow]:
     editable_rows = [row for row in rows if row.action != PreviewAction.ARCHIVED]
     updated_rows = [
-        _row_with_directory_role(row, directory_store, projects_root) for row in editable_rows
+        _row_with_directory_role(
+            row, directory_store, projects_root, confidence_threshold=confidence_threshold,
+        )
+        for row in editable_rows
     ]
+    # A folder renamed or merged by the user stays as chosen while the role is unchanged.
+    kept = {
+        updated.mail.entry_id: updated
+        for original, updated in zip(editable_rows, updated_rows, strict=True)
+        if updated is original
+        and any(note in updated.decision.reason for note in USER_FOLDER_REASONS)
+    }
     updated_rows = apply_correspondence_hierarchy(
         updated_rows,
         projects_root=projects_root,
         organization_directory=directory_store,
     )
-    by_id = {row.mail.entry_id: row for row in updated_rows}
+    by_id = {row.mail.entry_id: kept.get(row.mail.entry_id, row) for row in updated_rows}
     return [
         row if row.action == PreviewAction.ARCHIVED else by_id[row.mail.entry_id]
         for row in rows
@@ -950,10 +1047,20 @@ def _row_with_directory_role(
     row: PreviewRow,
     directory_store: DirectoryStoreProtocol,
     projects_root: Path,
+    *,
+    confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
 ) -> PreviewRow:
     role = _directory_role_for_row(row, directory_store)
+    # A row that already has this role keeps its decision, renamed folders included.
     if role is None or role == row.decision.interlocutor:
         return row
+    estimate = row.classification.role_estimate
+    answer = estimate.classifications.get(role.value) if estimate is not None else None
+    if answer is not None and row.decision.reason != MANUAL_DECISION_REASON:
+        return _row_from_role_answer(
+            row, answer, role, directory_store, projects_root,
+            confidence_threshold=confidence_threshold,
+        )
     target_relative = destination_for(row.decision.mail_type, role) or "A verifier"
     target_path = (
         local_project_path(projects_root, row.mail.project_number)
@@ -976,6 +1083,47 @@ def _row_with_directory_role(
     )
     return row.model_copy(
         update={
+            "decision": decision,
+            "action": (
+                PreviewAction.IGNORE
+                if row.action == PreviewAction.IGNORE
+                else action_from_decision(
+                    archive=decision.archive,
+                    requires_review=decision.requires_review,
+                )
+            ),
+        }
+    )
+
+
+def _row_from_role_answer(
+    row: PreviewRow,
+    answer: AiMailClassification,
+    role: InterlocutorType,
+    directory_store: DirectoryStoreProtocol,
+    projects_root: Path,
+    *,
+    confidence_threshold: float,
+) -> PreviewRow:
+    """Route a mail with the engine answer already given for this role: no AI call."""
+    counterparty = resolve_counterparty(row.mail, directory_store)
+    guarded = apply_routing_guardrails(
+        answer, counterparty, confidence_threshold=confidence_threshold,
+    )
+    decision = decide_archive(
+        row.mail,
+        projects_root=projects_root,
+        rule=row.classification.rule,
+        ai=guarded,
+        confidence_threshold=confidence_threshold,
+    )
+    decision = decision.model_copy(
+        update={"reason": _append_directory_role_reason(decision.reason, role)}
+    )
+    classification = row.classification.model_copy(update={"ai": guarded, "ai_error": None})
+    return row.model_copy(
+        update={
+            "classification": classification,
             "decision": decision,
             "action": (
                 PreviewAction.IGNORE

@@ -56,6 +56,8 @@ UI_TEXT = {
     "export_report": "Exporter rapport",
     "import_directory": "Importer annuaire Outlook",
     "refresh_directory": "Actualiser",
+    "validate_role_suggestions": "Valider les suggestions sûres",
+    "refresh_roles": "Actualiser les rôles des mails",
     "add_directory": "Ajouter entreprise",
     "delete_directory": "Supprimer entreprise",
     "rename_directory": "Renommer entreprise",
@@ -68,6 +70,12 @@ UI_TEXT = {
     "tray_watch_inactive": "surveillance inactive",
     "tray_quit": "Quitter",
 }
+DIRECTORY_COLUMNS = (
+    "Entreprise", "Domaines", "Contacts", "Rôle global", "Rôle suggéré", "Projets",
+)
+DIRECTORY_ROLE_COLUMN = 3
+DIRECTORY_SUGGESTION_COLUMN = 4
+DIRECTORY_PROJECTS_COLUMN = 5
 
 WATCH_INTERVAL_MS = 5 * 60 * 1000
 REMINDER_CHECK_INTERVAL_MS = 60 * 1000
@@ -106,7 +114,10 @@ def run_desktop_app(settings: AppSettings, *, startup_warning: str | None = None
         msg = "PySide6 est requis pour lancer l'interface desktop"
         raise RuntimeError(msg) from exc
 
+    from mailflow.ui.theme import apply_light_theme
+
     app = QApplication([])
+    apply_light_theme(app)
     instance_lock = acquire_instance_lock(settings.paths.data_dir)
     if instance_lock is None:
         QMessageBox.information(
@@ -222,6 +233,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     )
     from mailflow.ui.project_digest_preview import project_digest_to_html
     from mailflow.ui.theme import APP_STYLESHEET
+
+    class TableComboBox(QComboBox):
+        """A list inside a table: the mouse wheel scrolls the table, never the choice."""
+
+        def wheelEvent(self, event: Any) -> None:
+            event.ignore()
 
     class MailFlowMainWindow(QMainWindow):
         def closeEvent(self, event: Any) -> None:
@@ -405,6 +422,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     ignore_action = QAction(UI_TEXT["mark_ignored"], window)
     restore_archivable_action = QAction(UI_TEXT["restore_archivable"], window)
     reclassify_action = QAction(UI_TEXT["reclassify"], window)
+    refresh_roles_action = QAction("Actualiser les rôles (sans IA)", window)
     detail_columns_action = QAction("Afficher les colonnes détaillées", window)
     detail_columns_action.setCheckable(True)
     inspector_action = QAction("Afficher l'aperçu du mail", window)
@@ -416,6 +434,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     more_actions_menu.addAction(ignore_action)
     more_actions_menu.addAction(restore_archivable_action)
     more_actions_menu.addAction(reclassify_action)
+    more_actions_menu.addAction(refresh_roles_action)
     more_actions_menu.addSeparator()
     more_actions_menu.addAction(detail_columns_action)
     more_actions_menu.addAction(inspector_action)
@@ -522,7 +541,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     directory_layout.setSpacing(8)
     directory_heading = QLabel("Votre annuaire d'entreprises")
     directory_heading.setProperty("role", "heading")
-    directory_hint = QLabel("Les rôles enregistrés aident à proposer le bon classement.")
+    directory_hint = QLabel(
+        "Les rôles enregistrés fixent le classement des mails. Pour une entreprise sans "
+        "rôle, Jev suggère fournisseur ou client : un rôle validé s'applique aussitôt aux "
+        "mails, sans nouvel appel à l'IA."
+    )
+    directory_hint.setWordWrap(True)
     directory_hint.setProperty("role", "muted")
     directory_layout.addWidget(directory_heading)
     directory_layout.addWidget(directory_hint)
@@ -539,6 +563,17 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     directory_actions_layout.addWidget(refresh_directory_button)
     directory_actions_layout.addWidget(add_directory_button)
     directory_actions_layout.addStretch(1)
+    validate_suggestions_button = QPushButton(UI_TEXT["validate_role_suggestions"])
+    validate_suggestions_button.setToolTip(
+        "Enregistrer les rôles suggérés avec au moins 80 % de confiance, après confirmation."
+    )
+    validate_suggestions_button.setEnabled(False)
+    refresh_roles_button = QPushButton(UI_TEXT["refresh_roles"])
+    refresh_roles_button.setToolTip(
+        "Appliquer les rôles de l'annuaire aux mails affichés, sans nouvel appel à l'IA."
+    )
+    directory_actions_layout.addWidget(validate_suggestions_button)
+    directory_actions_layout.addWidget(refresh_roles_button)
     directory_edit_actions = QWidget()
     directory_edit_layout = QHBoxLayout(directory_edit_actions)
     directory_edit_layout.setContentsMargins(0, 0, 0, 0)
@@ -546,10 +581,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     directory_edit_layout.addWidget(merge_directory_button)
     directory_edit_layout.addWidget(delete_directory_button)
     directory_edit_layout.addStretch(1)
-    directory_table = QTableWidget(0, 5)
-    directory_table.setHorizontalHeaderLabels(
-        ["Entreprise", "Domaines", "Contacts", "Role global", "Projets"]
-    )
+    directory_table = QTableWidget(0, len(DIRECTORY_COLUMNS))
+    directory_table.setHorizontalHeaderLabels(list(DIRECTORY_COLUMNS))
     directory_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     directory_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
     directory_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -565,9 +598,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QHeaderView.ResizeMode.Interactive,
     )
     directory_table.horizontalHeader().setSectionResizeMode(
-        4,
+        DIRECTORY_SUGGESTION_COLUMN,
+        QHeaderView.ResizeMode.Interactive,
+    )
+    directory_table.horizontalHeader().setSectionResizeMode(
+        DIRECTORY_PROJECTS_COLUMN,
         QHeaderView.ResizeMode.ResizeToContents,
     )
+    directory_table.setColumnWidth(0, 220)
     directory_status_label = QLabel("Annuaire local")
     directory_status_label.setWordWrap(True)
     directory_status_label.setStyleSheet("QLabel { color: #334155; }")
@@ -1071,6 +1109,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         ignore_action.setEnabled(bool(selected) and not operation_in_progress)
         has_rows = bool(active_controller.preview_rows) and not operation_in_progress
         reclassify_action.setEnabled(has_rows)
+        refresh_roles_action.setEnabled(has_rows)
         export_html_button.setEnabled(has_rows)
         selection_status.setText(
             f"{len(selected)} sélectionné(s) · {ready_selected.ready_count} prêt(s) à archiver"
@@ -1213,7 +1252,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                     item.setToolTip(value)
                     table.setItem(row_index, column_index, item)
                     continue
-                combo = QComboBox()
+                combo = TableComboBox()
                 combo.setEnabled(row.action != PreviewAction.ARCHIVED)
                 combo.addItems(list(options))
                 if value and value not in options:
@@ -1456,8 +1495,33 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         except Exception as exc:
             append_log(f"Erreur fusion dossier: {exc}")
 
+    def current_role_suggestions() -> dict[int, Any]:
+        provider = getattr(active_controller, "directory_role_suggestions", None)
+        if not callable(provider):
+            return {}
+        try:
+            return dict(provider())
+        except Exception as exc:
+            append_log(f"Suggestions de role indisponibles: {exc}")
+            return {}
+
+    def restore_directory_scroll(vertical: int, horizontal: int) -> None:
+        # The suggestion cells know their final width once the theme font is applied.
+        # Cell widgets sit inside the item padding of the theme (7 px each side + grid).
+        hint = directory_table.sizeHintForColumn(DIRECTORY_SUGGESTION_COLUMN)
+        if hint > 0:
+            directory_table.setColumnWidth(DIRECTORY_SUGGESTION_COLUMN, hint + 16)
+        directory_table.verticalScrollBar().setValue(vertical)
+        directory_table.horizontalScrollBar().setValue(horizontal)
+
     def refresh_directory_table() -> None:
         nonlocal refreshing_directory_table
+        # Rebuilding the rows must not move the list: keep the scroll and the selection.
+        vertical_scroll = directory_table.verticalScrollBar().value()
+        horizontal_scroll = directory_table.horizontalScrollBar().value()
+        selected = selected_directory_organization()
+        focus = QApplication.focusWidget()
+        had_focus = focus is not None and directory_table.isAncestorOf(focus)
         refreshing_directory_table = True
         try:
             entries = active_controller.directory_entries()
@@ -1466,13 +1530,13 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             directory_table.setRowCount(0)
             directory_status_label.setText(f"Annuaire indisponible: {exc}")
             return
+        suggestions = current_role_suggestions()
         directory_table.clearContents()
         for row_index in range(directory_table.rowCount()):
-            directory_table.removeCellWidget(row_index, 3)
+            directory_table.removeCellWidget(row_index, DIRECTORY_ROLE_COLUMN)
+            directory_table.removeCellWidget(row_index, DIRECTORY_SUGGESTION_COLUMN)
         directory_table.setRowCount(len(entries))
-        directory_table.setHorizontalHeaderLabels(
-            ["Entreprise", "Domaines", "Contacts", "Role global", "Projets"]
-        )
+        directory_table.setHorizontalHeaderLabels(list(DIRECTORY_COLUMNS))
         for row_index, entry in enumerate(entries):
             organization_id = int(entry.organization_id)
             name = str(entry.name)
@@ -1493,18 +1557,181 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             directory_table.setItem(row_index, 2, contact_item)
             directory_table.setCellWidget(
                 row_index,
-                3,
+                DIRECTORY_ROLE_COLUMN,
                 global_role_combo(organization_id, role),
             )
-            directory_table.setItem(row_index, 4, project_item)
+            suggestion = suggestions.get(organization_id)
+            if suggestion is not None and role not in {
+                InterlocutorType.CLIENT, InterlocutorType.FOURNISSEUR,
+            }:
+                directory_table.setCellWidget(
+                    row_index,
+                    DIRECTORY_SUGGESTION_COLUMN,
+                    role_suggestion_cell(organization_id, name, suggestion),
+                )
+            else:
+                directory_table.setItem(
+                    row_index, DIRECTORY_SUGGESTION_COLUMN, QTableWidgetItem("")
+                )
+            directory_table.setItem(row_index, DIRECTORY_PROJECTS_COLUMN, project_item)
+            if selected is not None and selected[0] == organization_id:
+                directory_table.selectRow(row_index)
         directory_table.resizeRowsToContents()
         refreshing_directory_table = False
+        if had_focus:
+            directory_table.setFocus(Qt.FocusReason.OtherFocusReason)
+        confident = sum(
+            1 for suggestion in suggestions.values() if getattr(suggestion, "is_confident", False)
+        )
+        validate_suggestions_button.setEnabled(confident > 0)
+        validate_suggestions_button.setText(
+            f"{UI_TEXT['validate_role_suggestions']} ({confident})"
+            if confident else UI_TEXT["validate_role_suggestions"]
+        )
+        restore_directory_scroll(vertical_scroll, horizontal_scroll)
+        # The scroll range can be recomputed after this call returns; restore it again.
+        QTimer.singleShot(
+            0, lambda: restore_directory_scroll(vertical_scroll, horizontal_scroll)
+        )
         directory_status_label.setText(
             f"{len(entries)} entreprise(s) dans l'annuaire global."
         )
 
+    def role_suggestion_cell(organization_id: int, name: str, suggestion: Any) -> Any:
+        cell = QWidget()
+        cell_layout = QHBoxLayout(cell)
+        cell_layout.setContentsMargins(6, 2, 4, 2)
+        cell_layout.setSpacing(8)
+        label = QLabel(str(suggestion.label))
+        label.setToolTip(
+            "Estimation de Jev sur les mails analysés de cette entreprise. "
+            "Rien n'est enregistré sans votre validation."
+        )
+        cell_layout.addWidget(label, 1)
+        role = suggestion.role
+        if role is not None:
+            button = QPushButton("Valider")
+            button.setStyleSheet("QPushButton { padding: 3px 10px; }")
+            button.setToolTip(f"Enregistrer {name} comme {role.value} dans l'annuaire.")
+            button.clicked.connect(
+                lambda _checked=False: validate_role_suggestion(organization_id, name, role)
+            )
+            cell_layout.addWidget(button)
+        return cell
+
+    def mail_states() -> dict[str, tuple[Any, str]]:
+        return {
+            row.mail.entry_id: (row.action, row.decision.target_relative_folder)
+            for row in active_controller.preview_rows
+        }
+
+    def report_role_update(before: dict[str, tuple[Any, str]]) -> None:
+        rows = active_controller.preview_rows
+        changed = sum(
+            1 for row in rows
+            if before.get(row.mail.entry_id) != (row.action, row.decision.target_relative_folder)
+        )
+        ready = sum(1 for row in rows if row.action == PreviewAction.ARCHIVE)
+        message = (
+            f"Rôles appliqués sans nouvel appel IA : {changed} mail(s) mis à jour, "
+            f"{ready} prêt(s) à archiver."
+        )
+        directory_status_label.setText(message)
+        set_scan_status(message, success=True)
+        append_log(message)
+
+    def validate_role_suggestion(organization_id: int, name: str, role: Any) -> None:
+        if operation_in_progress:
+            return
+        before = mail_states()
+        try:
+            active_controller.set_directory_organization_role(organization_id, role)
+        except Exception as exc:
+            append_log(f"Erreur role global: {exc}")
+            return
+        refresh_table()
+        refresh_directory_table()
+        update_mail_preview(table.currentRow())
+        append_log(f"Role suggere valide: {name} enregistre comme {role.value}.")
+        report_role_update(before)
+
+    def refresh_roles_without_ai() -> None:
+        if operation_in_progress:
+            return
+        refresher = getattr(active_controller, "refresh_directory_roles", None)
+        if not callable(refresher):
+            return
+        before = mail_states()
+        try:
+            refresher()
+        except Exception as exc:
+            append_log(f"Actualisation des roles impossible: {exc}")
+            return
+        refresh_table()
+        refresh_directory_table()
+        update_mail_preview(table.currentRow())
+        report_role_update(before)
+
+    def validate_confident_role_suggestions() -> None:
+        if operation_in_progress:
+            return
+        confident = {
+            organization_id: suggestion
+            for organization_id, suggestion in current_role_suggestions().items()
+            if suggestion.is_confident
+        }
+        if not confident:
+            directory_status_label.setText("Aucune suggestion sûre à valider.")
+            return
+        try:
+            names = {
+                int(entry.organization_id): str(entry.name)
+                for entry in active_controller.directory_entries()
+            }
+        except Exception as exc:
+            append_log(f"Annuaire indisponible: {exc}")
+            return
+        lines = [
+            f"• {names.get(organization_id, f'#{organization_id}')} → {suggestion.label}"
+            for organization_id, suggestion in sorted(
+                confident.items(),
+                key=lambda item: names.get(item[0], "").casefold(),
+            )
+        ]
+        shown = "\n".join(lines[:15])
+        if len(lines) > 15:
+            shown += f"\n… et {len(lines) - 15} autre(s)"
+        answer = QMessageBox.question(
+            window,
+            "Valider les rôles suggérés",
+            f"Enregistrer ces {len(confident)} rôle(s) dans l'annuaire ?\n\n{shown}\n\n"
+            "Les mails de ces entreprises seront mis à jour aussitôt, sans nouvel appel "
+            "à l'IA.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        before = mail_states()
+        try:
+            active_controller.set_directory_organization_roles(
+                {
+                    organization_id: suggestion.role
+                    for organization_id, suggestion in confident.items()
+                }
+            )
+        except Exception as exc:
+            append_log(f"Erreur role global: {exc}")
+            refresh_directory_table()
+            return
+        append_log(f"{len(confident)} role(s) suggere(s) valide(s) dans l'annuaire.")
+        refresh_table()
+        refresh_directory_table()
+        update_mail_preview(table.currentRow())
+        report_role_update(before)
+
     def global_role_combo(organization_id: int, role: Any) -> Any:
-        combo = QComboBox()
+        combo = TableComboBox()
         for item in InterlocutorType:
             combo.addItem(interlocutor_label(item), item.value)
         current_role = role if isinstance(role, InterlocutorType) else InterlocutorType.INCONNU
@@ -1514,21 +1741,24 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             if refreshing_directory_table:
                 return
             selected_role = InterlocutorType(str(combo.currentData()))
+            before = mail_states()
             try:
                 active_controller.set_directory_organization_role(
                     organization_id,
                     selected_role,
                 )
-                refresh_table()
-                refresh_directory_table()
-                update_mail_preview(table.currentRow())
-                append_log(
-                    "Role global applique: "
-                    f"{selected_role.value} pour l'entreprise #{organization_id}."
-                )
             except Exception as exc:
                 append_log(f"Erreur role global: {exc}")
                 refresh_directory_table()
+                return
+            refresh_table()
+            refresh_directory_table()
+            update_mail_preview(table.currentRow())
+            append_log(
+                "Role global applique: "
+                f"{selected_role.value} pour l'entreprise #{organization_id}."
+            )
+            report_role_update(before)
 
         combo.currentTextChanged.connect(role_changed)
         return combo
@@ -2676,6 +2906,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     )
     report_action.triggered.connect(lambda _checked=False: on_export_report())
     import_directory_button.clicked.connect(on_import_directory)
+    validate_suggestions_button.clicked.connect(
+        lambda _checked=False: validate_confident_role_suggestions()
+    )
+    refresh_roles_button.clicked.connect(lambda _checked=False: refresh_roles_without_ai())
+    refresh_roles_action.triggered.connect(lambda _checked=False: refresh_roles_without_ai())
     refresh_directory_button.clicked.connect(refresh_directory_table)
     add_directory_button.clicked.connect(add_directory_organization)
     delete_directory_button.clicked.connect(delete_selected_directory_organization)
@@ -2752,6 +2987,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_rename_directory_button = rename_directory_button
     dynamic_window.mailflow_merge_directory_button = merge_directory_button
     dynamic_window.mailflow_directory_table = directory_table
+    dynamic_window.mailflow_validate_suggestions_button = validate_suggestions_button
+    dynamic_window.mailflow_refresh_roles_button = refresh_roles_button
+    dynamic_window.mailflow_refresh_roles_action = refresh_roles_action
     dynamic_window.mailflow_directory_status_label = directory_status_label
     dynamic_window.mailflow_logs = logs
     dynamic_window.mailflow_project_digest_preview = project_digest_preview

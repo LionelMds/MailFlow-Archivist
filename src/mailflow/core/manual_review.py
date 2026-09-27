@@ -31,6 +31,7 @@ MANUAL_DESTINATIONS = (
     SUPPLIER_ORDER_FOLDER,
 )
 SPECIAL_MANUAL_DESTINATIONS = {"A verifier", "Ne pas archiver"}
+MANUAL_DECISION_REASON = "Classement manuel utilisateur."
 
 
 def apply_manual_classification(
@@ -66,7 +67,7 @@ def apply_manual_classification(
         target_path=target_path,
         confidence=1.0,
         duplicate_status=row.decision.duplicate_status,
-        reason="Classement manuel utilisateur.",
+        reason=MANUAL_DECISION_REASON,
     )
     action = _action_from_manual_decision(archive=archive, requires_review=requires_review)
     updated_row = row.model_copy(update={"decision": decision, "action": action})
