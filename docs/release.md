@@ -1,5 +1,19 @@
 # Release
 
+## Version 0.11.0
+
+- nouveau moteur de classification **Jev (TypeSafe)**, au choix avec OpenAI et Ollama ;
+- Jev ne reçoit que les phases commerciales permises par le rôle de l'annuaire, et la
+  confiance d'une catégorie est la somme des probabilités de ses phases ;
+- un client reste en `Correspondance` et un fournisseur n'y va jamais ;
+- clé TypeSafe dans le coffre du système, séparée de la clé OpenAI, avec bouton
+  `Tester Jev` sur un mail fictif ;
+- une panne Jev laisse le mail à vérifier, sans bascule vers un autre moteur ;
+- mesure de Jev sur vos décisions (`scripts/evaluate_ai.py --provider jev`) et sur les
+  mails synthétiques (`scripts/validate_jev.py`).
+
+Voir [le guide Jev](jev.md) pour la mise en service.
+
 ## Version 0.10.0
 
 - annuaire alimenté automatiquement à chaque scan, manuel ou par la surveillance ;
