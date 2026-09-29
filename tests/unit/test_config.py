@@ -219,6 +219,7 @@ def test_mailbox_sorting_options_round_trip_and_default_for_old_configs(
         mailbox_sort_days=0,
         mailbox_read_attachments=False,
         mailbox_suggest_with_jev=True,
+        projectflow_executable=r"C:\Outils\ProjectFlowAutomator.exe",
     )
 
     save_settings(settings)
@@ -232,3 +233,5 @@ def test_mailbox_sorting_options_round_trip_and_default_for_old_configs(
     assert loaded.mailbox_sort_days == 0
     assert not loaded.mailbox_read_attachments
     assert loaded.mailbox_suggest_with_jev
+    assert defaults.projectflow_executable == ""
+    assert loaded.projectflow_executable == r"C:\Outils\ProjectFlowAutomator.exe"

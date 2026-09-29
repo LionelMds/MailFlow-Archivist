@@ -12,7 +12,14 @@ from typing import TYPE_CHECKING, Any, cast
 from mailflow.core.archive_actions import rows_to_archive
 from mailflow.core.archive_batch import ArchiveBatchResult
 from mailflow.core.background_watcher import ReviewQueue, WatchState
-from mailflow.core.mailbox_sorting import MailboxSortRequest
+from mailflow.core.mailbox_sorting import MailboxSortRequest, missing_project_numbers
+from mailflow.core.projectflow_link import (
+    ProjectFlowError,
+    ProjectFlowInstallation,
+    ProjectFlowLink,
+    find_projectflow,
+    projectflow_report,
+)
 from mailflow.core.update_installer import download_update_installer, launch_update_installer
 from mailflow.core.updates import UpdateCheckResult, check_for_updates
 from mailflow.models import (
@@ -32,7 +39,9 @@ from mailflow.ui.mailbox_sort_view import (
     PERIOD_OPTIONS,
     STATUS_FILTERS,
     build_mailbox_sort_confirmation,
+    build_projectflow_confirmation,
     format_mailbox_sort_result,
+    format_projectflow_report,
     mailbox_since,
     period_label,
     proposal_to_cells,
@@ -738,6 +747,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     mailbox_filters_layout.addWidget(mailbox_check_all_button)
     mailbox_filters_layout.addWidget(mailbox_uncheck_all_button)
     mailbox_filters_layout.addStretch(1)
+    mailbox_projectflow_button = QPushButton("Créer les dossiers absents avec ProjectFlow")
+    mailbox_projectflow_button.setEnabled(False)
+    mailbox_filters_layout.addWidget(mailbox_projectflow_button)
     mailbox_filters_layout.addWidget(mailbox_sort_button)
     mailbox_layout.addWidget(mailbox_filters)
     mailbox_table = QTableWidget(0, len(MAILBOX_SORT_COLUMNS))
@@ -919,7 +931,26 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     review_reminder_times_input = QLineEdit(format_reminder_times(settings.review_reminder_times))
     review_reminder_times_input.setPlaceholderText("09:00, 14:00, 16:30")
     grid.addWidget(review_reminder_times_input, 13, 1)
-    grid.addWidget(QLabel("Mises à jour"), 14, 0)
+    grid.addWidget(QLabel("ProjectFlow Automator"), 14, 0)
+    projectflow_widget = QWidget()
+    projectflow_layout = QVBoxLayout(projectflow_widget)
+    projectflow_layout.setContentsMargins(0, 0, 0, 0)
+    projectflow_picker = QWidget()
+    projectflow_picker_layout = QHBoxLayout(projectflow_picker)
+    projectflow_picker_layout.setContentsMargins(0, 0, 0, 0)
+    projectflow_input = QLineEdit(settings.projectflow_executable)
+    projectflow_input.setPlaceholderText("Détection automatique du programme installé")
+    projectflow_input.setAccessibleName("Programme ProjectFlow Automator")
+    browse_projectflow_button = QPushButton("Parcourir")
+    projectflow_picker_layout.addWidget(projectflow_input)
+    projectflow_picker_layout.addWidget(browse_projectflow_button)
+    projectflow_status = QLabel()
+    projectflow_status.setWordWrap(True)
+    projectflow_status.setProperty("role", "muted")
+    projectflow_layout.addWidget(projectflow_picker)
+    projectflow_layout.addWidget(projectflow_status)
+    grid.addWidget(projectflow_widget, 14, 1)
+    grid.addWidget(QLabel("Mises à jour"), 15, 0)
     update_widget = QWidget()
     update_layout = QHBoxLayout(update_widget)
     update_layout.setContentsMargins(0, 0, 0, 0)
@@ -929,10 +960,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     update_layout.addWidget(check_updates_button)
     update_layout.addWidget(update_status)
     update_layout.addStretch(1)
-    grid.addWidget(update_widget, 14, 1)
+    grid.addWidget(update_widget, 15, 1)
     save_settings_button = QPushButton(UI_TEXT["save_settings"])
     save_settings_button.setProperty("role", "primary")
-    grid.addWidget(save_settings_button, 15, 1)
+    grid.addWidget(save_settings_button, 16, 1)
     settings_layout.addWidget(config)
     settings_layout.addStretch(1)
     settings_scroll_area = QScrollArea()
@@ -1574,6 +1605,17 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             outlook_root_combo.addItem(current)
         set_folder_combo_value(outlook_root_combo, current, folders)
         outlook_root_combo.blockSignals(False)
+
+    def browse_projectflow() -> None:
+        selected, _filter = QFileDialog.getOpenFileName(
+            window,
+            "Sélectionner ProjectFlow Automator",
+            projectflow_input.text().strip() or str(Path.home()),
+            "Programme (*.exe);;Tous les fichiers (*)",
+        )
+        if selected:
+            projectflow_input.setText(selected)
+            refresh_projectflow_status()
 
     def browse_projects_root() -> None:
         selected = QFileDialog.getExistingDirectory(
@@ -2327,6 +2369,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             "ai_include_body_excerpt": ai_include_body_checkbox.isChecked(),
             "privacy_mask_phone_numbers": privacy_phone_checkbox.isChecked(),
             "review_reminder_times": reminder_times,
+            "projectflow_executable": projectflow_input.text().strip().strip('"'),
         }
         validated = type(settings).model_validate(settings.model_dump() | values)
         for field in values:
@@ -2949,6 +2992,19 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         append_log(f"Rappel file a verifier: {review_queue.count} mail(s) en attente.")
 
     mailbox_row_entry_ids: list[str] = []
+    projectflow_installation = ProjectFlowInstallation(None)
+    mailbox_analysis_days = settings.mailbox_sort_days
+
+    def refresh_projectflow_status() -> ProjectFlowInstallation:
+        nonlocal projectflow_installation
+        try:
+            projectflow_installation = find_projectflow(projectflow_input.text())
+        except Exception as exc:
+            append_log(f"Detection ProjectFlow impossible: {exc}")
+            projectflow_installation = ProjectFlowInstallation(None)
+        projectflow_status.setText(projectflow_installation.status_text)
+        update_mailbox_actions()
+        return projectflow_installation
 
     def update_mailbox_jev_option() -> None:
         available = has_jev_api_key()
@@ -2986,6 +3042,22 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         mailbox_sort_button.setEnabled(count > 0)
         mailbox_sort_button.setText(
             f"Ranger les {count} mails cochés" if count > 1 else UI_TEXT["sort_mailbox"]
+        )
+        analysis = getattr(active_controller, "mailbox_analysis", None)
+        missing = missing_project_numbers(analysis) if analysis is not None else []
+        mailbox_projectflow_button.setEnabled(
+            bool(missing) and projectflow_installation.supported
+        )
+        mailbox_projectflow_button.setText(
+            f"Créer les {len(missing)} dossiers absents avec ProjectFlow"
+            if len(missing) > 1
+            else "Créer les dossiers absents avec ProjectFlow"
+        )
+        mailbox_projectflow_button.setToolTip(
+            "ProjectFlow crée le dossier Outlook des projets de son répertoire chantier, "
+            "avec son propre nommage."
+            if projectflow_installation.supported
+            else projectflow_installation.status_text
         )
 
     def apply_mailbox_filter() -> None:
@@ -3076,7 +3148,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         pending_folder = (
             clean_optional_text(mailbox_pending_input.text()) or DEFAULT_MAILBOX_PENDING_FOLDER
         )
+        nonlocal mailbox_analysis_days
         days = int(mailbox_period_combo.currentData())
+        mailbox_analysis_days = days
         save_mailbox_options(pending_folder, days)
         suggester = None
         # The page is disabled while busy: rely on the saved key, not on the widget state.
@@ -3165,6 +3239,65 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             append_log(f"Echec rangement Outlook: {failure}")
         if result.moved_count:
             append_log("Les mails ranges seront repris au prochain scan des dossiers projet.")
+
+    @exclusive_operation
+    def on_create_missing_folders() -> None:
+        analysis = getattr(active_controller, "mailbox_analysis", None)
+        numbers = missing_project_numbers(analysis) if analysis is not None else []
+        if not numbers:
+            mailbox_status_label.setText("Aucun dossier projet absent dans la liste.")
+            return
+        installation = refresh_projectflow_status()
+        if installation.executable is None or not installation.supported:
+            mailbox_status_label.setText(installation.status_text)
+            return
+        answer = QMessageBox.question(
+            window,
+            "Créer les dossiers avec ProjectFlow",
+            build_projectflow_confirmation(numbers),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            append_log("Creation des dossiers par ProjectFlow annulee.")
+            return
+        progress_dialog = QProgressDialog(
+            "ProjectFlow prépare les dossiers Outlook...", "", 0, 0, window
+        )
+        progress_dialog.setWindowTitle("ProjectFlow")
+        progress_dialog.setCancelButton(None)
+        progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.show()
+        QApplication.processEvents()
+        link = ProjectFlowLink(installation.executable)
+        try:
+            # Only the wait for ProjectFlow leaves this thread; Outlook is read here after.
+            result = run_with_event_loop(lambda: link.ensure_outlook_folders(numbers))
+            refreshed = active_controller.refresh_mailbox_project_folders()
+        except ProjectFlowError as exc:
+            mailbox_status_label.setText(str(exc))
+            append_log(f"ProjectFlow: {exc}")
+            QMessageBox.warning(window, "ProjectFlow", str(exc))
+            return
+        except Exception as exc:
+            mailbox_status_label.setText("Les dossiers n'ont pas pu être préparés.")
+            append_log(f"Erreur ProjectFlow: {exc}")
+            QMessageBox.warning(window, "ProjectFlow", str(exc))
+            return
+        finally:
+            progress_dialog.close()
+            progress_dialog.deleteLater()
+        report = projectflow_report(result, refreshed.project_folders)
+        refresh_mailbox_table()
+        mailbox_summary_label.setText(
+            summarize_mailbox_analysis(refreshed, days=mailbox_analysis_days)
+        )
+        message = format_projectflow_report(report)
+        mailbox_status_label.setText(message)
+        append_log(message)
+        for number, reason in (*report.unknown, *report.failed):
+            append_log(f"ProjectFlow {number}: {reason}")
 
     def open_mailbox_mail(row: int, _column: int) -> None:
         if operation_in_progress or not 0 <= row < len(mailbox_row_entry_ids):
@@ -3298,6 +3431,16 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     navigation.currentRowChanged.connect(
         lambda index: update_mailbox_jev_option() if index == MAILBOX_PAGE else None
     )
+    navigation.currentRowChanged.connect(
+        lambda index: refresh_projectflow_status()
+        if index in {MAILBOX_PAGE, SETTINGS_PAGE}
+        else None
+    )
+    mailbox_projectflow_button.clicked.connect(
+        lambda _checked=False: on_create_missing_folders()
+    )
+    browse_projectflow_button.clicked.connect(lambda _checked=False: browse_projectflow())
+    projectflow_input.editingFinished.connect(refresh_projectflow_status)
     mailbox_analyze_button.clicked.connect(lambda _checked=False: on_analyze_mailbox())
     mailbox_sort_button.clicked.connect(lambda _checked=False: on_sort_mailbox())
     mailbox_check_all_button.clicked.connect(
@@ -3351,6 +3494,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     populate_account_options()
     refresh_directory_table()
     update_mailbox_jev_option()
+    refresh_projectflow_status()
 
     dynamic_window.mailflow_controller = active_controller
     dynamic_window.mailflow_scan_button = scan_button
@@ -3458,6 +3602,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_mailbox_sort_button = mailbox_sort_button
     dynamic_window.mailflow_mailbox_table = mailbox_table
     dynamic_window.mailflow_mailbox_status_label = mailbox_status_label
+    dynamic_window.mailflow_mailbox_projectflow_button = mailbox_projectflow_button
+    dynamic_window.mailflow_projectflow_input = projectflow_input
+    dynamic_window.mailflow_projectflow_status = projectflow_status
     refresh_table()
     return window
 

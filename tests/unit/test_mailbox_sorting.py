@@ -10,14 +10,18 @@ import pytest
 
 from mailflow.core.app_controller import AppController
 from mailflow.core.mailbox_sorting import (
+    MailboxAnalysis,
     MailboxSortRequest,
     MailboxSortService,
     ProjectCandidate,
     ProjectSuggestion,
     ProjectSuggestionError,
+    SortProposal,
     SortStatus,
     external_emails,
+    missing_project_numbers,
     project_candidates,
+    replan_proposal,
 )
 from mailflow.core.project_references import ReferenceSource
 from mailflow.models import Direction, MailMetadata
@@ -543,3 +547,55 @@ def test_controller_requires_an_analysis_and_a_root_folder() -> None:
         controller.analyze_mailbox(
             MailboxSortRequest(account_identifier=None, outlook_root_folder=" ")
         )
+
+
+def test_folders_created_meanwhile_turn_missing_mails_ready() -> None:
+    mailbox = FakeMailbox({
+        "inbox-folder": [
+            mail_item("A", subject="Nouveau projet 2026-0100"),
+            mail_item("B", subject="2025-4893 et 2026-0100"),
+            mail_item("C", subject="2026-0200"),
+            mail_item("D", subject="Brouillon", unreadable=True),
+            mail_item("E"),
+        ],
+    })
+    controller = controller_with(mailbox)
+    analysis = controller.analyze_mailbox(request())
+    assert missing_project_numbers(analysis) == ["2026-0100", "2026-0200"]
+
+    mailbox.folders["2026-0100"] = ProjectFolder(
+        "2026-0100", "2026-0100 (Halle)", "Inbox/2026/2026-0100", "2026-0100",
+    )
+    refreshed = controller.refresh_mailbox_project_folders()
+
+    proposals = by_id(refreshed)
+    assert refreshed is analysis
+    assert proposals["A"].status == SortStatus.READY
+    assert proposals["A"].destinations == ("2026-0100",)
+    assert proposals["A"].selected_by_default
+    assert proposals["B"].destinations == ("2025-4893", "2026-0100")
+    assert proposals["B"].note == ""
+    assert proposals["C"].status == SortStatus.MISSING_FOLDER
+    assert "ProjectFlow" in proposals["C"].note
+    assert proposals["D"].status == SortStatus.UNREADABLE
+    assert proposals["E"].status == SortStatus.NO_NUMBER
+    assert missing_project_numbers(refreshed) == ["2026-0200"]
+
+
+def test_project_folders_cannot_be_refreshed_before_an_analysis() -> None:
+    controller = controller_with(FakeMailbox({}))
+
+    with pytest.raises(RuntimeError):
+        controller.refresh_mailbox_project_folders()
+    with pytest.raises(RuntimeError):
+        MailboxSortService(FakeMailbox({})).refresh_project_folders(MailboxAnalysis())
+
+
+def test_replanning_keeps_proposals_without_numbers() -> None:
+    suggested = SortProposal(
+        entry_id="A", source=MailboxSourceKind.INBOX, source_label="Inbox", subject="",
+        correspondent="", sent_at=None, direction=Direction.RECEIVED,
+        status=SortStatus.SUGGESTED, suggestion=ProjectSuggestion("2025-4893", 0.9),
+    )
+
+    assert replan_proposal(suggested, {}) is suggested

@@ -198,7 +198,9 @@ PDF, Word, Excel et texte, dans un dossier temporaire effacé aussitôt.
 - Un mail qui cite plusieurs projets est copié dans chacun ; l'original va dans le
   premier projet cité.
 - Un numéro sans dossier projet Outlook laisse le mail en place (`Dossier absent`).
-  La création de ces dossiers sera confiée plus tard à ProjectFlow Automator.
+  `Créer les dossiers absents avec ProjectFlow` demande à ProjectFlow Automator de
+  créer ces dossiers pour les projets de son répertoire chantier, puis les mails
+  passent en `Prêt à ranger`. Voir [le lien avec ProjectFlow](docs/projectflow.md).
 - Avec une clé Jev enregistrée, l'option `Proposer un projet avec Jev` suggère un projet
   pour les mails sans numéro, parmi ceux où l'interlocuteur a déjà échangé selon
   l'annuaire. Une suggestion n'est jamais cochée d'office.

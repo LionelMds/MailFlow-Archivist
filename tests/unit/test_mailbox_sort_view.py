@@ -11,12 +11,15 @@ from mailflow.core.mailbox_sorting import (
     SortStatus,
 )
 from mailflow.core.project_references import ProjectReference, ReferenceSource
+from mailflow.core.projectflow_link import ProjectFlowReport
 from mailflow.models import Direction
 from mailflow.outlook.mailbox import MailboxSourceKind, ProjectFolder
 from mailflow.ui.mailbox_sort_view import (
     build_mailbox_sort_confirmation,
+    build_projectflow_confirmation,
     destination_label,
     format_mailbox_sort_result,
+    format_projectflow_report,
     mailbox_since,
     period_label,
     proposal_to_cells,
@@ -134,3 +137,31 @@ def test_period_helpers() -> None:
     assert period_label(365) == "12 derniers mois"
     assert period_label(45) == "45 derniers jours"
     assert period_label(0) == "Tous les mails"
+
+
+def test_projectflow_confirmation_lists_numbers_and_limits_the_list() -> None:
+    numbers = [f"2026-{index:04d}" for index in range(12)]
+
+    message = build_projectflow_confirmation(numbers)
+
+    assert message.startswith("Demander à ProjectFlow de créer le dossier Outlook de 12 projet(s)")
+    assert "2026-0009 et 2 autre(s)" in message
+    assert "2026-0010" not in message
+    assert "répertoire chantier" in message
+
+
+def test_projectflow_report_message() -> None:
+    report = ProjectFlowReport(
+        ready=("2026-0150", "2026-0152"),
+        elsewhere=("2026-0153",),
+        unknown=(("2026-0999", "Absent."),),
+        failed=(("2026-0151", "Refus."),),
+    )
+
+    assert format_projectflow_report(report) == (
+        "ProjectFlow : 2 dossier(s) projet prêt(s) · 1 projet(s) absent(s) du répertoire "
+        "chantier (2026-0999) · 1 échec(s) (2026-0151) · 1 dossier(s) créé(s) hors du "
+        "dossier source analysé (2026-0153) : vérifiez le compte Outlook choisi dans "
+        "ProjectFlow."
+    )
+    assert format_projectflow_report(ProjectFlowReport()) == "ProjectFlow : aucun dossier traité."

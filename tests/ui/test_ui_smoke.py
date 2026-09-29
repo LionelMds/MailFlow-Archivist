@@ -1364,3 +1364,99 @@ def test_mailbox_page_offers_jev_only_with_a_saved_key(
     assert isinstance(controller.suggesters[0], ResponsiveProjectSuggester)
     window.close()
     app.processEvents()
+
+
+def test_mailbox_page_asks_projectflow_for_missing_folders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    from dataclasses import replace
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from mailflow import config
+    from mailflow.config import AppPaths, load_settings
+    from mailflow.core.mailbox_sorting import SortStatus
+    from mailflow.core.projectflow_link import ProjectFlowInstallation, ProjectFlowResult
+    from mailflow.outlook.mailbox import ProjectFolder
+    from mailflow.ui import main_window
+    from mailflow.ui.main_window import MainWindow
+
+    monkeypatch.setattr(config, "get_jev_api_key", lambda: None)
+    program = tmp_path / "ProjectFlowAutomator.exe"
+    installations = {"current": ProjectFlowInstallation(program, "0.1.56")}
+    monkeypatch.setattr(
+        main_window, "find_projectflow", lambda _configured: installations["current"],
+    )
+    requested: list[list[str]] = []
+
+    class FakeLink:
+        def __init__(self, executable: Path) -> None:
+            assert executable == program
+
+        def ensure_outlook_folders(self, numbers: list[str]) -> ProjectFlowResult:
+            requested.append(list(numbers))
+            return ProjectFlowResult.model_validate({
+                "protocol": 1,
+                "ok": True,
+                "projects": [
+                    {"number": "2026-0150", "status": "ok"},
+                    {"number": "2026-0999", "status": "unknown", "message": "Absent."},
+                ],
+            })
+
+    monkeypatch.setattr(main_window, "ProjectFlowLink", FakeLink)
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes,
+    )
+    analysis = mailbox_analysis()
+    missing = replace(
+        analysis.proposals[2], entry_id="D", status=SortStatus.MISSING_FOLDER,
+        missing_numbers=("2026-0150", "2026-0999"),
+    )
+    analysis.proposals.append(missing)
+
+    class RefreshingController(MailboxFakeController):
+        def refresh_mailbox_project_folders(self) -> Any:
+            self.mailbox_analysis.project_folders["2026-0150"] = ProjectFolder(
+                "2026-0150", "2026-0150 (Halle)", "2026-0150", None,
+            )
+            self.mailbox_analysis.proposals[-1] = replace(
+                missing, status=SortStatus.READY, destinations=("2026-0150",),
+                missing_numbers=("2026-0999",),
+            )
+            return self.mailbox_analysis
+
+    app = QApplication.instance() or QApplication([])
+    settings = AppSettings(paths=AppPaths(data_dir=tmp_path))
+    controller = RefreshingController(analysis)
+    window = MainWindow(settings, controller=controller)
+    button = window.mailflow_mailbox_projectflow_button
+
+    window.mailflow_navigation.setCurrentRow(3)
+    window.mailflow_mailbox_analyze_button.click()
+    # An outdated ProjectFlow cannot answer: the button explains why it is disabled.
+    assert not button.isEnabled()
+    assert "mettez-le à jour" in button.toolTip()
+
+    installations["current"] = ProjectFlowInstallation(program, "0.1.57")
+    window.mailflow_navigation.setCurrentRow(4)
+    assert "0.1.57" in window.mailflow_projectflow_status.text()
+    window.mailflow_navigation.setCurrentRow(3)
+    assert button.isEnabled()
+    assert button.text() == "Créer les 2 dossiers absents avec ProjectFlow"
+    button.click()
+
+    assert requested == [["2026-0150", "2026-0999"]]
+    status = window.mailflow_mailbox_status_label.text()
+    assert "1 dossier(s) projet prêt(s)" in status
+    assert "absent(s) du répertoire chantier (2026-0999)" in status
+    table = window.mailflow_mailbox_table
+    assert table.item(3, 8).text().startswith("Prêt à ranger")
+    assert button.text() == "Créer les dossiers absents avec ProjectFlow"
+
+    window.mailflow_projectflow_input.setText(str(program))
+    window.mailflow_save_settings_button.click()
+    assert load_settings(tmp_path / "config.json").projectflow_executable == str(program)
+    window.close()
+    app.processEvents()

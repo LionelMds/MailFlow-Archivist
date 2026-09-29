@@ -124,6 +124,8 @@ class AppSettings(BaseModel):
     mailbox_sort_days: int = Field(default=DEFAULT_MAILBOX_SORT_DAYS, ge=0)
     mailbox_read_attachments: bool = True
     mailbox_suggest_with_jev: bool = False
+    # ProjectFlow Automator program; empty means the installed one is detected.
+    projectflow_executable: str = ""
 
     @field_validator("ollama_base_url")
     @classmethod

@@ -166,6 +166,7 @@ class SortProposal:
 
 @dataclass
 class MailboxAnalysis:
+    request: MailboxSortRequest | None = None
     proposals: list[SortProposal] = field(default_factory=list)
     project_folders: dict[str, ProjectFolder] = field(default_factory=dict)
     items: dict[str, Any] = field(default_factory=dict)
@@ -189,20 +190,7 @@ def plan_proposal(
     references: Sequence[ProjectReference],
     project_folders: Mapping[str, ProjectFolder],
 ) -> SortProposal:
-    destinations = tuple(ref.number for ref in references if ref.number in project_folders)
-    missing = tuple(
-        ref.number for ref in references
-        if ref.number not in project_folders and not is_year_range(ref.number)
-    )
-    if destinations:
-        status = SortStatus.READY
-        note = f"Sans dossier Outlook, ignoré : {', '.join(missing)}" if missing else ""
-    elif missing:
-        status = SortStatus.MISSING_FOLDER
-        note = "créez le dossier dans Outlook puis relancez l'analyse."
-    else:
-        status = SortStatus.NO_NUMBER
-        note = ""
+    status, destinations, missing, note = _routing(references, project_folders)
     return SortProposal(
         entry_id=entry_id,
         source=source.kind,
@@ -217,6 +205,46 @@ def plan_proposal(
         missing_numbers=missing,
         note=note,
     )
+
+
+def replan_proposal(
+    proposal: SortProposal,
+    project_folders: Mapping[str, ProjectFolder],
+) -> SortProposal:
+    """Recompute a proposal from its numbers once project folders were added."""
+    if not proposal.references or proposal.status == SortStatus.UNREADABLE:
+        return proposal
+    status, destinations, missing, note = _routing(proposal.references, project_folders)
+    return replace(
+        proposal, status=status, destinations=destinations, missing_numbers=missing, note=note,
+    )
+
+
+def missing_project_numbers(analysis: MailboxAnalysis) -> list[str]:
+    """Numbers quoted in mails whose Outlook project folder does not exist."""
+    numbers: dict[str, None] = {}
+    for proposal in analysis.proposals:
+        for number in proposal.missing_numbers:
+            numbers.setdefault(number, None)
+    return list(numbers)
+
+
+def _routing(
+    references: Sequence[ProjectReference],
+    project_folders: Mapping[str, ProjectFolder],
+) -> tuple[SortStatus, tuple[str, ...], tuple[str, ...], str]:
+    destinations = tuple(ref.number for ref in references if ref.number in project_folders)
+    missing = tuple(
+        ref.number for ref in references
+        if ref.number not in project_folders and not is_year_range(ref.number)
+    )
+    if destinations:
+        note = f"Sans dossier Outlook, ignoré : {', '.join(missing)}" if missing else ""
+        return SortStatus.READY, destinations, missing, note
+    if missing:
+        note = "dossier à créer avec ProjectFlow ou dans Outlook."
+        return SortStatus.MISSING_FOLDER, destinations, missing, note
+    return SortStatus.NO_NUMBER, destinations, missing, ""
 
 
 def correspondent_label(mail: MailMetadata) -> str:
@@ -291,6 +319,7 @@ class MailboxSortService:
             kinds=request.sources,
         )
         analysis = MailboxAnalysis(
+            request=request,
             project_folders=self.mailbox.project_folders(
                 inbox, outlook_root_folder=request.outlook_root_folder,
             ),
@@ -362,6 +391,23 @@ class MailboxSortService:
             result.moved_count += 1
             result.sorted_entry_ids.append(entry_id)
         return result
+
+    def refresh_project_folders(self, analysis: MailboxAnalysis) -> None:
+        """Read the project folders again and update the proposals, without reading mails."""
+        request = analysis.request
+        if request is None:
+            raise RuntimeError("Analysez la boite mail avant de relire les dossiers projet")
+        inbox = self.mailbox.inbox(
+            account_identifier=request.account_identifier,
+            outlook_root_folder=request.outlook_root_folder,
+        )
+        analysis.project_folders = self.mailbox.project_folders(
+            inbox, outlook_root_folder=request.outlook_root_folder,
+        )
+        analysis.proposals = [
+            replan_proposal(proposal, analysis.project_folders)
+            for proposal in analysis.proposals
+        ]
 
     def display(self, analysis: MailboxAnalysis, entry_id: str) -> None:
         item = analysis.items.get(entry_id)

@@ -929,6 +929,14 @@ class AppController:
             analysis.items.pop(entry_id, None)
         return result
 
+    def refresh_mailbox_project_folders(self) -> MailboxAnalysis:
+        """Take project folders created meanwhile (ProjectFlow) into account."""
+        analysis = self.mailbox_analysis
+        if self.mailbox_service is None or analysis is None:
+            raise RuntimeError("Analysez la boite mail avant de relire les dossiers projet")
+        self.mailbox_service.refresh_project_folders(analysis)
+        return analysis
+
     def open_mailbox_mail(self, entry_id: str) -> None:
         if self.mailbox_service is None or self.mailbox_analysis is None:
             raise RuntimeError("Analysez la boite mail avant d'ouvrir un mail")

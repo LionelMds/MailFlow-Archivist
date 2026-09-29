@@ -21,6 +21,8 @@ Le code separe les zones a risque des fonctions pures :
   texte, avec limites de taille ; un fichier illisible ne donne aucun texte.
 - `core.mailbox_sorting` : plan de rangement de la boite mail, suggestions de
   projet et execution (copies puis deplacement).
+- `core.projectflow_link` : detection de ProjectFlow Automator et demande de creation
+  des dossiers projet Outlook manquants (fichiers JSON, processus sans fenetre).
 - `classifier.jev_project_matcher` : question Jev fermee sur les projets connus
   des interlocuteurs, pour les mails sans numero.
 - `outlook` : adaptateurs `pywin32`, scanner et exporteur mockables ;
@@ -92,6 +94,17 @@ seules les métadonnées détachées et les numéros candidats traversent le fil
 travail. Les candidats viennent de `SQLiteDirectoryStore.projects_for_email`,
 limités aux projets dont le dossier Outlook existe. Une erreur Jev arrête les
 suggestions sans bascule vers un autre moteur.
+
+## Lien avec ProjectFlow
+
+ProjectFlow reste le seul à nommer et créer les dossiers projet. `ProjectFlowLink`
+lance `ProjectFlowAutomator.exe --mailflow-request ... --mailflow-result ...` et
+attend sa fin dans un fil de travail (`ui.background_call.run_with_event_loop`) :
+aucun objet Outlook ne traverse ce fil. Ensuite, `refresh_project_folders` relit
+l'index des dossiers sur le fil principal et `replan_proposal` recalcule les
+destinations à partir des numéros déjà trouvés, sans relire les mails. La version
+installée vient de l'enregistrement de l'installateur ; une version trop ancienne
+désactive le bouton. Le format d'échange est décrit dans [projectflow.md](projectflow.md).
 
 ## Présentation et stockage
 

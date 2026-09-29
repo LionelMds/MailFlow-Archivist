@@ -96,8 +96,12 @@ Un mail qui cite plusieurs projets est copié dans chacun des dossiers ; l'origi
 dans le premier projet cité. Le contenu des pièces jointes n'est lu que si l'objet, le
 corps et les noms des pièces jointes ne mènent à aucun dossier projet. Un numéro dont
 le dossier projet n'existe pas encore dans Outlook laisse le mail en place, avec l'état
-**Dossier absent** : créer le dossier puis relancer l'analyse. Une plage d'années comme
-`2024-2025` n'est pas prise pour un numéro de projet.
+**Dossier absent**. **Créer les dossiers absents avec ProjectFlow** demande à
+ProjectFlow Automator de créer ces dossiers, avec son nommage habituel, pour les projets
+de son répertoire chantier ; les mails concernés passent aussitôt en **Prêt à ranger**.
+Un numéro inconnu du répertoire n'est jamais créé. Voir
+[le lien avec ProjectFlow](projectflow.md). Une plage d'années comme `2024-2025` n'est
+pas prise pour un numéro de projet.
 
 Avec une clé Jev enregistrée, l'option **Proposer un projet avec Jev** traite les mails
 sans numéro : Jev choisit parmi les projets où l'interlocuteur a déjà échangé selon

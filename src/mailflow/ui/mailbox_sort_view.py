@@ -11,6 +11,7 @@ from mailflow.core.mailbox_sorting import (
     SortProposal,
     SortStatus,
 )
+from mailflow.core.projectflow_link import ProjectFlowReport
 from mailflow.outlook.mailbox import MailboxSourceKind, ProjectFolder
 
 MAILBOX_SORT_COLUMNS = (
@@ -148,3 +149,38 @@ def format_mailbox_sort_result(result: MailboxSortResult) -> str:
     if result.failures:
         message += f" {len(result.failures)} échec(s) : " + " ; ".join(result.failures[:3])
     return message
+
+
+def build_projectflow_confirmation(numbers: Sequence[str]) -> str:
+    shown = ", ".join(numbers[:10])
+    if len(numbers) > 10:
+        shown += f" et {len(numbers) - 10} autre(s)"
+    return (
+        f"Demander à ProjectFlow de créer le dossier Outlook de {len(numbers)} projet(s) ?"
+        f"\n\n{shown}\n\nProjectFlow ne traite que les projets du répertoire chantier et "
+        "nomme le dossier comme à la création du projet. Aucun mail n'est déplacé à cette "
+        "étape."
+    )
+
+
+def format_projectflow_report(report: ProjectFlowReport) -> str:
+    parts = []
+    if report.ready:
+        parts.append(f"{len(report.ready)} dossier(s) projet prêt(s)")
+    if report.unknown:
+        numbers = ", ".join(number for number, _reason in report.unknown)
+        parts.append(
+            f"{len(report.unknown)} projet(s) absent(s) du répertoire chantier ({numbers})"
+        )
+    if report.failed:
+        numbers = ", ".join(number for number, _reason in report.failed)
+        parts.append(f"{len(report.failed)} échec(s) ({numbers})")
+    if report.elsewhere:
+        numbers = ", ".join(report.elsewhere)
+        parts.append(
+            f"{len(report.elsewhere)} dossier(s) créé(s) hors du dossier source analysé "
+            f"({numbers}) : vérifiez le compte Outlook choisi dans ProjectFlow"
+        )
+    if not parts:
+        return "ProjectFlow : aucun dossier traité."
+    return "ProjectFlow : " + " · ".join(parts) + "."

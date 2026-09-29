@@ -54,6 +54,11 @@ classification (sans contexte d'annuaire), plus les numéros et noms des dossier
 projet candidats et les entreprises qui y ont déjà échangé. Les réglages d'envoi du
 corps et de masquage des téléphones s'appliquent aussi à ces suggestions.
 
+La création des dossiers absents par ProjectFlow reste sur le poste : MailFlow ne
+transmet à ProjectFlow que des numéros de projet, par un fichier temporaire. ProjectFlow
+lit son répertoire chantier avec sa propre connexion Microsoft, comme à la création
+d'un projet, et n'ouvre jamais de page de connexion pour une demande de MailFlow.
+
 L'import annuaire Outlook reste local. Il stocke dans SQLite les adresses e-mail,
 domaines, noms affiches et projets associes pour ameliorer le tri, sans envoyer ces
 donnees a un service externe.

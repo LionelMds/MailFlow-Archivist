@@ -1,5 +1,17 @@
 # Release
 
+## Version 0.14.0
+
+- lien avec ProjectFlow Automator : sur la page `Boîte mail`, `Créer les dossiers
+  absents avec ProjectFlow` demande à ProjectFlow de créer le dossier Outlook des
+  projets cités sans dossier, pour les projets de son répertoire chantier ;
+- les mails concernés passent aussitôt en `Prêt à ranger`, sans nouvelle analyse ;
+- réglage `ProjectFlow Automator` : programme détecté automatiquement, version
+  affichée ; ProjectFlow 0.1.57 ou plus récent est nécessaire ;
+- MailFlow ne crée jamais de dossier projet lui-même.
+
+Voir [le lien avec ProjectFlow](projectflow.md).
+
 ## Version 0.13.0
 
 - nouvelle page `Boîte mail` : range les mails de la boîte de réception, du dossier

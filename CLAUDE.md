@@ -32,7 +32,9 @@ La CI (`.github/workflows/ci.yml`) lance ces trois contrôles sur Windows et mac
 - `RoleEstimate` (rôle suggéré, réponse par rôle) ne classe jamais seul : seul un rôle
   enregistré dans l'annuaire l'active ; une correction manuelle n'est jamais écrasée.
 - Rangement Outlook (`core/mailbox_sorting.py`) : déplacer ou copier, jamais supprimer ;
-  une destination est un dossier projet Outlook existant, jamais créé par MailFlow ;
+  une destination est un dossier projet Outlook existant, jamais créé par MailFlow :
+  seul ProjectFlow le crée (`core/projectflow_link.py`, protocole partagé avec
+  `projectflow/bridge.py`, voir `docs/projectflow.md`) ;
   une suggestion Jev n'est jamais cochée d'office.
 - Le thème est clair par conception : `ui.theme.apply_light_theme` l'impose même quand
   Windows est en mode sombre.
