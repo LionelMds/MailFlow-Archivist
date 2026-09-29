@@ -205,3 +205,30 @@ def test_jev_and_openai_keys_use_separate_keyring_entries(
         ("mailflow-archivist", "typesafe-jev-api-key"): "ts-key",
         ("mailflow-archivist", "openai-api-key"): "sk-key",
     }
+
+
+def test_mailbox_sorting_options_round_trip_and_default_for_old_configs(
+    tmp_path: Path,
+) -> None:
+    old_config = tmp_path / "old.json"
+    old_config.write_text(json.dumps({"settings_version": 1}), encoding="utf-8")
+    defaults = load_settings(old_config)
+    settings = AppSettings(
+        paths=AppPaths(data_dir=tmp_path),
+        mailbox_pending_folder="Tri",
+        mailbox_sort_days=0,
+        mailbox_read_attachments=False,
+        mailbox_suggest_with_jev=True,
+    )
+
+    save_settings(settings)
+    loaded = load_settings(settings.paths.config_file)
+
+    assert defaults.mailbox_pending_folder == "A CLASSER"
+    assert defaults.mailbox_sort_days == 90
+    assert defaults.mailbox_read_attachments
+    assert not defaults.mailbox_suggest_with_jev
+    assert loaded.mailbox_pending_folder == "Tri"
+    assert loaded.mailbox_sort_days == 0
+    assert not loaded.mailbox_read_attachments
+    assert loaded.mailbox_suggest_with_jev

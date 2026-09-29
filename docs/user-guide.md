@@ -76,6 +76,38 @@ pour chaque entreprise inconnue. **Valider** (ou **Valider les suggestions sûre
 enregistre le rôle, et les mails sont mis à jour aussitôt, sans nouvel appel à l'IA.
 **Actualiser les rôles des mails** réapplique l'annuaire à tous les mails affichés.
 
+## Ranger la boîte mail
+
+La page **Boîte mail** remet de l'ordre dans Outlook avant le scan : elle place les
+mails de la boîte de réception, du dossier **A CLASSER** et des éléments envoyés dans
+leur dossier projet Outlook.
+
+1. Choisir le compte et le dossier source en haut (celui qui contient les dossiers
+   `Année/Projet`), puis ouvrir **Boîte mail**.
+2. Cocher les dossiers à lire, choisir la période et cliquer sur
+   **Analyser la boîte mail**. Rien n'est déplacé à cette étape.
+3. Contrôler la liste : numéros trouvés, **Trouvé dans** (objet, corps, nom ou contenu
+   de pièce jointe) et **Destination Outlook**. Les mails prêts sont cochés ; le filtre
+   permet de n'afficher qu'un état. Un double-clic ouvre le mail dans Outlook.
+4. Cliquer sur **Ranger les mails cochés** et confirmer. Seuls les mails cochés et
+   visibles sont traités.
+
+Un mail qui cite plusieurs projets est copié dans chacun des dossiers ; l'original va
+dans le premier projet cité. Le contenu des pièces jointes n'est lu que si l'objet, le
+corps et les noms des pièces jointes ne mènent à aucun dossier projet. Un numéro dont
+le dossier projet n'existe pas encore dans Outlook laisse le mail en place, avec l'état
+**Dossier absent** : créer le dossier puis relancer l'analyse. Une plage d'années comme
+`2024-2025` n'est pas prise pour un numéro de projet.
+
+Avec une clé Jev enregistrée, l'option **Proposer un projet avec Jev** traite les mails
+sans numéro : Jev choisit parmi les projets où l'interlocuteur a déjà échangé selon
+l'annuaire, ou répond qu'aucun ne convient. La suggestion affiche sa probabilité et
+reste décochée : la cocher vaut validation. Une erreur Jev arrête seulement les
+suggestions ; les numéros trouvés restent proposés.
+
+Aucun mail n'est supprimé. Les mails rangés apparaissent au prochain scan ou à la
+prochaine vérification de la surveillance.
+
 ## Hierarchie des dossiers
 
 Apres la classification, MailFlow propose une destination par entreprise
@@ -116,7 +148,8 @@ places ensuite en copie.
 Apres le scan, le panneau `Arborescence` montre les dossiers proposes avec le nombre de
 mails par branche. Cette etape ne cree encore aucun fichier.
 
-La navigation latérale sépare les mails, l'arborescence, l'annuaire et les réglages.
+La navigation latérale sépare les mails, l'arborescence, l'annuaire, la boîte mail
+et les réglages.
 Le journal d'activité est repliable et les réglages restent accessibles par défilement
 sur les fenêtres réduites.
 

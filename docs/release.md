@@ -1,5 +1,20 @@
 # Release
 
+## Version 0.13.0
+
+- nouvelle page `Boîte mail` : range les mails de la boîte de réception, du dossier
+  `A CLASSER` et des éléments envoyés dans le dossier projet Outlook dont le numéro
+  `20XX-XXXX` figure dans l'objet, le corps ou une pièce jointe ;
+- lecture du texte des pièces jointes PDF, Word, Excel et texte quand l'objet, le corps
+  et les noms de fichiers ne mènent à aucun dossier (nouvelle dépendance `pypdf`) ;
+- un mail qui cite plusieurs projets est copié dans chacun ; l'original va dans le
+  premier projet cité ;
+- un numéro sans dossier projet Outlook laisse le mail en place (`Dossier absent`) ;
+- option Jev : suggestion de projet pour les mails sans numéro, parmi les projets où
+  l'interlocuteur a déjà échangé, jamais cochée d'office ;
+- analyse sans aucun déplacement, puis confirmation avant de ranger ; aucun mail n'est
+  supprimé ; période, dossier à classer et options mémorisés.
+
 ## Version 0.12.0
 
 - rôle suggéré par Jev pour les entreprises inconnues, dans une nouvelle colonne de

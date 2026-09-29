@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol, cast
@@ -15,6 +15,7 @@ from mailflow.classifier.decision_engine import (
     destination_for,
 )
 from mailflow.classifier.jev_classifier import JevClassifier
+from mailflow.classifier.jev_project_matcher import JevProjectMatcher
 from mailflow.classifier.ollama_classifier import OllamaClassifier
 from mailflow.classifier.pipeline import (
     ClassificationPipeline,
@@ -56,6 +57,15 @@ from mailflow.core.folder_tree import (
     merge_folder,
     rename_folder_leaf,
 )
+from mailflow.core.mailbox_sorting import (
+    MailboxAnalysis,
+    MailboxProgress,
+    MailboxSortRequest,
+    MailboxSortResult,
+    MailboxSortService,
+    ProjectHistoryProtocol,
+    ProjectSuggester,
+)
 from mailflow.core.manual_review import (
     MANUAL_DECISION_REASON,
     apply_manual_classification,
@@ -88,6 +98,7 @@ from mailflow.models import (
 )
 from mailflow.outlook.client import OutlookClient
 from mailflow.outlook.exporter import OutlookExporter
+from mailflow.outlook.mailbox import OutlookMailbox
 from mailflow.outlook.scanner import OutlookScanner, ScannedMail
 from mailflow.storage.directory_store import SQLiteDirectoryStore
 from mailflow.storage.learning_store import SQLiteLearningStore
@@ -239,6 +250,7 @@ class AppController:
         archive_executor: ArchiveBatchExecutor | None = None,
         learning_store: LearningStoreProtocol | None = None,
         directory_store: DirectoryStoreProtocol | None = None,
+        mailbox_service: MailboxSortService | None = None,
     ) -> None:
         self.scan_service = scan_service
         self.preview_pipeline = preview_pipeline
@@ -251,6 +263,8 @@ class AppController:
         self.outlook_items: dict[str, object] = {}
         self.last_scan_directory_update: ScanDirectoryUpdate | None = None
         self.last_directory_role_change: DirectoryRoleChange | None = None
+        self.mailbox_service = mailbox_service
+        self.mailbox_analysis: MailboxAnalysis | None = None
 
     def scan_and_preview(
         self,
@@ -869,6 +883,57 @@ class AppController:
             for row in self.preview_rows
         ]
 
+    def analyze_mailbox(
+        self,
+        request: MailboxSortRequest,
+        *,
+        progress: MailboxProgress | None = None,
+        suggester: ProjectSuggester | None = None,
+    ) -> MailboxAnalysis:
+        """Read the loose mails and propose their project folder, without moving any."""
+        if self.mailbox_service is None:
+            raise RuntimeError("Le rangement de la boite mail n'est pas configure")
+        root = request.outlook_root_folder.strip()
+        if not root:
+            raise ValueError("Le dossier Outlook racine est obligatoire")
+        store = self.directory_store
+        history = (
+            cast(ProjectHistoryProtocol, store)
+            if suggester is not None and callable(getattr(store, "projects_for_email", None))
+            else None
+        )
+        self.mailbox_analysis = None
+        self.mailbox_analysis = self.mailbox_service.analyze(
+            replace(
+                request,
+                account_identifier=_clean_optional(request.account_identifier),
+                outlook_root_folder=root,
+            ),
+            progress=progress,
+            suggester=suggester,
+            history=history,
+        )
+        return self.mailbox_analysis
+
+    def sort_mailbox(self, choices: Mapping[str, Sequence[str]]) -> MailboxSortResult:
+        """Move the chosen mails of the last analysis; sorted mails leave the list."""
+        analysis = self.mailbox_analysis
+        if self.mailbox_service is None or analysis is None:
+            raise RuntimeError("Analysez la boite mail avant de ranger les mails")
+        result = self.mailbox_service.execute(analysis, choices)
+        sorted_ids = set(result.sorted_entry_ids)
+        analysis.proposals = [
+            proposal for proposal in analysis.proposals if proposal.entry_id not in sorted_ids
+        ]
+        for entry_id in sorted_ids:
+            analysis.items.pop(entry_id, None)
+        return result
+
+    def open_mailbox_mail(self, entry_id: str) -> None:
+        if self.mailbox_service is None or self.mailbox_analysis is None:
+            raise RuntimeError("Analysez la boite mail avant d'ouvrir un mail")
+        self.mailbox_service.display(self.mailbox_analysis, entry_id)
+
 
 def build_default_controller(settings: AppSettings) -> AppController:
     store = SQLiteArchiveStore(settings.paths.sqlite_file)
@@ -879,10 +944,11 @@ def build_default_controller(settings: AppSettings) -> AppController:
     directory_store.initialize()
     ai_classifier = build_ai_classifier(settings)
     outlook_client = OutlookClient()
+    scanner = OutlookScanner(account_email=settings.selected_outlook_account or "")
     return OutlookAppController(
         scan_service=OutlookScanService(
             folder_resolver=outlook_client,
-            scanner=OutlookScanner(account_email=settings.selected_outlook_account or ""),
+            scanner=scanner,
         ),
         preview_pipeline=ClassificationPipeline(
             projects_root=settings.local_projects_root,
@@ -906,6 +972,7 @@ def build_default_controller(settings: AppSettings) -> AppController:
                 store=store,
             )
         ),
+        mailbox_service=MailboxSortService(OutlookMailbox(outlook_client, scanner)),
     )
 
 
@@ -921,6 +988,7 @@ class OutlookAppController(AppController):
         archive_executor: ArchiveBatchExecutor | None = None,
         learning_store: LearningStoreProtocol | None = None,
         directory_store: DirectoryStoreProtocol | None = None,
+        mailbox_service: MailboxSortService | None = None,
     ) -> None:
         super().__init__(
             scan_service=scan_service,
@@ -930,6 +998,7 @@ class OutlookAppController(AppController):
             archive_executor=archive_executor,
             learning_store=learning_store,
             directory_store=directory_store,
+            mailbox_service=mailbox_service,
         )
         self.outlook_client = outlook_client
 
@@ -977,6 +1046,22 @@ def build_ai_classifier(
         api_key=api_key,
         model=settings.ai_model,
         timeout_seconds=settings.openai_timeout_seconds,
+    )
+
+
+def build_project_suggester(settings: AppSettings) -> JevProjectMatcher | None:
+    """Jev suggests a project for mails without number; None without a Jev key."""
+    jev_key = get_jev_api_key()
+    if not jev_key:
+        return None
+    return JevProjectMatcher(
+        JevClassifier(
+            api_key=jev_key,
+            model=settings.jev_model,
+            timeout_seconds=settings.jev_timeout_seconds,
+        ),
+        include_body=settings.ai_include_body_excerpt,
+        privacy_mask_phone_numbers=settings.privacy_mask_phone_numbers,
     )
 
 

@@ -169,6 +169,27 @@ class SQLiteDirectoryStore:
         with self._connect() as connection:
             return _organization_id_for_email(connection, normalized_email)
 
+    def projects_for_email(self, email: str) -> list[str]:
+        """Projects where this address's company already exchanged, most recent first."""
+        normalized_email = email.strip().casefold()
+        if not normalized_email:
+            return []
+        self.initialize()
+        with self._connect() as connection:
+            organization_id = _organization_id_for_email(connection, normalized_email)
+            if organization_id is None:
+                return []
+            rows = connection.execute(
+                """
+                SELECT project_number
+                FROM project_participants
+                WHERE organization_id = ?
+                ORDER BY last_seen_at DESC, observation_count DESC, project_number DESC
+                """,
+                (organization_id,),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
     def interlocutor_for_email(
         self,
         project_number: str,

@@ -25,6 +25,8 @@ JEV_API_BASE_URL = "https://api.typesafe.ai"
 DEFAULT_JEV_MODEL = "jev-latest"
 DEFAULT_JEV_TIMEOUT_SECONDS = 20.0
 JEV_MODEL_OPTIONS = (DEFAULT_JEV_MODEL,)
+DEFAULT_MAILBOX_PENDING_FOLDER = "A CLASSER"
+DEFAULT_MAILBOX_SORT_DAYS = 90
 SETTINGS_VERSION = 1
 AI_MODEL_OPTIONS = (
     DEFAULT_AI_MODEL,
@@ -116,6 +118,12 @@ class AppSettings(BaseModel):
     decision_confidence_threshold: float = Field(
         default=REVIEW_CONFIDENCE_THRESHOLD, ge=0.0, le=1.0,
     )
+    # Mailbox sorting: extra source folder, period in days (0 = every mail),
+    # attachment contents and Jev suggestions for mails without project number.
+    mailbox_pending_folder: str = DEFAULT_MAILBOX_PENDING_FOLDER
+    mailbox_sort_days: int = Field(default=DEFAULT_MAILBOX_SORT_DAYS, ge=0)
+    mailbox_read_attachments: bool = True
+    mailbox_suggest_with_jev: bool = False
 
     @field_validator("ollama_base_url")
     @classmethod

@@ -15,7 +15,16 @@ Le code separe les zones a risque des fonctions pures :
 - `classifier.routing_context` : interlocuteur principal, autorite de l'annuaire,
   historique commercial et exemples manuels verifies.
 - `classifier` : sortie IA structuree a trois categories, garde-fous metier et decision.
-- `outlook` : adaptateurs `pywin32`, scanner et exporteur mockables.
+- `core.project_references` : detection pure des numeros `20XX-XXXX` et de leur
+  provenance (objet, corps, nom ou contenu de piece jointe).
+- `core.attachment_text` : texte des PDF (pypdf), fichiers Office Open XML et
+  texte, avec limites de taille ; un fichier illisible ne donne aucun texte.
+- `core.mailbox_sorting` : plan de rangement de la boite mail, suggestions de
+  projet et execution (copies puis deplacement).
+- `classifier.jev_project_matcher` : question Jev fermee sur les projets connus
+  des interlocuteurs, pour les mails sans numero.
+- `outlook` : adaptateurs `pywin32`, scanner et exporteur mockables ;
+  `outlook.mailbox` lit les dossiers sources et deplace ou copie les mails.
 - `storage` : journal SQLite, exemples de routage verifies et annuaire entreprises/domaines.
 - `ui` : interface PySide6.
 
@@ -64,6 +73,25 @@ une opération concurrente par la fenêtre principale.
 
 Cette approche préserve la chronologie du contexte IA. Elle ne parallélise pas tous
 les mails et ne rend pas les opérations Outlook ou d'export asynchrones.
+
+## Rangement de la boîte mail
+
+`MailboxSortService.analyze` lit les mails posés directement dans la boîte de
+réception, le dossier à classer et les éléments envoyés, sur le fil principal comme
+tout accès Outlook. L'index des dossiers projet vient du parcours récursif déjà
+utilisé par l'import de l'annuaire. Un numéro ne désigne une destination que si son
+dossier Outlook existe ; les autres sont signalés. L'analyse ne modifie rien.
+
+`execute` n'accepte que les destinations proposées par l'analyse. Pour un mail qui
+cite plusieurs projets, les copies sont créées avant le déplacement de l'original,
+dont la référence Outlook peut changer une fois déplacé. Aucune suppression n'est
+possible par ce chemin.
+
+Les suggestions Jev passent par `ui.background_call.ResponsiveProjectSuggester` :
+seules les métadonnées détachées et les numéros candidats traversent le fil de
+travail. Les candidats viennent de `SQLiteDirectoryStore.projects_for_email`,
+limités aux projets dont le dossier Outlook existe. Une erreur Jev arrête les
+suggestions sans bascule vers un autre moteur.
 
 ## Présentation et stockage
 

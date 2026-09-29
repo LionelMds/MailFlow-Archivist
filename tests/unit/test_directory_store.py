@@ -272,3 +272,13 @@ def test_directory_store_deletes_organization_and_related_records(tmp_path: Path
     assert store.organization_name_for_email("contact@gva.ch") is None
     assert store.count_domains() == 0
     assert store.count_contacts() == 0
+
+
+def test_directory_store_lists_projects_of_an_address_company(tmp_path: Path) -> None:
+    store = SQLiteDirectoryStore(tmp_path / "mailflow.sqlite")
+    store.record_observation(observation("contact@gva.ch"))
+    store.record_observation(replace(observation("chef@gva.ch"), project_number="2026-0012"))
+
+    assert store.projects_for_email("Autre@GVA.ch") == ["2026-0012", "2025-4893"]
+    assert store.projects_for_email("inconnu@ailleurs.test") == []
+    assert store.projects_for_email("  ") == []

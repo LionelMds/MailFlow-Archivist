@@ -86,6 +86,18 @@ class OutlookClient:
             current = _find_child_folder(current, part)
         return current
 
+    def default_folder(self, account_identifier: str | None, folder_type: int) -> Any | None:
+        """Return a default folder (Inbox, Sent Items...) of the account's own store."""
+        root = self.find_account_root(account_identifier)
+        getter = getattr(getattr(root, "Store", None), "GetDefaultFolder", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter(folder_type)
+        except Exception:
+            # Some stores (PST archives, shared mailboxes) have no such default folder.
+            return None
+
     def _connect_namespace(self) -> Any:
         try:
             import win32com.client
@@ -111,11 +123,19 @@ def _split_path(path: str | Sequence[str]) -> list[str]:
     return [str(part).strip() for part in path if str(part).strip()]
 
 
-def _find_child_folder(parent: Any, name: str) -> Any:
+def child_folder_named(parent: Any, name: str) -> Any | None:
+    """Find a direct subfolder, ignoring case, accents and repeated spaces."""
     wanted = _normalize_name(name)
     for child in _iter_com_collection(getattr(parent, "Folders", [])):
         if _normalize_name(str(getattr(child, "Name", ""))) == wanted:
             return child
+    return None
+
+
+def _find_child_folder(parent: Any, name: str) -> Any:
+    child = child_folder_named(parent, name)
+    if child is not None:
+        return child
     parent_name = str(getattr(parent, "Name", ""))
     msg = f"Dossier Outlook introuvable sous {parent_name}: {name}"
     raise OutlookFolderNotFoundError(msg)

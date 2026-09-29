@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 from mailflow.core.archive_actions import rows_to_archive
 from mailflow.core.archive_batch import ArchiveBatchResult
 from mailflow.core.background_watcher import ReviewQueue, WatchState
+from mailflow.core.mailbox_sorting import MailboxSortRequest
 from mailflow.core.update_installer import download_update_installer, launch_update_installer
 from mailflow.core.updates import UpdateCheckResult, check_for_updates
 from mailflow.models import (
@@ -23,6 +24,19 @@ from mailflow.models import (
     PreviewAction,
     PreviewRow,
     RoutingCategory,
+)
+from mailflow.outlook.mailbox import MailboxSourceKind
+from mailflow.ui.mailbox_sort_view import (
+    CHECK_COLUMN,
+    MAILBOX_SORT_COLUMNS,
+    PERIOD_OPTIONS,
+    STATUS_FILTERS,
+    build_mailbox_sort_confirmation,
+    format_mailbox_sort_result,
+    mailbox_since,
+    period_label,
+    proposal_to_cells,
+    summarize_mailbox_analysis,
 )
 
 if TYPE_CHECKING:
@@ -69,7 +83,11 @@ UI_TEXT = {
     "tray_watch_active": "surveillance active",
     "tray_watch_inactive": "surveillance inactive",
     "tray_quit": "Quitter",
+    "analyze_mailbox": "Analyser la boîte mail",
+    "sort_mailbox": "Ranger les mails cochés",
 }
+MAILBOX_PAGE = 3
+SETTINGS_PAGE = 4
 DIRECTORY_COLUMNS = (
     "Entreprise", "Domaines", "Contacts", "Rôle global", "Rôle suggéré", "Projets",
 )
@@ -172,6 +190,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QMainWindow,
         QMenu,
         QMessageBox,
+        QProgressDialog,
         QPushButton,
         QScrollArea,
         QSizePolicy,
@@ -198,6 +217,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         AI_MODEL_OPTIONS,
         DEFAULT_AI_MODEL,
         DEFAULT_JEV_MODEL,
+        DEFAULT_MAILBOX_PENDING_FOLDER,
         DEFAULT_OLLAMA_BASE_URL,
         DEFAULT_OLLAMA_MODEL,
         JEV_MODEL_OPTIONS,
@@ -211,11 +231,16 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         PreviewRequest,
         build_ai_classifier,
         build_default_controller,
+        build_project_suggester,
     )
     from mailflow.core.manual_review import suggested_manual_destination
     from mailflow.core.project_digest import build_project_digest
     from mailflow.resources import app_icon_path
-    from mailflow.ui.background_call import ResponsiveAiClassifier, run_with_event_loop
+    from mailflow.ui.background_call import (
+        ResponsiveAiClassifier,
+        ResponsiveProjectSuggester,
+        run_with_event_loop,
+    )
     from mailflow.ui.mail_preview import preview_row_to_html
     from mailflow.ui.preview_table import (
         DESTINATION_COLUMN,
@@ -360,7 +385,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     navigation = QListWidget()
     navigation.setObjectName("navigation")
     navigation.setAccessibleName("Navigation principale")
-    navigation.addItems(["Mails", "Arborescence", "Annuaire", "Réglages"])
+    navigation.addItems(["Mails", "Arborescence", "Annuaire", "Boîte mail", "Réglages"])
     navigation.setFixedWidth(154)
     navigation.setCurrentRow(0)
     content_splitter.addWidget(navigation)
@@ -615,6 +640,130 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     directory_layout.addWidget(directory_status_label)
     pages.addWidget(directory_page)
 
+    mailbox_page = QWidget()
+    mailbox_layout = QVBoxLayout(mailbox_page)
+    mailbox_layout.setContentsMargins(0, 0, 0, 0)
+    mailbox_layout.setSpacing(8)
+    mailbox_heading = QLabel("Ranger la boîte mail Outlook")
+    mailbox_heading.setProperty("role", "heading")
+    mailbox_hint = QLabel(
+        "Place les mails de la boîte de réception, du dossier à classer et des éléments "
+        "envoyés dans le dossier projet Outlook dont le numéro (20XX-XXXX) figure dans "
+        "l'objet, le corps ou une pièce jointe. Un mail qui cite plusieurs projets est copié "
+        "dans chacun. Rien ne bouge avant votre confirmation et aucun mail n'est supprimé."
+    )
+    mailbox_hint.setProperty("role", "muted")
+    mailbox_hint.setWordWrap(True)
+    mailbox_layout.addWidget(mailbox_heading)
+    mailbox_layout.addWidget(mailbox_hint)
+    mailbox_options = QGroupBox("Où chercher")
+    mailbox_options_layout = QGridLayout(mailbox_options)
+    mailbox_options_layout.setColumnStretch(3, 1)
+    mailbox_inbox_checkbox = QCheckBox("Boîte de réception")
+    mailbox_inbox_checkbox.setChecked(True)
+    mailbox_inbox_checkbox.setToolTip(
+        "Mails posés directement dans le dossier source choisi en haut, sans ses sous-dossiers."
+    )
+    mailbox_pending_checkbox = QCheckBox("Dossier")
+    mailbox_pending_checkbox.setChecked(True)
+    mailbox_pending_input = QLineEdit(settings.mailbox_pending_folder)
+    mailbox_pending_input.setPlaceholderText(DEFAULT_MAILBOX_PENDING_FOLDER)
+    mailbox_pending_input.setAccessibleName("Dossier Outlook à classer")
+    mailbox_pending_input.setToolTip(
+        "Cherché sous la boîte de réception puis à la racine du compte."
+    )
+    mailbox_pending_input.setFixedWidth(160)
+    mailbox_pending_widget = QWidget()
+    mailbox_pending_layout = QHBoxLayout(mailbox_pending_widget)
+    mailbox_pending_layout.setContentsMargins(0, 0, 0, 0)
+    mailbox_pending_layout.addWidget(mailbox_pending_checkbox)
+    mailbox_pending_layout.addWidget(mailbox_pending_input)
+    mailbox_sent_checkbox = QCheckBox("Éléments envoyés")
+    mailbox_sent_checkbox.setChecked(True)
+    mailbox_options_layout.addWidget(mailbox_inbox_checkbox, 0, 0)
+    mailbox_options_layout.addWidget(mailbox_pending_widget, 0, 1)
+    mailbox_options_layout.addWidget(mailbox_sent_checkbox, 0, 2)
+    mailbox_period_combo = QComboBox()
+    mailbox_period_combo.setAccessibleName("Période analysée")
+    for period_days, label in PERIOD_OPTIONS:
+        mailbox_period_combo.addItem(label, period_days)
+    if mailbox_period_combo.findData(settings.mailbox_sort_days) < 0:
+        mailbox_period_combo.addItem(
+            period_label(settings.mailbox_sort_days), settings.mailbox_sort_days
+        )
+    mailbox_period_combo.setCurrentIndex(
+        mailbox_period_combo.findData(settings.mailbox_sort_days)
+    )
+    mailbox_period_label = QLabel("Période")
+    mailbox_period_label.setBuddy(mailbox_period_combo)
+    mailbox_options_layout.addWidget(mailbox_period_label, 1, 0)
+    mailbox_options_layout.addWidget(mailbox_period_combo, 1, 1)
+    mailbox_attachments_checkbox = QCheckBox(
+        "Lire le contenu des pièces jointes (PDF, Word, Excel, texte)"
+    )
+    mailbox_attachments_checkbox.setChecked(settings.mailbox_read_attachments)
+    mailbox_attachments_checkbox.setToolTip(
+        "Seulement quand l'objet, le corps et les noms des pièces jointes ne mènent à aucun "
+        "dossier projet. Les fichiers sont lus dans un dossier temporaire aussitôt effacé."
+    )
+    mailbox_options_layout.addWidget(mailbox_attachments_checkbox, 2, 0, 1, 4)
+    mailbox_jev_checkbox = QCheckBox(
+        "Proposer un projet avec Jev pour les mails sans numéro (suggestion à cocher)"
+    )
+    mailbox_jev_checkbox.setChecked(settings.mailbox_suggest_with_jev)
+    mailbox_options_layout.addWidget(mailbox_jev_checkbox, 3, 0, 1, 4)
+    mailbox_analyze_button = QPushButton(UI_TEXT["analyze_mailbox"])
+    mailbox_analyze_button.setProperty("role", "primary")
+    mailbox_options_layout.addWidget(
+        mailbox_analyze_button, 4, 0, 1, 2, Qt.AlignmentFlag.AlignLeft
+    )
+    mailbox_layout.addWidget(mailbox_options)
+    mailbox_summary_label = QLabel("Aucune analyse de la boîte mail pour le moment.")
+    mailbox_summary_label.setProperty("role", "summary")
+    mailbox_summary_label.setWordWrap(True)
+    mailbox_layout.addWidget(mailbox_summary_label)
+    mailbox_filters = QWidget()
+    mailbox_filters_layout = QHBoxLayout(mailbox_filters)
+    mailbox_filters_layout.setContentsMargins(0, 0, 0, 0)
+    mailbox_filter_combo = QComboBox()
+    mailbox_filter_combo.setAccessibleName("Filtrer les mails de la boîte par état")
+    for label, status_value in STATUS_FILTERS:
+        mailbox_filter_combo.addItem(label, None if status_value is None else status_value.value)
+    mailbox_check_all_button = QPushButton("Tout cocher")
+    mailbox_uncheck_all_button = QPushButton("Tout décocher")
+    mailbox_sort_button = QPushButton(UI_TEXT["sort_mailbox"])
+    mailbox_sort_button.setProperty("role", "primary")
+    mailbox_sort_button.setEnabled(False)
+    mailbox_filters_layout.addWidget(mailbox_filter_combo)
+    mailbox_filters_layout.addWidget(mailbox_check_all_button)
+    mailbox_filters_layout.addWidget(mailbox_uncheck_all_button)
+    mailbox_filters_layout.addStretch(1)
+    mailbox_filters_layout.addWidget(mailbox_sort_button)
+    mailbox_layout.addWidget(mailbox_filters)
+    mailbox_table = QTableWidget(0, len(MAILBOX_SORT_COLUMNS))
+    mailbox_table.setHorizontalHeaderLabels(list(MAILBOX_SORT_COLUMNS))
+    mailbox_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    mailbox_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+    mailbox_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    mailbox_table.setAlternatingRowColors(True)
+    mailbox_table.setShowGrid(False)
+    mailbox_table.verticalHeader().hide()
+    mailbox_table.verticalHeader().setDefaultSectionSize(34)
+    mailbox_table.setAccessibleName("Mails de la boîte et dossier projet proposé")
+    mailbox_table.setToolTip("Double-cliquez sur un mail pour l'ouvrir dans Outlook.")
+    mailbox_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    mailbox_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+    for column, width in (
+        (0, 64), (1, 96), (2, 128), (3, 160), (5, 100), (6, 110), (7, 210), (8, 190),
+    ):
+        mailbox_table.setColumnWidth(column, width)
+    mailbox_layout.addWidget(mailbox_table, 1)
+    mailbox_status_label = QLabel("")
+    mailbox_status_label.setWordWrap(True)
+    mailbox_status_label.setProperty("role", "muted")
+    mailbox_layout.addWidget(mailbox_status_label)
+    pages.addWidget(mailbox_page)
+
     settings_page = QWidget()
     settings_layout = QVBoxLayout(settings_page)
     settings_layout.setContentsMargins(0, 0, 0, 0)
@@ -866,7 +1015,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             table.setColumnHidden(column, not checked)
 
     detail_columns_action.toggled.connect(show_detail_columns)
-    empty_settings_button.clicked.connect(lambda: navigation.setCurrentRow(3))
+    empty_settings_button.clicked.connect(lambda: navigation.setCurrentRow(SETTINGS_PAGE))
     window.setCentralWidget(central)
     watch_timer = QTimer(window)
     watch_timer.setInterval(WATCH_INTERVAL_MS)
@@ -2251,6 +2400,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             apply_current_ai_settings()
             jev_key_input.clear()
             update_jev_key_status(valid=None)
+            update_mailbox_jev_option()
             append_log("Cle Jev enregistree dans le coffre du systeme.")
         except Exception as exc:
             append_log(f"Erreur enregistrement cle Jev: {exc}")
@@ -2798,6 +2948,232 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         )
         append_log(f"Rappel file a verifier: {review_queue.count} mail(s) en attente.")
 
+    mailbox_row_entry_ids: list[str] = []
+
+    def update_mailbox_jev_option() -> None:
+        available = has_jev_api_key()
+        mailbox_jev_checkbox.setEnabled(available)
+        mailbox_jev_checkbox.setToolTip(
+            "Jev choisit parmi les projets où ces interlocuteurs ont déjà échangé. "
+            "Une suggestion n'est jamais cochée d'office."
+            if available
+            else "Enregistrez une clé Jev (TypeSafe) dans Réglages pour activer cette option."
+        )
+
+    def mailbox_checked_choices() -> dict[str, tuple[str, ...]]:
+        analysis = getattr(active_controller, "mailbox_analysis", None)
+        if analysis is None:
+            return {}
+        proposals = {proposal.entry_id: proposal for proposal in analysis.proposals}
+        choices: dict[str, tuple[str, ...]] = {}
+        for row, entry_id in enumerate(mailbox_row_entry_ids):
+            item = mailbox_table.item(row, CHECK_COLUMN)
+            proposal = proposals.get(entry_id)
+            if (
+                item is None
+                or proposal is None
+                or mailbox_table.isRowHidden(row)
+                or item.checkState() != Qt.CheckState.Checked
+            ):
+                continue
+            if proposal.selectable_targets:
+                choices[entry_id] = proposal.selectable_targets
+        return choices
+
+    def update_mailbox_actions() -> None:
+        count = len(mailbox_checked_choices())
+        # While busy the whole page is disabled, and the handler is guarded.
+        mailbox_sort_button.setEnabled(count > 0)
+        mailbox_sort_button.setText(
+            f"Ranger les {count} mails cochés" if count > 1 else UI_TEXT["sort_mailbox"]
+        )
+
+    def apply_mailbox_filter() -> None:
+        wanted = mailbox_filter_combo.currentData()
+        analysis = getattr(active_controller, "mailbox_analysis", None)
+        statuses = {
+            proposal.entry_id: proposal.status.value
+            for proposal in (analysis.proposals if analysis is not None else [])
+        }
+        for row, entry_id in enumerate(mailbox_row_entry_ids):
+            mailbox_table.setRowHidden(
+                row, wanted is not None and statuses.get(entry_id) != wanted
+            )
+        update_mailbox_actions()
+
+    def refresh_mailbox_table() -> None:
+        analysis = getattr(active_controller, "mailbox_analysis", None)
+        proposals = analysis.proposals if analysis is not None else []
+        folders = analysis.project_folders if analysis is not None else {}
+        mailbox_table.blockSignals(True)
+        try:
+            mailbox_table.clearContents()
+            mailbox_table.setRowCount(len(proposals))
+            mailbox_row_entry_ids.clear()
+            for row, proposal in enumerate(proposals):
+                mailbox_row_entry_ids.append(proposal.entry_id)
+                selectable = bool(proposal.selectable_targets)
+                for column, text in enumerate(proposal_to_cells(proposal, folders)):
+                    item = QTableWidgetItem(text)
+                    item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                    if text:
+                        item.setToolTip(text)
+                    if not selectable:
+                        item.setForeground(QColor("#94a3b8"))
+                    mailbox_table.setItem(row, column, item)
+                check_item = mailbox_table.item(row, CHECK_COLUMN)
+                if selectable and check_item is not None:
+                    check_item.setFlags(check_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    check_item.setCheckState(
+                        Qt.CheckState.Checked
+                        if proposal.selected_by_default
+                        else Qt.CheckState.Unchecked
+                    )
+        finally:
+            mailbox_table.blockSignals(False)
+        apply_mailbox_filter()
+
+    def set_visible_mailbox_checks(checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        mailbox_table.blockSignals(True)
+        try:
+            for row in range(mailbox_table.rowCount()):
+                item = mailbox_table.item(row, CHECK_COLUMN)
+                if (
+                    item is not None
+                    and not mailbox_table.isRowHidden(row)
+                    and item.flags() & Qt.ItemFlag.ItemIsUserCheckable
+                ):
+                    item.setCheckState(state)
+        finally:
+            mailbox_table.blockSignals(False)
+        update_mailbox_actions()
+
+    def save_mailbox_options(pending_folder: str, days: int) -> None:
+        settings.mailbox_pending_folder = pending_folder
+        settings.mailbox_sort_days = days
+        settings.mailbox_read_attachments = mailbox_attachments_checkbox.isChecked()
+        settings.mailbox_suggest_with_jev = mailbox_jev_checkbox.isChecked()
+        try:
+            save_settings(settings)
+        except Exception as exc:
+            append_log(f"Options de rangement non enregistrees: {exc}")
+
+    @exclusive_operation
+    def on_analyze_mailbox() -> None:
+        kinds = frozenset(
+            kind
+            for kind, checkbox in (
+                (MailboxSourceKind.INBOX, mailbox_inbox_checkbox),
+                (MailboxSourceKind.PENDING, mailbox_pending_checkbox),
+                (MailboxSourceKind.SENT, mailbox_sent_checkbox),
+            )
+            if checkbox.isChecked()
+        )
+        if not kinds:
+            mailbox_status_label.setText("Cochez au moins un dossier à analyser.")
+            return
+        pending_folder = (
+            clean_optional_text(mailbox_pending_input.text()) or DEFAULT_MAILBOX_PENDING_FOLDER
+        )
+        days = int(mailbox_period_combo.currentData())
+        save_mailbox_options(pending_folder, days)
+        suggester = None
+        # The page is disabled while busy: rely on the saved key, not on the widget state.
+        if mailbox_jev_checkbox.isChecked() and has_jev_api_key():
+            matcher = build_project_suggester(settings)
+            if matcher is None:
+                append_log("Aucune cle Jev: suggestions de projet desactivees.")
+            else:
+                suggester = ResponsiveProjectSuggester(matcher)
+        progress_dialog = QProgressDialog(
+            "Lecture des dossiers Outlook...", "Annuler", 0, 0, window
+        )
+        progress_dialog.setWindowTitle("Analyse de la boîte mail")
+        progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setAutoReset(False)
+        progress_dialog.show()
+        QApplication.processEvents()
+
+        def progress(current: int, total: int, message: str) -> bool:
+            progress_dialog.setMaximum(max(total, 1))
+            progress_dialog.setValue(min(current, max(total, 1)))
+            progress_dialog.setLabelText(message)
+            QApplication.processEvents()
+            return not progress_dialog.wasCanceled()
+
+        mailbox_status_label.setText("")
+        try:
+            analysis = active_controller.analyze_mailbox(
+                MailboxSortRequest(
+                    account_identifier=selected_account_identifier(),
+                    outlook_root_folder=current_outlook_root_folder(),
+                    pending_folder_name=pending_folder,
+                    sources=kinds,
+                    since=mailbox_since(days),
+                    read_attachment_contents=mailbox_attachments_checkbox.isChecked(),
+                ),
+                progress=progress,
+                suggester=suggester,
+            )
+        except Exception as exc:
+            refresh_mailbox_table()
+            mailbox_summary_label.setText("Analyse de la boîte mail impossible.")
+            append_log(f"Erreur analyse boite mail: {exc}")
+            QMessageBox.warning(window, "Analyse de la boîte mail", str(exc))
+            return
+        finally:
+            progress_dialog.close()
+            progress_dialog.deleteLater()
+        refresh_mailbox_table()
+        summary = summarize_mailbox_analysis(analysis, days=days)
+        mailbox_summary_label.setText(summary)
+        mailbox_status_label.setText(" ".join(analysis.warnings))
+        append_log(f"Boite mail analysee: {summary}")
+        for warning in analysis.warnings:
+            append_log(warning)
+
+    @exclusive_operation
+    def on_sort_mailbox() -> None:
+        choices = mailbox_checked_choices()
+        if not choices:
+            mailbox_status_label.setText("Cochez les mails à ranger.")
+            return
+        answer = QMessageBox.question(
+            window,
+            "Ranger la boîte mail",
+            build_mailbox_sort_confirmation(choices),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            append_log("Rangement Outlook annule.")
+            return
+        try:
+            result = active_controller.sort_mailbox(choices)
+        except Exception as exc:
+            append_log(f"Erreur rangement Outlook: {exc}")
+            QMessageBox.warning(window, "Ranger la boîte mail", str(exc))
+            return
+        refresh_mailbox_table()
+        message = format_mailbox_sort_result(result)
+        mailbox_status_label.setText(message)
+        append_log(message)
+        for failure in result.failures[:10]:
+            append_log(f"Echec rangement Outlook: {failure}")
+        if result.moved_count:
+            append_log("Les mails ranges seront repris au prochain scan des dossiers projet.")
+
+    def open_mailbox_mail(row: int, _column: int) -> None:
+        if operation_in_progress or not 0 <= row < len(mailbox_row_entry_ids):
+            return
+        try:
+            active_controller.open_mailbox_mail(mailbox_row_entry_ids[row])
+        except Exception as exc:
+            append_log(f"Impossible d'ouvrir le mail dans Outlook: {exc}")
+
     def selected_table_row_indexes() -> list[int]:
         selection_model = table.selectionModel()
         if selection_model is None:
@@ -2919,6 +3295,22 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     navigation.currentRowChanged.connect(
         lambda index: refresh_directory_table() if index == 2 else None
     )
+    navigation.currentRowChanged.connect(
+        lambda index: update_mailbox_jev_option() if index == MAILBOX_PAGE else None
+    )
+    mailbox_analyze_button.clicked.connect(lambda _checked=False: on_analyze_mailbox())
+    mailbox_sort_button.clicked.connect(lambda _checked=False: on_sort_mailbox())
+    mailbox_check_all_button.clicked.connect(
+        lambda _checked=False: set_visible_mailbox_checks(True)
+    )
+    mailbox_uncheck_all_button.clicked.connect(
+        lambda _checked=False: set_visible_mailbox_checks(False)
+    )
+    mailbox_filter_combo.currentIndexChanged.connect(lambda _index: apply_mailbox_filter())
+    mailbox_table.itemChanged.connect(
+        lambda item: update_mailbox_actions() if item.column() == CHECK_COLUMN else None
+    )
+    mailbox_table.cellDoubleClicked.connect(open_mailbox_mail)
     save_openai_key_button.clicked.connect(save_openai_key_from_input)
     test_openai_key_button.clicked.connect(test_openai_key_from_input)
     save_jev_key_button.clicked.connect(save_jev_key_from_input)
@@ -2942,7 +3334,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         ("Ctrl+F", lambda: (navigation.setCurrentRow(0), search_input.setFocus())),
         ("Ctrl+R", on_scan),
         ("Ctrl+Return", on_archive_selection),
-        ("Ctrl+,", lambda: navigation.setCurrentRow(3)),
+        ("Ctrl+,", lambda: navigation.setCurrentRow(SETTINGS_PAGE)),
     ):
         shortcut_action = QAction(window)
         shortcut_action.setShortcut(QKeySequence(sequence))
@@ -2958,6 +3350,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_close_handler = handle_window_close
     populate_account_options()
     refresh_directory_table()
+    update_mailbox_jev_option()
 
     dynamic_window.mailflow_controller = active_controller
     dynamic_window.mailflow_scan_button = scan_button
@@ -3049,6 +3442,22 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_inspector_action = inspector_action
     dynamic_window.mailflow_set_operation_busy = set_operation_busy
     dynamic_window.mailflow_selected_table_row_indexes = selected_table_row_indexes
+    dynamic_window.mailflow_mailbox_page = mailbox_page
+    dynamic_window.mailflow_mailbox_inbox_checkbox = mailbox_inbox_checkbox
+    dynamic_window.mailflow_mailbox_pending_checkbox = mailbox_pending_checkbox
+    dynamic_window.mailflow_mailbox_pending_input = mailbox_pending_input
+    dynamic_window.mailflow_mailbox_sent_checkbox = mailbox_sent_checkbox
+    dynamic_window.mailflow_mailbox_period_combo = mailbox_period_combo
+    dynamic_window.mailflow_mailbox_attachments_checkbox = mailbox_attachments_checkbox
+    dynamic_window.mailflow_mailbox_jev_checkbox = mailbox_jev_checkbox
+    dynamic_window.mailflow_mailbox_analyze_button = mailbox_analyze_button
+    dynamic_window.mailflow_mailbox_summary_label = mailbox_summary_label
+    dynamic_window.mailflow_mailbox_filter_combo = mailbox_filter_combo
+    dynamic_window.mailflow_mailbox_check_all_button = mailbox_check_all_button
+    dynamic_window.mailflow_mailbox_uncheck_all_button = mailbox_uncheck_all_button
+    dynamic_window.mailflow_mailbox_sort_button = mailbox_sort_button
+    dynamic_window.mailflow_mailbox_table = mailbox_table
+    dynamic_window.mailflow_mailbox_status_label = mailbox_status_label
     refresh_table()
     return window
 

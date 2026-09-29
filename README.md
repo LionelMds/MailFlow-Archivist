@@ -184,6 +184,30 @@ verification, la matrice des confusions, le temps par mail et, pour OpenAI, les 
 et un cout estime a partir des prix indiques. Garder la meme `--seed` et le meme
 `--limit` pour comparer deux moteurs sur les memes mails.
 
+## Ranger la boite mail Outlook
+
+La page `Boîte mail` range les mails encore en vrac dans Outlook : ceux de la boîte de
+réception (sans ses sous-dossiers), du dossier `A CLASSER` et des éléments envoyés.
+Chaque mail va dans le dossier projet Outlook (`Boîte de réception/Année/2025-4893 ...`)
+dont le numéro `20XX-XXXX` apparaît dans l'objet, le corps (historique cité compris) ou
+le nom d'une pièce jointe. Si rien n'est trouvé, MailFlow lit le texte des pièces jointes
+PDF, Word, Excel et texte, dans un dossier temporaire effacé aussitôt.
+
+- `Analyser la boîte mail` ne déplace rien : la liste montre les numéros trouvés, où
+  ils ont été trouvés et la destination proposée. Les mails prêts sont cochés.
+- Un mail qui cite plusieurs projets est copié dans chacun ; l'original va dans le
+  premier projet cité.
+- Un numéro sans dossier projet Outlook laisse le mail en place (`Dossier absent`).
+  La création de ces dossiers sera confiée plus tard à ProjectFlow Automator.
+- Avec une clé Jev enregistrée, l'option `Proposer un projet avec Jev` suggère un projet
+  pour les mails sans numéro, parmi ceux où l'interlocuteur a déjà échangé selon
+  l'annuaire. Une suggestion n'est jamais cochée d'office.
+- `Ranger les mails cochés` demande confirmation, puis déplace les mails cochés et
+  visibles. Aucun mail n'est supprimé. Les mails rangés sont repris au prochain scan.
+
+La période (7 jours à tous les mails), le nom du dossier à classer et les options sont
+mémorisés à chaque analyse. Un double-clic ouvre le mail dans Outlook.
+
 ## Validation groupee
 
 Selectionner plusieurs mails puis `Verifier les N mails` ouvre une seule fenetre de

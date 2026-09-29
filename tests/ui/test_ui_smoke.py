@@ -570,12 +570,13 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_directory_table.cellWidget(0, 3).currentText() == "client"
     dynamic_window.mailflow_directory_table.cellWidget(0, 3).setCurrentText("fournisseur")
     assert controller.global_role == InterlocutorType.FOURNISSEUR
-    assert dynamic_window.mailflow_navigation.count() == 4
+    assert dynamic_window.mailflow_navigation.count() == 5
     assert dynamic_window.mailflow_navigation.item(0).text() == "Mails"
     assert dynamic_window.mailflow_navigation.item(1).text() == "Arborescence"
     assert dynamic_window.mailflow_navigation.item(2).text() == "Annuaire"
-    assert dynamic_window.mailflow_navigation.item(3).text() == "Réglages"
-    assert dynamic_window.mailflow_pages.count() == 4
+    assert dynamic_window.mailflow_navigation.item(3).text() == "Boîte mail"
+    assert dynamic_window.mailflow_navigation.item(4).text() == "Réglages"
+    assert dynamic_window.mailflow_pages.count() == 5
     assert dynamic_window.mailflow_content_splitter.count() == 2
     assert dynamic_window.mailflow_workspace_splitter.count() == 2
     assert dynamic_window.mailflow_settings_scroll_area.widgetResizable()
@@ -775,8 +776,11 @@ def test_navigation_discloses_settings_without_mail_inspector() -> None:
     window = MainWindow(AppSettings(), controller=FakeController())
     assert window.mailflow_mail_results.currentIndex() == 1
     assert not window.mailflow_archive_button.isEnabled()
+    window.mailflow_navigation.setCurrentRow(4)
+    assert window.mailflow_pages.currentIndex() == 4
+    assert window.mailflow_inspector.isHidden()
     window.mailflow_navigation.setCurrentRow(3)
-    assert window.mailflow_pages.currentIndex() == 3
+    assert window.mailflow_pages.currentWidget() is window.mailflow_mailbox_page
     assert window.mailflow_inspector.isHidden()
     window.mailflow_navigation.setCurrentRow(0)
     assert not window.mailflow_inspector.isHidden()
@@ -1196,3 +1200,167 @@ def test_light_theme_is_forced_for_dark_windows_sessions() -> None:
         app.setPalette(original)
     # Open drop-down lists get explicit colors whatever the system theme.
     assert "QComboBox QAbstractItemView { background: white; color: #243247;" in APP_STYLESHEET
+
+
+class MailboxFakeController(FakeController):
+    def __init__(self, analysis: Any) -> None:
+        super().__init__()
+        self.mailbox_analysis: Any = None
+        self.next_analysis = analysis
+        self.mailbox_requests: list[Any] = []
+        self.suggesters: list[Any] = []
+        self.sort_choices: list[dict[str, tuple[str, ...]]] = []
+        self.opened: list[str] = []
+
+    def analyze_mailbox(
+        self, request: Any, *, progress: Any = None, suggester: Any = None,
+    ) -> Any:
+        self.mailbox_requests.append(request)
+        self.suggesters.append(suggester)
+        assert progress(1, 1, "Lecture des mails 1/1...")
+        self.mailbox_analysis = self.next_analysis
+        return self.mailbox_analysis
+
+    def sort_mailbox(self, choices: dict[str, tuple[str, ...]]) -> Any:
+        from mailflow.core.mailbox_sorting import MailboxSortResult
+
+        self.sort_choices.append(dict(choices))
+        self.mailbox_analysis.proposals = [
+            proposal for proposal in self.mailbox_analysis.proposals
+            if proposal.entry_id not in choices
+        ]
+        return MailboxSortResult(
+            moved_count=len(choices), copy_count=1, sorted_entry_ids=list(choices),
+        )
+
+    def open_mailbox_mail(self, entry_id: str) -> None:
+        self.opened.append(entry_id)
+
+
+def mailbox_analysis() -> Any:
+    from mailflow.core.mailbox_sorting import (
+        MailboxAnalysis,
+        ProjectSuggestion,
+        SortProposal,
+        SortStatus,
+    )
+    from mailflow.outlook.mailbox import MailboxSourceKind, ProjectFolder
+
+    def proposal(entry_id: str, status: SortStatus, **values: Any) -> SortProposal:
+        return SortProposal(
+            entry_id=entry_id, source=MailboxSourceKind.INBOX, source_label="Boîte de réception",
+            subject=f"Mail {entry_id}", correspondent="Dupont", sent_at=datetime(2026, 9, 28),
+            direction=Direction.RECEIVED, status=status, **values,
+        )
+
+    return MailboxAnalysis(
+        proposals=[
+            proposal("A", SortStatus.READY, destinations=("2025-4893", "2025-5012")),
+            proposal(
+                "B", SortStatus.SUGGESTED, suggestion=ProjectSuggestion("2025-5012", 0.9),
+            ),
+            proposal("C", SortStatus.NO_NUMBER),
+        ],
+        project_folders={
+            number: ProjectFolder(number, number, number, None)
+            for number in ("2025-4893", "2025-5012")
+        },
+        warnings=["Dossier Outlook « A CLASSER » introuvable."],
+    )
+
+
+def test_mailbox_page_analyzes_then_sorts_only_checked_visible_mails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from mailflow import config
+    from mailflow.config import AppPaths, load_settings
+    from mailflow.outlook.mailbox import MailboxSourceKind
+    from mailflow.ui.main_window import MainWindow
+
+    monkeypatch.setattr(config, "get_jev_api_key", lambda: None)
+    questions: list[str] = []
+
+    def answer_yes(_parent: Any, _title: str, text: str, *_args: Any) -> Any:
+        questions.append(text)
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", answer_yes)
+    app = QApplication.instance() or QApplication([])
+    settings = AppSettings(paths=AppPaths(data_dir=tmp_path), mailbox_sort_days=30)
+    controller = MailboxFakeController(mailbox_analysis())
+    window = MainWindow(settings, controller=controller)
+    table = window.mailflow_mailbox_table
+
+    window.mailflow_navigation.setCurrentRow(3)
+    assert not window.mailflow_mailbox_jev_checkbox.isEnabled()
+    assert window.mailflow_mailbox_period_combo.currentData() == 30
+    assert not window.mailflow_mailbox_sort_button.isEnabled()
+    window.mailflow_mailbox_sent_checkbox.setChecked(False)
+    window.mailflow_mailbox_pending_input.setText("  ")
+    window.mailflow_mailbox_analyze_button.click()
+
+    request = controller.mailbox_requests[0]
+    assert request.sources == frozenset({MailboxSourceKind.INBOX, MailboxSourceKind.PENDING})
+    assert request.pending_folder_name == "A CLASSER"
+    assert request.since is not None
+    assert controller.suggesters == [None]
+    assert table.rowCount() == 3
+    assert table.item(0, 0).checkState() == Qt.CheckState.Checked
+    assert table.item(1, 0).checkState() == Qt.CheckState.Unchecked
+    assert not table.item(2, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable
+    assert "1 mail(s) prêt(s) à ranger (1 copie(s))" in (
+        window.mailflow_mailbox_summary_label.text()
+    )
+    assert "A CLASSER" in window.mailflow_mailbox_status_label.text()
+    assert window.mailflow_mailbox_sort_button.isEnabled()
+    assert load_settings(tmp_path / "config.json").mailbox_sort_days == 30
+
+    # Only visible checked rows are sorted: the ready mail is hidden by the filter.
+    window.mailflow_mailbox_filter_combo.setCurrentIndex(2)
+    assert table.isRowHidden(0) and not table.isRowHidden(1)
+    window.mailflow_mailbox_check_all_button.click()
+    assert window.mailflow_mailbox_sort_button.text() == "Ranger les mails cochés"
+    window.mailflow_mailbox_sort_button.click()
+
+    assert controller.sort_choices == [{"B": ("2025-5012",)}]
+    assert questions[0].startswith("Ranger 1 mail(s)")
+    assert table.rowCount() == 2
+    assert "1 mail(s) déplacé(s)" in window.mailflow_mailbox_status_label.text()
+
+    window.mailflow_mailbox_filter_combo.setCurrentIndex(0)
+    table.cellDoubleClicked.emit(1, 4)
+    assert controller.opened == ["C"]
+    window.close()
+    app.processEvents()
+
+
+def test_mailbox_page_offers_jev_only_with_a_saved_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow import config
+    from mailflow.config import AppPaths
+    from mailflow.core import app_controller
+    from mailflow.ui.background_call import ResponsiveProjectSuggester
+    from mailflow.ui.main_window import MainWindow
+
+    monkeypatch.setattr(config, "get_jev_api_key", lambda: "ts-key")
+    monkeypatch.setattr(app_controller, "get_jev_api_key", lambda: "ts-key")
+    app = QApplication.instance() or QApplication([])
+    settings = AppSettings(paths=AppPaths(data_dir=tmp_path), mailbox_suggest_with_jev=True)
+    controller = MailboxFakeController(mailbox_analysis())
+    window = MainWindow(settings, controller=controller)
+
+    assert window.mailflow_mailbox_jev_checkbox.isEnabled()
+    assert window.mailflow_mailbox_jev_checkbox.isChecked()
+    window.mailflow_mailbox_analyze_button.click()
+
+    assert isinstance(controller.suggesters[0], ResponsiveProjectSuggester)
+    window.close()
+    app.processEvents()

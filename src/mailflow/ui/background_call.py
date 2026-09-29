@@ -7,12 +7,17 @@ Callers disable mutating controls while the local event loop is running.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, TypeVar, cast
 
 from PySide6.QtCore import QCoreApplication, QEventLoop, QThread
 
 from mailflow.classifier.pipeline import AiClassifierProtocol
+from mailflow.core.mailbox_sorting import (
+    ProjectCandidate,
+    ProjectSuggester,
+    ProjectSuggestion,
+)
 from mailflow.models import AiMailClassification, MailMetadata, RoleEstimate
 
 T = TypeVar("T")
@@ -82,3 +87,20 @@ class ResponsiveAiClassifier:
                 known_context=known_context,
             )
         )
+
+
+class ResponsiveProjectSuggester:
+    """Wait for a project suggestion without freezing the window.
+
+    Only detached mail metadata and candidate numbers cross to the worker thread.
+    """
+
+    def __init__(self, suggester: ProjectSuggester) -> None:
+        self.suggester = suggester
+
+    def suggest(
+        self,
+        mail: MailMetadata,
+        candidates: Sequence[ProjectCandidate],
+    ) -> ProjectSuggestion | None:
+        return run_with_event_loop(lambda: self.suggester.suggest(mail, candidates))

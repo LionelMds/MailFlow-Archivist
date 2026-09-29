@@ -306,14 +306,7 @@ class JevClassifier:
         self.last_usage = None
         self.last_served_model = None
         self.last_role_estimate = None
-        if not self._api_key:
-            raise JevError("Aucune clé Jev : enregistrez la clé TypeSafe dans Réglages.")
-        if not self._api_key.isascii() or not self._api_key.isprintable() or (
-            " " in self._api_key
-        ):
-            raise JevError("La clé Jev contient des caractères invalides : recollez-la.")
-        if not self._model:
-            raise JevError("Choisissez un modèle Jev dans Réglages.")
+        self._check_configuration()
         role, organization_name = _directory_values(known_context)
         payload = build_ai_payload(
             mail,
@@ -357,6 +350,24 @@ class JevClassifier:
             ),
             classification=classification,
         )
+
+    def ask(self, state: dict[str, Any], questions: dict[str, Any]) -> dict[str, Any]:
+        """Send one System One request and return the response data.
+
+        Raises JevError, whose message never contains the server response.
+        """
+        self._check_configuration()
+        return self._post({"model": self._model, "state": state, "questions": questions})
+
+    def _check_configuration(self) -> None:
+        if not self._api_key:
+            raise JevError("Aucune clé Jev : enregistrez la clé TypeSafe dans Réglages.")
+        if not self._api_key.isascii() or not self._api_key.isprintable() or (
+            " " in self._api_key
+        ):
+            raise JevError("La clé Jev contient des caractères invalides : recollez-la.")
+        if not self._model:
+            raise JevError("Choisissez un modèle Jev dans Réglages.")
 
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         content = json.dumps(body, ensure_ascii=False).encode("utf-8")

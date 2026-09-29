@@ -46,6 +46,14 @@ Les boutons `Tester IA` et `Tester Jev` utilisent uniquement un mail fictif de
 diagnostic. Aucun mail Outlook reel ni piece jointe n'est envoye pour verifier la
 validite de la cle.
 
+Le rangement de la boîte mail lit les mails et leurs pièces jointes localement.
+Une pièce jointe dont le texte est recherché est écrite dans un dossier temporaire
+privé, lue, puis effacée ; son contenu n'est ni stocké ni transmis. L'option de
+suggestion Jev, désactivée par défaut, envoie à TypeSafe les mêmes données qu'une
+classification (sans contexte d'annuaire), plus les numéros et noms des dossiers
+projet candidats et les entreprises qui y ont déjà échangé. Les réglages d'envoi du
+corps et de masquage des téléphones s'appliquent aussi à ces suggestions.
+
 L'import annuaire Outlook reste local. Il stocke dans SQLite les adresses e-mail,
 domaines, noms affiches et projets associes pour ameliorer le tri, sans envoyer ces
 donnees a un service externe.

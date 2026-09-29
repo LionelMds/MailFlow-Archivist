@@ -83,6 +83,21 @@ après avoir modifié plusieurs rôles. **Reclasser avec l'IA** reste disponible
 mails analysés avant cette version, ou avec un autre moteur, qui n'ont pas de réponse
 par rôle.
 
+## Suggestion de projet pour le rangement de la boîte mail
+
+Sur la page **Boîte mail**, l'option **Proposer un projet avec Jev** s'active dès
+qu'une clé Jev est enregistrée, quel que soit le moteur de classification choisi.
+Elle ne concerne que les mails où aucun numéro `20XX-XXXX` n'a été trouvé.
+
+MailFlow cherche dans l'annuaire les projets où les interlocuteurs externes du mail
+ont déjà échangé, garde ceux dont le dossier Outlook existe (douze au plus) et pose
+une question fermée : l'un de ces projets, ou `aucun_projet`. Sans projet candidat,
+Jev n'est pas appelé. Une suggestion n'est affichée que si le projet retenu atteint
+50 % et dépasse `aucun_projet` ; elle reste décochée jusqu'à votre validation.
+
+La première erreur Jev (clé, quota, réseau, réponse invalide) arrête les suggestions
+pour cette analyse ; les mails dont le numéro a été trouvé restent proposés.
+
 ## Erreurs et réseau
 
 MailFlow appelle directement `https://api.typesafe.ai/v1/systemone` avec `httpx`, déjà
