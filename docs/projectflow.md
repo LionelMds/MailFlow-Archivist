@@ -12,7 +12,11 @@ travail ainsi :
 | Rangement des mails dans ces dossiers | MailFlow |
 | Archivage `.msg` dans les dossiers locaux | MailFlow |
 
-MailFlow ne crée jamais de dossier projet lui-même. Un dossier projet absent de la
+MailFlow ne crée jamais de dossier projet lui-même. Les dossiers archivés
+(`Boîte de réception/00-Archives/2026/...`) comptent comme existants : MailFlow ne
+demande jamais de recréer un projet archivé, et ProjectFlow, avant de créer un dossier,
+cherche aussi le projet dans toute la boîte (hors Éléments supprimés et Courrier
+indésirable) pour réutiliser son dossier d'archives. Un dossier projet absent de la
 boîte mail arrive quand le projet a été créé sur un autre poste ou sans l'option Outlook
 de ProjectFlow.
 
@@ -36,7 +40,8 @@ dossier source analysé, MailFlow le signale.
 
 ## Mise en service
 
-- ProjectFlow **0.1.57** ou plus récent, installé sur le même poste, avec
+- ProjectFlow **0.1.57** ou plus récent (0.1.58 pour la prise en compte des archives
+  par ProjectFlow lui-même), installé sur le même poste, avec
   `Paramètres` → `Outlook` activé sur le même compte que MailFlow.
 - MailFlow trouve le programme installé tout seul. Sinon, indiquer
   `ProjectFlowAutomator.exe` dans **Réglages** → **ProjectFlow Automator**. La ligne

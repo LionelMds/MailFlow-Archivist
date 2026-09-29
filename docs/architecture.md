@@ -83,6 +83,13 @@ réception, le dossier à classer et les éléments envoyés, sur le fil princip
 tout accès Outlook. L'index des dossiers projet vient du parcours récursif déjà
 utilisé par l'import de l'annuaire. Un numéro ne désigne une destination que si son
 dossier Outlook existe ; les autres sont signalés. L'analyse ne modifie rien.
+Un dossier projet placé sous un dossier dont le nom contient `archiv` est marqué
+archivé ; pour un numéro présent deux fois, le dossier hors archives l'emporte, quel
+que soit l'ordre des dossiers dans Outlook.
+
+Le scan par année (`OutlookScanService._year_folders`) lit `Racine/Année` puis
+`Racine/<archives>/Année`, avec le chemin Outlook réel dans `outlook_folder`. La
+fenêtre de scan décoche les projets archivés par défaut ; la surveillance les suit.
 
 `execute` n'accepte que les destinations proposées par l'analyse. Pour un mail qui
 cite plusieurs projets, les copies sont créées avant le déplacement de l'original,

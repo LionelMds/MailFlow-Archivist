@@ -1,5 +1,14 @@
 # Release
 
+## Version 0.15.0
+
+- projets archivés dans Outlook (`00-Archives/Année/...`) : le scan d'une année les
+  liste avec la mention `archives`, décochés par défaut, et la surveillance les suit
+  pour archiver les nouveaux mails qui y arrivent ;
+- rangement de la boîte mail : un numéro présent hors archives et dans les archives
+  va toujours dans le dossier hors archives ; une destination archivée est signalée ;
+- avec ProjectFlow 0.1.58, un projet archivé n'est jamais recréé dans Outlook.
+
 ## Version 0.14.0
 
 - lien avec ProjectFlow Automator : sur la page `Boîte mail`, `Créer les dossiers

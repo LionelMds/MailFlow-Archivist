@@ -99,7 +99,9 @@ le dossier projet n'existe pas encore dans Outlook laisse le mail en place, avec
 **Dossier absent**. **Créer les dossiers absents avec ProjectFlow** demande à
 ProjectFlow Automator de créer ces dossiers, avec son nommage habituel, pour les projets
 de son répertoire chantier ; les mails concernés passent aussitôt en **Prêt à ranger**.
-Un numéro inconnu du répertoire n'est jamais créé. Voir
+Un numéro inconnu du répertoire n'est jamais créé. Les dossiers projet archivés
+(`00-Archives/Année/...`) comptent comme existants : un projet archivé reçoit ses mails
+dans son dossier d'archives et n'est jamais recréé. Voir
 [le lien avec ProjectFlow](projectflow.md). Une plage d'années comme `2024-2025` n'est
 pas prise pour un numéro de projet.
 
@@ -296,6 +298,14 @@ Avant un scan manuel, une fenetre liste tous les dossiers projet Outlook trouves
 l'annee selectionnee. Cocher uniquement les projets a classer, ou utiliser `Tout
 selectionner` et `Tout deselectionner`. Le champ `Projet` sert de preselection lorsqu'il
 contient un numero, mais tous les dossiers restent visibles.
+
+Les projets archives dans Outlook, par exemple
+`Boite de reception/00-Archives/2026/2026-4952 (...)`, font partie de l'annee : ils
+sont listes avec la mention `archives` mais decoches, car leurs mails sont en general
+deja archives ; les cocher pour les traiter. La surveillance les suit aussi, pour
+archiver les nouveaux mails qui y arrivent. Un dossier dont le nom contient
+`archiv`, place directement sous le dossier source, est reconnu comme dossier
+d'archives.
 
 La case `Surveillance Outlook` garde l'application active pendant la journee et
 controle toutes les 5 minutes tous les dossiers projet de l'annee selectionnee. La

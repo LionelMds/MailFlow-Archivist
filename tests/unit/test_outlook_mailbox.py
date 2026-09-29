@@ -9,7 +9,7 @@ import pytest
 
 from mailflow.models import Direction
 from mailflow.outlook.attachments import PR_ATTACH_CONTENT_ID
-from mailflow.outlook.client import OutlookClient, child_folder_named
+from mailflow.outlook.client import OutlookClient, child_folder_named, is_archive_folder_name
 from mailflow.outlook.mailbox import (
     OL_FOLDER_SENT_MAIL,
     MailboxSource,
@@ -328,3 +328,28 @@ def test_child_folder_lookup_ignores_case_and_accents() -> None:
 
     assert child_folder_named(tree.inbox, "a classer") is tree.pending
     assert child_folder_named(tree.inbox, "Inconnu") is None
+
+
+def test_a_project_in_the_archives_is_indexed_and_the_active_copy_wins() -> None:
+    archived_only = FakeFolder("2026-4952 (Platelage)")
+    archived_copy = FakeFolder("2026-5107 (Caillebotis)")
+    active_copy = FakeFolder("2026-5107 (Caillebotis)")
+    archives = FakeFolder("00-Archives", [FakeFolder("2026", [archived_only, archived_copy])])
+    # The archive folder comes first in Outlook: the order must not decide.
+    inbox = FakeFolder("Boîte de réception", [archives, FakeFolder("2026", [active_copy])])
+    mailbox = outlook_mailbox(mailbox_tree())
+
+    folders = mailbox.project_folders(inbox, outlook_root_folder="Boite de reception")
+
+    assert folders["2026-4952"].folder is archived_only
+    assert folders["2026-4952"].archived
+    assert folders["2026-4952"].outlook_path == "Boite de reception/00-Archives/2026/2026-4952"
+    assert folders["2026-5107"].folder is active_copy
+    assert not folders["2026-5107"].archived
+
+
+def test_archive_folder_names() -> None:
+    assert is_archive_folder_name("00-Archives")
+    assert is_archive_folder_name("Archivé 2019")
+    assert not is_archive_folder_name("2026")
+    assert not is_archive_folder_name("A CLASSER")

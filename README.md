@@ -85,7 +85,15 @@ Le journal HTML permet aussi de filtrer par dossier cible.
 
 Avant un scan manuel, MailFlow affiche tous les dossiers projet Outlook de l'annee
 selectionnee. L'utilisateur choisit les dossiers a traiter avec des cases a cocher ;
-les boutons permettent aussi de tout selectionner ou tout deselectionner. Apres le
+les boutons permettent aussi de tout selectionner ou tout deselectionner.
+Les projets archives dans Outlook, par exemple
+`Boite de reception/00-Archives/2026/2026-4952 (...)`, font partie de l'annee : ils
+sont listes avec la mention `archives` mais decoches, car leurs mails sont en general
+deja archives ; les cocher pour les traiter. La surveillance les suit aussi, pour
+archiver les nouveaux mails qui y arrivent. Un dossier dont le nom contient
+`archiv`, place directement sous le dossier source, est reconnu comme dossier
+d'archives.
+Apres le
 scan, le panneau `Arborescence` affiche les dossiers proposes avec le nombre de mails.
 L'utilisateur peut renommer un dossier ou fusionner deux dossiers detectes comme
 doublons avant toute creation de fichiers.
@@ -197,6 +205,10 @@ PDF, Word, Excel et texte, dans un dossier temporaire effacé aussitôt.
   ils ont été trouvés et la destination proposée. Les mails prêts sont cochés.
 - Un mail qui cite plusieurs projets est copié dans chacun ; l'original va dans le
   premier projet cité.
+- Les dossiers projet archivés (`00-Archives/Année/...`) sont reconnus : un projet
+  archivé n'est jamais signalé absent et reçoit ses mails dans son dossier d'archives
+  (destination marquée `archives`). Si un numéro existe à la fois hors archives et
+  dans les archives, le dossier hors archives l'emporte.
 - Un numéro sans dossier projet Outlook laisse le mail en place (`Dossier absent`).
   `Créer les dossiers absents avec ProjectFlow` demande à ProjectFlow Automator de
   créer ces dossiers pour les projets de son répertoire chantier, puis les mails

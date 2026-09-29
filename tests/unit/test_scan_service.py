@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Any
+
+import pytest
 
 from mailflow.core.scan_service import (
     DirectoryScanRequest,
@@ -9,6 +13,7 @@ from mailflow.core.scan_service import (
     ProjectFolderOption,
     ScanRequest,
 )
+from mailflow.outlook.client import OutlookFolderNotFoundError
 from mailflow.outlook.scanner import OutlookScanner
 
 
@@ -65,7 +70,10 @@ def test_scan_service_resolves_year_folder_and_scans_projects() -> None:
         )
     )
 
-    assert resolver.calls == [(["Boite de reception", "2025"], "Balz")]
+    assert resolver.calls == [
+        (["Boite de reception", "2025"], "Balz"),
+        (["Boite de reception"], "Balz"),
+    ]
     assert [mail.entry_id for mail in mails] == ["ENTRY-1"]
 
 
@@ -197,3 +205,85 @@ def test_scan_service_resolves_root_for_directory_import() -> None:
 
     assert resolver.calls == [(["Boite de reception"], "Balz")]
     assert [item.metadata.entry_id for item in scanned] == ["ENTRY-1"]
+
+
+class TreeResolver:
+    """Resolves real paths in a fake folder tree, like OutlookClient."""
+
+    def __init__(self, root: Any) -> None:
+        self.root = root
+
+    def resolve_folder_path(
+        self,
+        path: str | list[str],
+        *,
+        account_identifier: str | None = None,
+    ) -> object:
+        parts = [path] if isinstance(path, str) else list(path)
+        current = self.root
+        for part in parts[1:]:
+            children = [current.Folders.Item(i) for i in range(1, current.Folders.Count + 1)]
+            matches = [child for child in children if child.Name == part]
+            if not matches:
+                raise OutlookFolderNotFoundError(f"Dossier Outlook introuvable: {part}")
+            current = matches[0]
+        return current
+
+
+def folder(name: str, *children: Any, items: list[object] | None = None) -> Any:
+    return SimpleNamespace(
+        Name=name, Folders=FakeCollection(list(children)), Items=FakeCollection(items or []),
+    )
+
+
+def archived_tree(*, with_active_year: bool = True) -> Any:
+    active = folder("2026-5107 (Caillebotis)", items=[mail_item("ACTIVE")])
+    archived = folder("2026-4952 (Platelage)", items=[mail_item("ARCHIVED")])
+    children = [folder("00-Archives", folder("2025"), folder("2026", archived))]
+    if with_active_year:
+        children.insert(0, folder("2026", active))
+    return folder("Boite de reception", *children)
+
+
+def request_2026() -> ScanRequest:
+    return ScanRequest(
+        account_identifier=None, outlook_root_folder="Boite de reception", year="2026",
+    )
+
+
+def test_year_scan_also_reads_the_archived_projects_of_the_year() -> None:
+    service = OutlookScanService(
+        folder_resolver=TreeResolver(archived_tree()), scanner=OutlookScanner(),
+    )
+
+    mails = service.scan(request_2026())
+    options = service.list_project_folders(request_2026())
+    entry_ids = service.scan_entry_ids(request_2026())
+
+    assert [(mail.entry_id, mail.outlook_folder) for mail in mails] == [
+        ("ACTIVE", "Boite de reception/2026/2026-5107"),
+        ("ARCHIVED", "Boite de reception/00-Archives/2026/2026-4952"),
+    ]
+    assert options == [
+        ProjectFolderOption("2026-5107", "2026-5107 (Caillebotis)"),
+        ProjectFolderOption("2026-4952", "2026-4952 (Platelage)", archived=True),
+    ]
+    assert entry_ids == {"ACTIVE", "ARCHIVED"}
+
+
+def test_year_only_in_the_archives_is_still_scanned() -> None:
+    service = OutlookScanService(
+        folder_resolver=TreeResolver(archived_tree(with_active_year=False)),
+        scanner=OutlookScanner(),
+    )
+
+    assert [mail.entry_id for mail in service.scan(request_2026())] == ["ARCHIVED"]
+
+
+def test_missing_year_everywhere_is_reported() -> None:
+    service = OutlookScanService(
+        folder_resolver=TreeResolver(archived_tree()), scanner=OutlookScanner(),
+    )
+
+    with pytest.raises(OutlookFolderNotFoundError):
+        service.scan(replace(request_2026(), year="2019"))

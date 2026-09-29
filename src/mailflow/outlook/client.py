@@ -123,6 +123,11 @@ def _split_path(path: str | Sequence[str]) -> list[str]:
     return [str(part).strip() for part in path if str(part).strip()]
 
 
+def is_archive_folder_name(name: str) -> bool:
+    """True for an archive folder such as "00-Archives", "Archives" or "Archivé"."""
+    return "archiv" in _normalize_name(name)
+
+
 def child_folder_named(parent: Any, name: str) -> Any | None:
     """Find a direct subfolder, ignoring case, accents and repeated spaces."""
     wanted = _normalize_name(name)

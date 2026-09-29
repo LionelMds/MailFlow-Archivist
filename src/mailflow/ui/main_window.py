@@ -111,10 +111,14 @@ REMINDER_CHECK_INTERVAL_MS = 60 * 1000
 def project_folder_selected_by_default(
     project_number: str,
     project_filter: str,
+    *,
+    archived: bool = False,
 ) -> bool:
     cleaned_filter = project_filter.strip()
     if not cleaned_filter:
-        return True
+        # Archived projects stay available but unchecked: their mails were archived
+        # already, and classifying them again would only cost AI calls.
+        return not archived
     return (
         project_number == cleaned_filter
         or project_number.endswith(f"-{cleaned_filter}")
@@ -2629,12 +2633,16 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         folder_list = QListWidget()
         preferred = project_input.text().strip()
         for option in options:
-            item = QListWidgetItem(str(option.folder_name))
+            label = str(option.folder_name)
+            if getattr(option, "archived", False):
+                label += " — archives"
+            item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, str(option.project_number))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             checked = project_folder_selected_by_default(
                 str(option.project_number),
                 preferred,
+                archived=bool(getattr(option, "archived", False)),
             )
             item.setCheckState(
                 Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked

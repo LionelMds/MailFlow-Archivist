@@ -22,7 +22,7 @@ from mailflow.core.attachment_text import (
 from mailflow.core.project_paths import extract_project_number_from_folder_name
 from mailflow.models import Direction, MailMetadata
 from mailflow.outlook.attachments import attachment_display_name, is_inline_image_attachment
-from mailflow.outlook.client import OutlookClient, child_folder_named
+from mailflow.outlook.client import OutlookClient, child_folder_named, is_archive_folder_name
 from mailflow.outlook.scanner import OutlookScanner, iter_com_collection
 
 OL_FOLDER_SENT_MAIL = 5
@@ -50,6 +50,7 @@ class ProjectFolder:
     folder_name: str
     outlook_path: str
     folder: Any
+    archived: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,9 +113,17 @@ class OutlookMailbox:
         ):
             name = str(getattr(folder, "Name", "")).strip()
             number = extract_project_number_from_folder_name(name)
-            if number is not None:
-                # With two folders for one number, the first one met keeps the mails.
-                folders.setdefault(number, ProjectFolder(number, name, outlook_path, folder))
+            if number is None:
+                continue
+            # The first part is the analysed root itself, the last one the project.
+            archived = any(
+                is_archive_folder_name(part) for part in outlook_path.split("/")[1:-1]
+            )
+            candidate = ProjectFolder(number, name, outlook_path, folder, archived)
+            current = folders.get(number)
+            # Two folders for one number: the active one wins over the archived copy.
+            if current is None or (current.archived and not archived):
+                folders[number] = candidate
         return folders
 
     def mail_items(self, folder: Any, *, since: datetime | None) -> list[Any]:

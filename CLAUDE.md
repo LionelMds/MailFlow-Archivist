@@ -34,7 +34,8 @@ La CI (`.github/workflows/ci.yml`) lance ces trois contrôles sur Windows et mac
 - Rangement Outlook (`core/mailbox_sorting.py`) : déplacer ou copier, jamais supprimer ;
   une destination est un dossier projet Outlook existant, jamais créé par MailFlow :
   seul ProjectFlow le crée (`core/projectflow_link.py`, protocole partagé avec
-  `projectflow/bridge.py`, voir `docs/projectflow.md`) ;
+  `projectflow/bridge.py`, voir `docs/projectflow.md`) ; un dossier sous `*archiv*`
+  compte comme existant, et le dossier hors archives l'emporte sur un doublon ;
   une suggestion Jev n'est jamais cochée d'office.
 - Le thème est clair par conception : `ui.theme.apply_light_theme` l'impose même quand
   Windows est en mode sombre.

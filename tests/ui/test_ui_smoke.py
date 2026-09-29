@@ -1460,3 +1460,9 @@ def test_mailbox_page_asks_projectflow_for_missing_folders(
     assert load_settings(tmp_path / "config.json").projectflow_executable == str(program)
     window.close()
     app.processEvents()
+
+
+def test_archived_project_folders_are_offered_unchecked_unless_asked() -> None:
+    assert not project_folder_selected_by_default("2026-4952", "", archived=True)
+    assert project_folder_selected_by_default("2026-4952", "4952", archived=True)
+    assert project_folder_selected_by_default("2026-5107", "")

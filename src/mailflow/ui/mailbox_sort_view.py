@@ -59,7 +59,9 @@ def period_label(days: int) -> str:
 
 def folder_label(number: str, project_folders: Mapping[str, ProjectFolder]) -> str:
     folder = project_folders.get(number)
-    return folder.folder_name if folder is not None else number
+    if folder is None:
+        return number
+    return f"{folder.folder_name} (archives)" if folder.archived else folder.folder_name
 
 
 def destination_label(

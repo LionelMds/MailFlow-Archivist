@@ -165,3 +165,12 @@ def test_projectflow_report_message() -> None:
         "ProjectFlow."
     )
     assert format_projectflow_report(ProjectFlowReport()) == "ProjectFlow : aucun dossier traité."
+
+
+def test_archived_destinations_are_labelled() -> None:
+    folders = {
+        "2025-4893": ProjectFolder("2025-4893", "2025-4893 (Villa)", "x", None, archived=True),
+    }
+    ready = proposal(SortStatus.READY, destinations=("2025-4893",))
+
+    assert destination_label(ready, folders) == "2025-4893 (Villa) (archives)"
