@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from mailflow.core.mailbox_sorting import (
@@ -12,6 +13,7 @@ from mailflow.core.mailbox_sorting import (
     SortStatus,
 )
 from mailflow.core.projectflow_link import ProjectFlowReport
+from mailflow.models import Direction
 from mailflow.outlook.mailbox import MailboxSourceKind, ProjectFolder
 
 MAILBOX_SORT_COLUMNS = (
@@ -186,3 +188,86 @@ def format_projectflow_report(report: ProjectFlowReport) -> str:
     if not parts:
         return "ProjectFlow : aucun dossier traité."
     return "ProjectFlow : " + " · ".join(parts) + "."
+
+
+STATUS_TAG_KINDS = {
+    SortStatus.READY: "accent",
+    SortStatus.SUGGESTED: "neutral",
+    SortStatus.MISSING_FOLDER: "outline",
+    SortStatus.NO_NUMBER: "neutral",
+    SortStatus.UNREADABLE: "neutral",
+}
+
+
+@dataclass(frozen=True)
+class MailboxDestinationView:
+    title: str
+    lines: tuple[str, ...]
+    note: str
+
+
+def mailbox_destination_view(
+    proposal: SortProposal,
+    project_folders: Mapping[str, ProjectFolder],
+) -> MailboxDestinationView:
+    """The "Destination" panel of one analysed mail: where it goes and why."""
+    if proposal.status == SortStatus.READY:
+        first, *copies = proposal.destinations
+        lines = (
+            f"Original → {folder_label(first, project_folders)}",
+            *(f"Copie → {folder_label(number, project_folders)}" for number in copies),
+        )
+        title = (
+            f"Copié dans {len(proposal.destinations)} projets"
+            if copies
+            else folder_label(first, project_folders)
+        )
+        return MailboxDestinationView(title, lines, "Aucun mail n'est supprimé.")
+    if proposal.status == SortStatus.SUGGESTED and proposal.suggestion is not None:
+        suggestion = proposal.suggestion
+        return MailboxDestinationView(
+            f"Suggestion Jev · {suggestion.probability:.0%}",
+            (f"Projet proposé → {folder_label(suggestion.project_number, project_folders)}",),
+            "Une suggestion n'est jamais cochée d'office : cochez-la pour la ranger.",
+        )
+    if proposal.status == SortStatus.MISSING_FOLDER:
+        return MailboxDestinationView(
+            "Dossier absent",
+            tuple(f"Absent → {number}" for number in proposal.missing_numbers),
+            "ProjectFlow peut créer le dossier Outlook de ces projets.",
+        )
+    if proposal.status == SortStatus.UNREADABLE:
+        return MailboxDestinationView(
+            "Illisible", (), proposal.note or "Ce mail n'a pas pu être lu."
+        )
+    return MailboxDestinationView(
+        "Sans numéro", (), "Aucun numéro de projet trouvé dans ce mail."
+    )
+
+
+def proposal_found_in(proposal: SortProposal) -> str:
+    sources = sorted(
+        {source.value for reference in proposal.references for source in reference.sources}
+    )
+    return ", ".join(sources) or "—"
+
+
+def proposal_meta_text(proposal: SortProposal) -> str:
+    direction = "Envoyé" if proposal.direction == Direction.SENT else "Reçu"
+    parts = [direction]
+    if proposal.sent_at is not None:
+        parts.append(proposal.sent_at.strftime("%d.%m.%Y à %H:%M"))
+    parts.append(proposal.source_label or SOURCE_LABELS.get(proposal.source, ""))
+    return " · ".join(part for part in parts if part)
+
+
+def mailbox_counts_text(analysis: MailboxAnalysis | None, *, days: int) -> str:
+    """The short line under "À ranger": period, analysed mails, mails ready to sort."""
+    if analysis is None:
+        return "Aucune analyse pour le moment"
+    ready = sum(proposal.status == SortStatus.READY for proposal in analysis.proposals)
+    mails = len(analysis.proposals)
+    return (
+        f"{period_label(days)} · {mails} mail{'s' if mails > 1 else ''} · "
+        f"{ready} prêt{'s' if ready > 1 else ''}"
+    )

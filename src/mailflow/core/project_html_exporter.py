@@ -234,20 +234,21 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
   <style>
     :root {{
       color-scheme: light;
-      --bg: #f6f7f9;
-      --panel: #ffffff;
-      --text: #17202a;
-      --muted: #5f6b7a;
-      --line: #d8dee8;
-      --accent: #1f6feb;
-      --sent: #7c3aed;
-      --received: #0f766e;
-      --warn: #b45309;
+      --bg: #f2f2f3;
+      --panel: #f2f2f3;
+      --text: #1d1f20;
+      --muted: #6b6c6e;
+      --line: #d0d0d1;
+      --accent: #5980a6;
+      --sent: #416180;
+      --received: #2f6b4f;
+      --warn: #8a5a00;
     }}
     * {{ box-sizing: border-box; }}
+    h1, h2, h3 {{ font-family: "Barlow Condensed", "Segoe UI", Arial, sans-serif; }}
     body {{
       margin: 0;
-      font-family: "Segoe UI", Arial, sans-serif;
+      font-family: "Barlow", "Segoe UI", Arial, sans-serif;
       background: var(--bg);
       color: var(--text);
     }}
@@ -256,7 +257,7 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       top: 0;
       z-index: 5;
       border-bottom: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.96);
+      background: rgba(242, 242, 243, 0.96);
       backdrop-filter: blur(10px);
     }}
     .header-inner {{
@@ -278,8 +279,8 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     input, select {{
       min-height: 36px;
       border: 1px solid var(--line);
-      border-radius: 6px;
-      background: #fff;
+      border-radius: 0;
+      background: var(--panel);
       color: var(--text);
       padding: 0 10px;
       font: inherit;
@@ -299,7 +300,7 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     }}
     .project-digest {{
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 0;
       background: var(--panel);
       padding: 14px 16px;
       margin-bottom: 16px;
@@ -331,7 +332,7 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     .digest-section ul {{
       margin: 0;
       padding-left: 18px;
-      color: #253142;
+      color: var(--text);
       line-height: 1.45;
       font-size: 13px;
     }}
@@ -347,7 +348,7 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       max-height: calc(100vh - 124px);
       overflow: auto;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 0;
       background: var(--panel);
       padding: 12px;
     }}
@@ -374,7 +375,7 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       gap: 8px;
       align-items: center;
       border: 0;
-      border-radius: 6px;
+      border-radius: 0;
       background: transparent;
       color: var(--text);
       padding: 6px 8px;
@@ -383,8 +384,8 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       cursor: pointer;
     }}
     .folder-button:hover, .folder-button.active {{
-      background: #eef4ff;
-      color: #174ea6;
+      background: #eef6ff;
+      color: #2c455d;
     }}
     .folder-name {{
       overflow: hidden;
@@ -415,10 +416,10 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     .mail-card {{
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 0;
       margin-bottom: 12px;
       overflow: hidden;
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      box-shadow: none;
     }}
     .mail-head {{
       display: grid;
@@ -434,8 +435,8 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       align-items: center;
       min-width: 42px;
       height: 28px;
-      border-radius: 999px;
-      color: #fff;
+      border-radius: 0;
+      color: #f2f2f3;
       font-weight: 700;
       font-size: 13px;
     }}
@@ -452,8 +453,8 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     .ai-meta {{
       border-left: 3px solid var(--accent);
       padding: 6px 10px;
-      background: #f6f8ff;
-      color: #334155;
+      background: #eef6ff;
+      color: #424244;
     }}
     .chips {{
       display: flex;
@@ -463,14 +464,14 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     }}
     .chip {{
       border: 1px solid var(--line);
-      border-radius: 999px;
+      border-radius: 0;
       padding: 4px 8px;
       font-size: 12px;
       color: var(--muted);
-      background: #f8fafc;
+      background: #e9e9ea;
       white-space: nowrap;
     }}
-    .chip.review {{ color: var(--warn); border-color: #f0c36a; background: #fff8e6; }}
+    .chip.review {{ color: var(--warn); border-color: #d9b26a; background: #f6efe1; }}
     .mail-body {{
       padding: 14px 16px 16px 86px;
       line-height: 1.48;
@@ -479,7 +480,7 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     .excerpt {{
       white-space: pre-wrap;
       margin: 0 0 12px;
-      color: #253142;
+      color: var(--text);
     }}
     .inline-images {{
       display: grid;
@@ -492,8 +493,8 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       max-height: 520px;
       object-fit: contain;
       border: 1px solid var(--line);
-      border-radius: 6px;
-      background: #fff;
+      border-radius: 0;
+      background: var(--panel);
     }}
     .attachments {{
       display: flex;
@@ -503,12 +504,12 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
     }}
     .attachments a, .attachment-missing {{
       border: 1px solid var(--line);
-      border-radius: 6px;
+      border-radius: 0;
       padding: 6px 8px;
       font-size: 13px;
       text-decoration: none;
       color: var(--accent);
-      background: #f8fafc;
+      background: #e9e9ea;
     }}
     .attachment-missing {{ color: var(--muted); }}
     .empty {{
@@ -517,7 +518,7 @@ def _render_project_html(project_number: str, entries: list[HtmlMailEntry]) -> s
       color: var(--muted);
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 0;
     }}
     @media (max-width: 760px) {{
       .toolbar {{ grid-template-columns: 1fr; }}

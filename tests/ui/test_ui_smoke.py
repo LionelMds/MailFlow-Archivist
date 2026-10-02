@@ -45,6 +45,7 @@ from mailflow.ui.main_window import (
     tray_tooltip_text,
 )
 from mailflow.ui.preview_table import ACTION_LABELS, PREVIEW_COLUMNS
+from mailflow.ui.theme import COLORS
 
 
 class FakeController:
@@ -359,7 +360,7 @@ def test_ai_settings_labels_are_french() -> None:
     assert openai_key_status_text(True, valid=True) == "Cle valide - IA OK"
     assert openai_key_status_text(True, valid=False) == "Cle invalide ou indisponible"
     assert openai_key_status_text(False) == "Aucune cle"
-    assert "#166534" in openai_key_status_style(True, valid=True)
+    assert COLORS["success"] in openai_key_status_style(True, valid=True)
 
 
 def test_summarize_archive_selection_counts_ready_and_skipped_rows(tmp_path: Path) -> None:
@@ -783,6 +784,10 @@ def test_navigation_discloses_settings_without_mail_inspector() -> None:
     assert window.mailflow_pages.currentWidget() is window.mailflow_mailbox_page
     assert window.mailflow_inspector.isHidden()
     window.mailflow_navigation.setCurrentRow(0)
+    # The review queue carries its own decision panel; the table view has the inspector.
+    assert window.mailflow_mail_views.currentIndex() == 0
+    assert window.mailflow_inspector.isHidden()
+    window.mailflow_set_mail_view("table")
     assert not window.mailflow_inspector.isHidden()
     assert window.mailflow_preview_tabs.count() == 2
     window.close()
@@ -1193,13 +1198,16 @@ def test_light_theme_is_forced_for_dark_windows_sessions() -> None:
     try:
         apply_light_theme(app)
         palette = app.palette()
-        assert palette.color(QPalette.ColorRole.Base).name() == "#ffffff"
-        assert palette.color(QPalette.ColorRole.Text).name() == "#243247"
-        assert palette.color(QPalette.ColorRole.Window).name() == "#f3f6fa"
+        assert palette.color(QPalette.ColorRole.Base).name() == COLORS["bg"]
+        assert palette.color(QPalette.ColorRole.Text).name() == COLORS["text"]
+        assert palette.color(QPalette.ColorRole.Window).name() == COLORS["bg"]
     finally:
         app.setPalette(original)
     # Open drop-down lists get explicit colors whatever the system theme.
-    assert "QComboBox QAbstractItemView { background: white; color: #243247;" in APP_STYLESHEET
+    assert (
+        f"QComboBox QAbstractItemView {{ background: {COLORS['bg']}; color: {COLORS['text']};"
+        in APP_STYLESHEET
+    )
 
 
 class MailboxFakeController(FakeController):
@@ -1466,3 +1474,246 @@ def test_archived_project_folders_are_offered_unchecked_unless_asked() -> None:
     assert not project_folder_selected_by_default("2026-4952", "", archived=True)
     assert project_folder_selected_by_default("2026-4952", "4952", archived=True)
     assert project_folder_selected_by_default("2026-5107", "")
+
+
+class QueueFakeController(FakeController):
+    """Keeps manual decisions like the real controller: a validated mail is ready."""
+
+    def __init__(self, rows: list[PreviewRow]) -> None:
+        super().__init__()
+        self.preview_rows = cast(list[object], rows)
+        self.updates: list[tuple[int, Any]] = []
+        self.bulk_updates: list[tuple[list[int], Any]] = []
+        self.merges: list[tuple[str, str]] = []
+        self.last_directory_role_change = None
+
+    def _apply(self, row_index: int, update: Any) -> PreviewRow:
+        row = cast(PreviewRow, self.preview_rows[row_index])
+        decision = row.decision.model_copy(update={
+            "mail_type": update.mail_type,
+            "interlocutor": update.interlocutor,
+            "target_relative_folder": update.target_relative_folder,
+            "requires_review": False,
+        })
+        updated = row.model_copy(update={"decision": decision, "action": PreviewAction.ARCHIVE})
+        self.preview_rows[row_index] = updated
+        return updated
+
+    def apply_manual_update(self, row_index: int, update: Any) -> PreviewRow:
+        self.updates.append((row_index, update))
+        return self._apply(row_index, update)
+
+    def apply_manual_updates(self, row_indexes: list[int], update: Any) -> Any:
+        self.bulk_updates.append((list(row_indexes), update))
+        for row_index in row_indexes:
+            self._apply(row_index, update)
+        return SimpleNamespace(
+            updated_count=len(row_indexes), skipped_archived_count=0, role_changes=[], errors=[],
+        )
+
+    def folder_tree(self) -> list[FolderTreeNode]:
+        from mailflow.core.folder_tree import build_folder_tree
+
+        return build_folder_tree(cast(list[PreviewRow], self.preview_rows))
+
+    def merge_preview_folder(self, source: str, target: str) -> list[object]:
+        self.merges.append((source, target))
+        for index, row in enumerate(cast(list[PreviewRow], self.preview_rows)):
+            if row.decision.target_relative_folder == source:
+                decision = row.decision.model_copy(update={"target_relative_folder": target})
+                self.preview_rows[index] = row.model_copy(update={"decision": decision})
+        return self.preview_rows
+
+    def directory_role_suggestions(self) -> dict[int, Any]:
+        from mailflow.core.role_suggestions import RoleSuggestion
+
+        return {2: RoleSuggestion(2, "client", 0.86, 5)}
+
+
+def queue_rows(tmp_path: Path) -> list[PreviewRow]:
+    return [
+        make_preview_row(tmp_path, PreviewAction.ARCHIVE, entry_id="ready"),
+        make_preview_row(tmp_path, PreviewAction.REVIEW, entry_id="first-review"),
+        make_preview_row(tmp_path, PreviewAction.REVIEW, entry_id="second-review"),
+    ]
+
+
+def test_review_queue_validates_one_mail_and_opens_the_next_review(tmp_path: Path) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow.ui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    controller = QueueFakeController(queue_rows(tmp_path))
+    window = MainWindow(AppSettings(), controller=controller)
+
+    # The queue is the default Mails view and opens on the first mail to review.
+    assert window.mailflow_mail_views.currentIndex() == 0
+    assert window.mailflow_queue_list.count() == 3
+    assert window.mailflow_queue_list.currentRow() == 1
+    assert window.mailflow_queue_header_info.text() == "2025-4893 · 2 à vérifier · 1 traités"
+    assert window.mailflow_queue_archive_button.text() == "Archiver 1 mail"
+    combo = window.mailflow_decision_destination_combo
+    assert combo.currentText() == "Fournisseurs/Demande de prix"
+    assert window.mailflow_decision_role.value() == InterlocutorType.FOURNISSEUR
+    assert window.mailflow_decision_validate_button.isEnabled()
+
+    # A supplier never goes to Correspondance: the panel says so and blocks validation.
+    combo.setCurrentText("Correspondance")
+    assert not window.mailflow_decision_warning.isHidden()
+    assert not window.mailflow_decision_validate_button.isEnabled()
+
+    # Choosing Client moves the destination to Correspondance, as the manual dialog does.
+    window.mailflow_decision_role.buttons()[0].click()
+    assert combo.currentText() == "Correspondance"
+    window.mailflow_decision_validate_button.click()
+
+    row_index, update = controller.updates[0]
+    assert row_index == 1
+    assert update.mail_type == MailType.CORRESPONDANCE_GENERALE
+    assert update.interlocutor == InterlocutorType.CLIENT
+    assert update.target_relative_folder == "Correspondance"
+    assert window.mailflow_queue_list.currentRow() == 2
+    assert window.mailflow_queue_header_info.text() == "2025-4893 · 1 à vérifier · 2 traités"
+    window.close()
+    app.processEvents()
+
+
+def test_review_queue_applies_one_classification_to_a_selection(tmp_path: Path) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow.ui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    rows = queue_rows(tmp_path)
+    rows[1].decision.interlocutor = InterlocutorType.INCONNU
+    controller = QueueFakeController(rows)
+    window = MainWindow(AppSettings(), controller=controller)
+    queue = window.mailflow_queue_list
+
+    queue.item(1).setSelected(True)
+    queue.item(2).setSelected(True)
+
+    assert window.mailflow_queue_detail_stack.currentIndex() == 1
+    assert window.mailflow_bulk_values["count"].text() == "2"
+    # The two mails disagree on the role: the group choice is the user's.
+    assert window.mailflow_bulk_role.value() is None
+    assert not window.mailflow_bulk_apply_button.isEnabled()
+    window.mailflow_bulk_role.buttons()[1].click()
+    window.mailflow_bulk_category.buttons()[2].click()
+    assert window.mailflow_bulk_apply_button.text() == "Appliquer aux 2 mails"
+    window.mailflow_bulk_apply_button.click()
+
+    indexes, update = controller.bulk_updates[0]
+    assert indexes == [1, 2]
+    assert update.mail_type == MailType.COMMANDE
+    assert update.interlocutor == InterlocutorType.FOURNISSEUR
+    assert update.target_relative_folder == "Fournisseurs/Commande"
+    window.close()
+    app.processEvents()
+
+
+def test_arborescence_offers_to_merge_a_duplicate_company_folder(tmp_path: Path) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow.ui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    rows = queue_rows(tmp_path)
+    rows[0].decision.target_relative_folder = "Fournisseurs/Demande de prix/Alu Profil"
+    for row in rows[1:]:
+        row.decision.target_relative_folder = "Fournisseurs/Demande de prix/Alu-Profil SA"
+    controller = QueueFakeController(rows)
+    window = MainWindow(AppSettings(), controller=controller)
+    window.mailflow_navigation.setCurrentRow(1)
+    tree = window.mailflow_folder_tree
+
+    tree.setCurrentItem(tree.findItems("Alu Profil", Qt.MatchFlag.MatchRecursive)[0])
+
+    assert window.mailflow_tree_decision_title.text() == "Alu Profil → Alu-Profil SA"
+    assert not window.mailflow_tree_merge_duplicate_button.isHidden()
+    window.mailflow_tree_merge_duplicate_button.click()
+    assert controller.merges == [(
+        "Fournisseurs/Demande de prix/Alu Profil",
+        "Fournisseurs/Demande de prix/Alu-Profil SA",
+    )]
+    assert window.mailflow_tree_folder_title.text() == "Alu-Profil SA"
+    assert window.mailflow_tree_merge_duplicate_button.isHidden()
+    window.close()
+    app.processEvents()
+
+
+def test_directory_list_validates_the_suggested_role_then_moves_on(tmp_path: Path) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow.ui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    controller = QueueFakeController([])
+    controller.directory_entries_list.extend([
+        OrganizationDirectoryEntry(2, "Régie Lémanique", ("regie-leman.ch",), (), 2),
+        OrganizationDirectoryEntry(3, "Ferrures Berger", ("berger-ferrures.ch",), (), 1),
+    ])
+    window = MainWindow(AppSettings(), controller=controller)
+    window.mailflow_navigation.setCurrentRow(2)
+    directory_list = window.mailflow_directory_list
+
+    assert directory_list.count() == 3
+    window.mailflow_directory_filter.buttons()[1].click()
+    assert directory_list.count() == 2
+    directory_list.setCurrentRow(0)
+
+    assert window.mailflow_directory_name_label.text() == "Régie Lémanique"
+    assert window.mailflow_directory_figure.text().startswith("86")
+    assert window.mailflow_directory_role_choice.value() == InterlocutorType.CLIENT
+    window.mailflow_directory_validate_button.click()
+
+    assert controller.global_role == InterlocutorType.CLIENT
+    assert window.mailflow_directory_name_label.text() == "Ferrures Berger"
+    assert directory_list.count() == 1
+    window.mailflow_directory_view_toggle.buttons()[1].click()
+    assert window.mailflow_directory_views.currentIndex() == 1
+    window.close()
+    app.processEvents()
+
+
+def test_settings_cards_choose_the_engine_and_save_the_review_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from mailflow import config
+    from mailflow.ui.main_window import MainWindow
+
+    saved: list[AppSettings] = []
+    monkeypatch.setattr(config, "save_settings", lambda value: saved.append(value))
+    app = QApplication.instance() or QApplication([])
+    settings = AppSettings()
+    window = MainWindow(settings, controller=FakeController())
+    window.mailflow_navigation.setCurrentRow(4)
+
+    window.mailflow_provider_cards["ollama"].click()
+    assert window.mailflow_ai_provider_combo.currentData() == "ollama"
+    assert window.mailflow_provider_cards["ollama"].isChecked()
+    # Only the chosen engine's test is offered in the side panel.
+    assert not window.mailflow_test_ollama_button.parentWidget().isHidden()
+    assert window.mailflow_test_jev_key_button.parentWidget().isHidden()
+    window.mailflow_ai_mode_choice.buttons()[1].click()
+    assert window.mailflow_ai_mode_combo.currentData() == AiMode.DISABLED.value
+    window.mailflow_settings_sections_list.setCurrentRow(2)
+    assert window.mailflow_settings_heading.text() == "Seuils"
+    assert window.mailflow_threshold_slider.minimum() == 80
+    window.mailflow_threshold_slider.setValue(90)
+    window.mailflow_save_settings_button.click()
+
+    assert saved
+    assert settings.decision_confidence_threshold == 0.9
+    assert settings.ai_provider == "ollama"
+    window.close()
+    app.processEvents()

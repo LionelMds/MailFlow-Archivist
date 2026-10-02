@@ -28,13 +28,23 @@ Avant tout archivage, l'utilisateur garde la main sur :
 1. Ouvrir **Réglages** pour définir le dossier local des projets et tester l'IA.
 2. Choisir le compte Outlook, le dossier source et l'année, puis **Scanner Outlook**.
    Cocher les projets à analyser dans la fenêtre qui apparaît.
-3. Dans **Mails**, utiliser la recherche et le filtre **À vérifier**. Sélectionner un
-   mail pour lire son contenu, sa destination et l'explication du classement dans
-   l'aperçu. **Vérifier la sélection** ouvre la correction manuelle.
-4. Sélectionner les mails prêts et utiliser **Archiver**. Le menu du bouton propose
-   également **Archiver tous les mails prêts**, après confirmation sur l'ensemble du
-   lot. Cette action globale inclut les mails prêts masqués par un filtre ; l'action
-   sur la sélection ne traite que les lignes visibles sélectionnées.
+3. **Mails** s'ouvre sur la **file de vérification** : la liste des mails à gauche,
+   le mail sélectionné au centre et la proposition de l'IA à droite (confiance, seuil
+   de vérification, résumé, raison). Choisir la destination et le rôle de l'entreprise,
+   puis **Valider et suivant** : le mail est classé et la file passe au prochain mail
+   à vérifier. Raccourcis : **C** client, **F** fournisseur, **Entrée** valider.
+   Ctrl ou Maj + clic sélectionne plusieurs mails : le panneau propose alors un seul
+   classement et un seul rôle pour toute la sélection (**Appliquer aux N mails**) ;
+   les mails déjà archivés ne sont jamais modifiés.
+4. **Archiver N mails**, en bas de la file, archive tous les mails prêts après
+   confirmation.
+
+Le bouton **Tableau**, en haut de la file, affiche tous les mails dans un tableau
+avec recherche, filtres et inspecteur. **Vérifier la sélection** y ouvre la
+correction manuelle. Le bouton **Archiver** propose également **Archiver tous les
+mails prêts**, après confirmation sur l'ensemble du lot. Cette action globale inclut
+les mails prêts masqués par un filtre ; l'action sur la sélection ne traite que les
+lignes visibles sélectionnées.
 
 Les filtres **Prêts à archiver**, **Ignorés** et **Archivés** permettent de retrouver
 chaque état. **Effacer les filtres** réaffiche le lot. Une recherche ne relance pas
@@ -44,12 +54,29 @@ l'IA. Les corrections conservent la ligne active et la position de défilement.
 admissible après confirmation. Les détails du mail et le **Bilan du projet** sont
 séparés dans l'inspecteur ; les séparateurs permettent d'ajuster leur largeur.
 
+Les autres écrans suivent la même disposition en trois colonnes :
+
+- **Arborescence** : les dossiers proposés, les mails du dossier sélectionné et, à
+  droite, son renommage ou sa fusion. Un dossier dont le nom ne diffère d'un voisin
+  que par la ponctuation ou la forme juridique (« Alu Profil » et « Alu-Profil SA »)
+  est marqué **doublon** : **Fusionner et suivant** le regroupe avec le dossier
+  officiel, **Ignorer ce doublon** le laisse tel quel. Rien n'est créé sur le disque
+  avant l'archivage.
+- **Annuaire** : les entreprises (filtre **Sans rôle**), leurs contacts et, à droite,
+  la suggestion de Jev et le rôle global. **Valider et suivant** enregistre le rôle
+  et passe à l'entreprise suivante sans rôle. **Tableau** affiche l'annuaire complet.
+- **Boîte mail** : les mails à ranger, le détail du mail sélectionné et sa
+  destination Outlook. **Options** affiche les dossiers et la période à analyser.
+- **Réglages** : moteur IA, confidentialité, seuil de vérification (80 % au
+  minimum), dossiers, surveillance et mises à jour. Le test du moteur choisi et
+  **Enregistrer les réglages** restent à droite.
+
 Pendant une analyse, l'interface reste réactive à l'attente de l'IA. Les commandes
 de modification sont désactivées jusqu'à la fin pour protéger le lot en cours.
 
 ## Choisir une IA locale
 
-Dans **Réglages**, choisir **Ollama (local)**, puis le modèle installé sur le PC.
+Dans **Réglages › Moteur IA**, choisir la carte **Ollama**, puis le modèle installé sur le PC.
 L'adresse habituelle est `http://127.0.0.1:11434`. Actualiser la liste des modèles
 si nécessaire, lancer **Tester IA locale**, puis enregistrer les réglages.
 Aucune clé API n'est nécessaire. Le test utilise un mail fictif et laisse
@@ -58,11 +85,11 @@ l'interface réactive pendant le chargement du modèle.
 Si Ollama est arrêté ou le modèle absent, le statut indique le problème ; les
 mails restent à vérifier. Ouvrir Ollama et refaire le test. Le guide
 [Ollama](ollama.md) explique l'installation et les diagnostics.
-Pour revenir à l'API, choisir **OpenAI (API)** ; son modèle et sa clé sont conservés.
+Pour revenir à l'API, choisir la carte **OpenAI** ; son modèle et sa clé sont conservés.
 
 ## Choisir Jev (TypeSafe)
 
-Dans **Réglages**, choisir **Jev (TypeSafe) — API de classification**, coller la clé
+Dans **Réglages › Moteur IA**, choisir la carte **Jev (TypeSafe)**, coller la clé
 créée sur la console TypeSafe, cliquer sur **Enregistrer la clé**, puis **Tester Jev**
 et enfin **Enregistrer les réglages**. Jev choisit la phase commerciale parmi les
 options permises par le rôle de l'entreprise et donne ses probabilités ; l'aperçu du
