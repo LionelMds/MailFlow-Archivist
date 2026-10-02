@@ -37,7 +37,7 @@ mailflow-archivist = "mailflow.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mailflow = ["assets/*"]
+mailflow = ["assets/*", "assets/fonts/*", "assets/icons/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

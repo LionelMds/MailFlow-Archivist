@@ -23,6 +23,7 @@ from mailflow.core.projectflow_link import (
 from mailflow.core.update_installer import download_update_installer, launch_update_installer
 from mailflow.core.updates import UpdateCheckResult, check_for_updates
 from mailflow.models import (
+    REVIEW_CONFIDENCE_THRESHOLD,
     AiMode,
     InterlocutorType,
     MailType,
@@ -33,20 +34,79 @@ from mailflow.models import (
     RoutingCategory,
 )
 from mailflow.outlook.mailbox import MailboxSourceKind
+from mailflow.ui.directory_review import (
+    BUSINESS_ROLES,
+    directory_item_view,
+    domains_text,
+    entry_role,
+    has_business_role,
+    matches_directory_filter,
+    next_without_role,
+    projects_text,
+    role_tag,
+    selected_suggestion,
+    split_contact,
+    suggestion_headline,
+    without_role_count,
+)
+from mailflow.ui.folder_review import (
+    DuplicateHint,
+    breadcrumb_text,
+    duplicate_note,
+    find_duplicate_folders,
+    folder_role_tag,
+    folder_rows,
+    folder_text,
+    leaf_name,
+    merge_text,
+    tree_header_text,
+)
 from mailflow.ui.mailbox_sort_view import (
     CHECK_COLUMN,
     MAILBOX_SORT_COLUMNS,
     PERIOD_OPTIONS,
     STATUS_FILTERS,
+    STATUS_LABELS,
+    STATUS_TAG_KINDS,
     build_mailbox_sort_confirmation,
     build_projectflow_confirmation,
     format_mailbox_sort_result,
     format_projectflow_report,
+    mailbox_counts_text,
+    mailbox_destination_view,
     mailbox_since,
     period_label,
+    proposal_found_in,
+    proposal_meta_text,
     proposal_to_cells,
     summarize_mailbox_analysis,
 )
+from mailflow.ui.review_queue import (
+    SHORTCUTS_HINT,
+    archive_button_text,
+    attachments_text,
+    build_queue_update,
+    bulk_destination_text,
+    bulk_selection_view,
+    bulk_validation_problem,
+    decision_text_html,
+    decision_view,
+    destination_category,
+    destination_for_role,
+    engine_label,
+    first_queue_index,
+    mail_meta_text,
+    next_review_index,
+    percent_html,
+    queue_header_text,
+    queue_item_view,
+    queue_progress,
+    role_choice,
+    role_text,
+    sender_html,
+    validation_problem,
+)
+from mailflow.ui.theme import COLORS
 
 if TYPE_CHECKING:
     from mailflow.config import AppSettings
@@ -169,7 +229,7 @@ def run_desktop_app(settings: AppSettings, *, startup_warning: str | None = None
 
 
 def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
-    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtCore import QItemSelectionModel, QSize, Qt, QTimer
     from PySide6.QtGui import (
         QAction,
         QBrush,
@@ -184,6 +244,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     from PySide6.QtWidgets import (
         QAbstractItemView,
         QApplication,
+        QButtonGroup,
         QCheckBox,
         QComboBox,
         QDialog,
@@ -191,6 +252,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QDoubleSpinBox,
         QFileDialog,
         QFormLayout,
+        QFrame,
         QGridLayout,
         QGroupBox,
         QHBoxLayout,
@@ -207,6 +269,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QPushButton,
         QScrollArea,
         QSizePolicy,
+        QSlider,
         QSplitter,
         QStackedWidget,
         QSystemTrayIcon,
@@ -214,6 +277,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QTableWidgetItem,
         QTableWidgetSelectionRange,
         QTabWidget,
+        QTextBrowser,
         QTextEdit,
         QToolButton,
         QTreeWidget,
@@ -270,7 +334,22 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         should_highlight_cell,
     )
     from mailflow.ui.project_digest_preview import project_digest_to_html
-    from mailflow.ui.theme import APP_STYLESHEET
+    from mailflow.ui.theme import APP_STYLESHEET, icon_path, load_brand_fonts
+    from mailflow.ui.widgets.industry import (
+        BlueprintButton,
+        BlueprintFrame,
+        ConfidenceBar,
+        SegmentedControl,
+        SplitBar,
+        field_block,
+        heading_font,
+        kicker_label,
+        pane,
+        set_kicker_text,
+        set_tag,
+        tag_label,
+        text_label,
+    )
 
     class TableComboBox(QComboBox):
         """A list inside a table: the mouse wheel scrolls the table, never the choice."""
@@ -306,6 +385,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         pipeline.ai_mode = settings.ai_mode
         pipeline.include_body_for_ai = settings.ai_include_body_excerpt
         pipeline.privacy_mask_phone_numbers = settings.privacy_mask_phone_numbers
+        pipeline.decision_confidence_threshold = settings.decision_confidence_threshold
         classifier = build_ai_classifier(settings)
         pipeline.ai_classifier = (
             ResponsiveAiClassifier(classifier) if classifier is not None else None
@@ -322,26 +402,83 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     watch_paused_logged = False
     refreshing_directory_table = False
     operation_in_progress = False
+    preferred_folder_path: str | None = None
     watch_state = WatchState()
     review_queue = ReviewQueue()
     sent_review_reminders: set[str] = set()
+    load_brand_fonts()
     central = QWidget()
     central.setObjectName("workspace")
-    layout = QVBoxLayout(central)
-    layout.setContentsMargins(18, 14, 18, 10)
-    layout.setSpacing(12)
+    layout = QHBoxLayout(central)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
     window.setStyleSheet(APP_STYLESHEET)
     window.resize(1440, 900)
-    window.setMinimumSize(1040, 720)
+    window.setMinimumSize(1180, 720)
 
-    top_bar = QWidget()
-    top_layout = QHBoxLayout(top_bar)
-    top_layout.setContentsMargins(0, 0, 0, 0)
-    top_layout.setSpacing(8)
+    def column(
+        kind: str,
+        *,
+        width: int | None = None,
+        margins: tuple[int, int, int, int] = (0, 0, 0, 0),
+        spacing: int = 0,
+    ) -> tuple[Any, Any]:
+        frame = pane(kind, width=width)
+        frame_layout = QVBoxLayout(frame)
+        frame_layout.setContentsMargins(*margins)
+        frame_layout.setSpacing(spacing)
+        return frame, frame_layout
+
+    def row_layout(*widgets: Any, spacing: int = 8, stretch_at: int | None = None) -> Any:
+        holder = QWidget()
+        holder_layout = QHBoxLayout(holder)
+        holder_layout.setContentsMargins(0, 0, 0, 0)
+        holder_layout.setSpacing(spacing)
+        for index, widget in enumerate(widgets):
+            if index == stretch_at:
+                holder_layout.addStretch(1)
+            holder_layout.addWidget(widget)
+        if stretch_at is not None and stretch_at >= len(widgets):
+            holder_layout.addStretch(1)
+        return holder
+
+    # Navigation column: the word mark, the five screens and the version.
+    nav_column = QFrame()
+    nav_column.setObjectName("navColumn")
+    nav_column.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    nav_column.setFixedWidth(176)
+    nav_layout = QVBoxLayout(nav_column)
+    nav_layout.setContentsMargins(0, 14, 0, 12)
+    nav_layout.setSpacing(0)
     app_title = QLabel("MailFlow")
     app_title.setProperty("role", "title")
-    workflow_label = QLabel("1. Scanner   →   2. Vérifier   →   3. Archiver")
-    workflow_label.setProperty("role", "muted")
+    app_title.setContentsMargins(18, 0, 18, 14)
+    navigation = QListWidget()
+    navigation.setObjectName("navigation")
+    navigation.setAccessibleName("Navigation principale")
+    navigation.setIconSize(QSize(17, 17))
+    for label, icon_name in (
+        ("Mails", "mail"),
+        ("Arborescence", "folder-tree"),
+        ("Annuaire", "book-user"),
+        ("Boîte mail", "inbox"),
+        ("Réglages", "sliders"),
+    ):
+        navigation.addItem(QListWidgetItem(QIcon(icon_path(icon_name)), label))
+    navigation.setCurrentRow(0)
+    version_label = text_label(f"v{__version__}", "small")
+    version_label.setContentsMargins(18, 0, 18, 0)
+    nav_layout.addWidget(app_title)
+    nav_layout.addWidget(navigation, 1)
+    nav_layout.addWidget(version_label)
+
+    # Scan bar: the Outlook source, the scan and the watch, above every screen.
+    top_bar = QFrame()
+    top_bar.setProperty("pane", "bar")
+    top_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    top_layout = QHBoxLayout(top_bar)
+    top_layout.setContentsMargins(20, 8, 20, 8)
+    top_layout.setSpacing(24)
     account_combo = QComboBox()
     account_combo.setEditable(True)
     account_combo.setMinimumWidth(190)
@@ -356,64 +493,303 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     project_input = QLineEdit("")
     project_input.setPlaceholderText("Projet")
     project_input.setFixedWidth(120)
-    scan_button = QPushButton(UI_TEXT["scan_button"])
-    scan_button.setProperty("role", "primary")
+    scan_button = BlueprintButton(UI_TEXT["scan_button"])
     scan_button.setToolTip("Analyser les dossiers sélectionnés (Ctrl+R)")
     reset_button = QPushButton(UI_TEXT["reset_workspace"])
     watch_checkbox = QCheckBox(UI_TEXT["watch_outlook"])
+    watch_checkbox.setToolTip("Contrôler Outlook toutes les 5 minutes, même fenêtre fermée.")
     scan_status_label = QLabel("")
     scan_status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     scan_status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-    scan_status_label.setStyleSheet("QLabel { color: #64748b; }")
-    top_layout.addWidget(app_title)
-    top_layout.addWidget(workflow_label)
-    top_layout.addStretch(1)
-    top_layout.addWidget(watch_checkbox)
-    layout.addWidget(top_bar)
-
+    scan_status_label.setStyleSheet(f"QLabel {{ color: {COLORS['muted']}; }}")
     scan_panel = QWidget()
-    scan_panel.setObjectName("scanPanel")
     scan_layout = QGridLayout(scan_panel)
-    scan_layout.setContentsMargins(14, 10, 14, 10)
+    scan_layout.setContentsMargins(0, 0, 0, 0)
     scan_layout.setHorizontalSpacing(12)
-    for column, (label, field) in enumerate((
+    scan_layout.setVerticalSpacing(4)
+    for column_index, (label, field) in enumerate((
         ("Compte Outlook", account_combo),
         ("Dossier source", outlook_root_combo),
         ("Année", year_input),
         ("Projet (facultatif)", project_input),
     )):
-        field_label = QLabel(label)
+        field_label = text_label(label, "field")
         field_label.setBuddy(field)
-        field_label.setProperty("role", "muted")
-        scan_layout.addWidget(field_label, 0, column)
-        scan_layout.addWidget(field, 1, column)
+        scan_layout.addWidget(field_label, 0, column_index)
+        scan_layout.addWidget(field, 1, column_index)
     scan_layout.setColumnStretch(0, 2)
     scan_layout.setColumnStretch(1, 2)
-    scan_layout.addWidget(scan_button, 1, 4)
+    scan_layout.addWidget(scan_button, 0, 4, 2, 1, Qt.AlignmentFlag.AlignBottom)
     scan_layout.addWidget(reset_button, 1, 5)
-    layout.addWidget(scan_panel)
+    workflow_label = text_label("1 SCANNER  →  2 VÉRIFIER  →  3 ARCHIVER", "small")
+    workflow_widget = QWidget()
+    workflow_layout = QVBoxLayout(workflow_widget)
+    workflow_layout.setContentsMargins(0, 0, 0, 0)
+    workflow_layout.setSpacing(6)
+    workflow_layout.addWidget(workflow_label, 0, Qt.AlignmentFlag.AlignRight)
+    workflow_layout.addWidget(watch_checkbox, 0, Qt.AlignmentFlag.AlignRight)
+    top_layout.addWidget(scan_panel, 1)
+    top_layout.addWidget(workflow_widget)
 
     content_splitter = QSplitter(Qt.Orientation.Horizontal)
     content_splitter.setChildrenCollapsible(False)
-    navigation = QListWidget()
-    navigation.setObjectName("navigation")
-    navigation.setAccessibleName("Navigation principale")
-    navigation.addItems(["Mails", "Arborescence", "Annuaire", "Boîte mail", "Réglages"])
-    navigation.setFixedWidth(154)
-    navigation.setCurrentRow(0)
-    content_splitter.addWidget(navigation)
+    content_splitter.setHandleWidth(0)
+    content_splitter.addWidget(nav_column)
 
     workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
     workspace_splitter.setChildrenCollapsible(False)
     pages = QStackedWidget()
 
+    # ── Mails: the review queue (1c) by default, the table on request. ──
     mail_page = QWidget()
-    mail_layout = QVBoxLayout(mail_page)
-    mail_layout.setContentsMargins(0, 0, 0, 0)
+    mail_page_layout = QVBoxLayout(mail_page)
+    mail_page_layout.setContentsMargins(0, 0, 0, 0)
+    mail_page_layout.setSpacing(0)
+    mail_views = QStackedWidget()
+    mail_page_layout.addWidget(mail_views)
+    mail_view_toggle = SegmentedControl([("File", "queue"), ("Tableau", "table")])
+    mail_view_toggle.setFixedWidth(150)
+    mail_view_toggle.setToolTip("File de vérification ou tableau de tous les mails")
+    mail_view_toggle.set_value("queue")
+
+    queue_view = QWidget()
+    queue_view_layout = QHBoxLayout(queue_view)
+    queue_view_layout.setContentsMargins(0, 0, 0, 0)
+    queue_view_layout.setSpacing(0)
+    queue_pane, queue_pane_layout = column("list", width=340)
+    queue_header, queue_header_layout = column("header", margins=(16, 14, 16, 12), spacing=6)
+    queue_title = text_label("File de vérification", "heading")
+    queue_toggle_host = QHBoxLayout()
+    queue_toggle_host.setContentsMargins(0, 0, 0, 0)
+    queue_title_row = QHBoxLayout()
+    queue_title_row.addWidget(queue_title)
+    queue_title_row.addStretch(1)
+    queue_title_row.addLayout(queue_toggle_host)
+    queue_header_layout.addLayout(queue_title_row)
+    queue_header_info = text_label("Aucun mail analysé", "small")
+    queue_header_layout.addWidget(queue_header_info)
+    queue_progress_bar = SplitBar()
+    queue_header_layout.addWidget(queue_progress_bar)
+    queue_list = QListWidget()
+    queue_list.setProperty("pane", "queue")
+    queue_list.setAccessibleName("File de vérification des mails")
+    queue_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+    queue_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+    queue_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    queue_list.setToolTip("Ctrl ou Maj + clic : sélectionner plusieurs mails")
+    queue_footer, queue_footer_layout = column("footer", margins=(11, 7, 11, 7))
+    queue_archive_button = BlueprintButton("Archiver")
+    queue_archive_button.setToolTip("Archiver tous les mails prêts, après confirmation")
+    queue_footer_layout.addWidget(queue_archive_button)
+    queue_pane_layout.addWidget(queue_header)
+    queue_pane_layout.addWidget(queue_list, 1)
+    queue_pane_layout.addWidget(queue_footer)
+
+    queue_detail, queue_detail_layout = column("detail")
+    queue_detail.setMinimumWidth(300)
+    queue_detail_stack = QStackedWidget()
+    queue_detail_layout.addWidget(queue_detail_stack)
+    queue_single = QWidget()
+    queue_single_layout = QVBoxLayout(queue_single)
+    queue_single_layout.setContentsMargins(28, 22, 28, 18)
+    queue_single_layout.setSpacing(12)
+    queue_action_tag = tag_label()
+    queue_meta_label = text_label("", "muted")
+    queue_single_layout.addWidget(row_layout(queue_action_tag, queue_meta_label, stretch_at=2))
+    queue_subject_label = text_label("", "display", wrap=True)
+    queue_subject_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    queue_single_layout.addWidget(queue_subject_label)
+    queue_sender_label = QLabel()
+    queue_sender_label.setTextFormat(Qt.TextFormat.RichText)
+    queue_sender_label.setWordWrap(True)
+    queue_sender_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    queue_single_layout.addWidget(queue_sender_label)
+    queue_clip_icon = QLabel()
+    queue_clip_icon.setPixmap(QIcon(icon_path("paperclip")).pixmap(14, 14))
+    queue_attachments_label = text_label("", "muted", wrap=True)
+    queue_single_layout.addWidget(
+        row_layout(queue_clip_icon, queue_attachments_label, spacing=6, stretch_at=2)
+    )
+    queue_body_frame = BlueprintFrame(padding=14)
+    queue_body = QTextBrowser()
+    queue_body.setProperty("pane", "plain")
+    queue_body.setOpenExternalLinks(False)
+    queue_body.setAccessibleName("Contenu du mail")
+    queue_body_frame.body.addWidget(queue_body)
+    queue_single_layout.addWidget(queue_body_frame, 1)
+    queue_previous_button = QPushButton("← Précédent")
+    queue_next_button = QPushButton("Suivant →")
+    queue_shortcuts_label = text_label(SHORTCUTS_HINT, "small", wrap=True)
+    queue_single_layout.addWidget(
+        row_layout(queue_previous_button, queue_next_button, queue_shortcuts_label, stretch_at=2)
+    )
+    queue_detail_stack.addWidget(queue_single)
+
+    queue_bulk = QWidget()
+    queue_bulk_layout = QVBoxLayout(queue_bulk)
+    queue_bulk_layout.setContentsMargins(28, 22, 28, 18)
+    queue_bulk_layout.setSpacing(12)
+    queue_bulk_layout.addWidget(
+        text_label("Appliquer un classement à la sélection", "display", wrap=True)
+    )
+    queue_bulk_layout.addWidget(text_label(
+        "Chaque mail garde le dossier de sa propre entreprise. Les mails archivés ne sont "
+        "jamais modifiés.",
+        "muted",
+        wrap=True,
+    ))
+    queue_bulk_frame = BlueprintFrame()
+    queue_bulk_values: dict[str, Any] = {}
+    for key, caption in (
+        ("count", "Mails concernés"),
+        ("destination", "Dossier de destination"),
+        ("role", "Rôle enregistré pour l'entreprise"),
+    ):
+        line = QFrame()
+        line.setProperty("pane", "header" if key != "role" else "detail")
+        line.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        line_layout = QHBoxLayout(line)
+        line_layout.setContentsMargins(16, 11, 16, 11)
+        value_label = QLabel()
+        value_label.setStyleSheet("QLabel { font-weight: 700; }")
+        value_label.setWordWrap(True)
+        value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        line_layout.addWidget(QLabel(caption))
+        line_layout.addWidget(value_label, 1)
+        queue_bulk_values[key] = value_label
+        queue_bulk_frame.body.addWidget(line)
+    queue_bulk_frame.body.setSpacing(0)
+    queue_bulk_layout.addWidget(queue_bulk_frame)
+    queue_bulk_layout.addStretch(1)
+    queue_detail_stack.addWidget(queue_bulk)
+
+    queue_empty = QWidget()
+    queue_empty_layout = QVBoxLayout(queue_empty)
+    queue_empty_layout.setContentsMargins(40, 24, 40, 24)
+    queue_empty_layout.addStretch(1)
+    queue_empty_title = text_label("Commencez par une analyse Outlook", "display", wrap=True)
+    queue_empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    queue_empty_body = text_label(
+        "Choisissez votre compte et votre dossier source, puis cliquez sur Scanner Outlook. "
+        "Les mails à vérifier apparaîtront ici, un à la fois.",
+        "muted",
+        wrap=True,
+    )
+    queue_empty_body.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    queue_empty_settings_button = QPushButton("Configurer les dossiers et l'IA")
+    queue_empty_layout.addWidget(queue_empty_title)
+    queue_empty_layout.addSpacing(10)
+    queue_empty_layout.addWidget(queue_empty_body)
+    queue_empty_layout.addSpacing(16)
+    queue_empty_layout.addWidget(queue_empty_settings_button, 0, Qt.AlignmentFlag.AlignHCenter)
+    queue_empty_layout.addStretch(1)
+    queue_detail_stack.addWidget(queue_empty)
+
+    queue_decision, queue_decision_layout = column("decision", width=340)
+    queue_decision_stack = QStackedWidget()
+    queue_decision_layout.addWidget(queue_decision_stack)
+    decision_single = QWidget()
+    decision_layout = QVBoxLayout(decision_single)
+    decision_layout.setContentsMargins(22, 22, 22, 12)
+    decision_layout.setSpacing(12)
+    decision_kicker = kicker_label("Proposition IA")
+    decision_figure = QLabel()
+    decision_figure.setProperty("role", "figure")
+    decision_figure.setTextFormat(Qt.TextFormat.RichText)
+    decision_bar = ConfidenceBar()
+    decision_threshold_label = text_label("", "small")
+    decision_text = QLabel()
+    decision_text.setTextFormat(Qt.TextFormat.RichText)
+    decision_text.setWordWrap(True)
+    decision_text.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+    decision_text.setStyleSheet("QLabel { font-size: 13.5px; }")
+    decision_destination_combo = QComboBox()
+    decision_destination_combo.addItems(list(DESTINATION_OPTIONS))
+    decision_destination_combo.setPlaceholderText("À choisir")
+    decision_destination_combo.setAccessibleName("Destination du mail")
+    decision_target_label = text_label("", "small", wrap=True)
+    decision_role = SegmentedControl(
+        [("Client", InterlocutorType.CLIENT), ("Fournisseur", InterlocutorType.FOURNISSEUR)],
+        allow_none=True,
+    )
+    decision_warning = text_label("", "warning", wrap=True)
+    decision_validate_button = BlueprintButton("Valider et suivant")
+    decision_validate_button.setToolTip(
+        "Enregistrer ce classement, mémoriser le rôle de l'entreprise et passer au mail "
+        "suivant à vérifier (Entrée)"
+    )
+    widget: Any
+    for widget in (
+        decision_kicker, decision_figure, decision_bar, decision_threshold_label,
+        decision_text,
+    ):
+        decision_layout.addWidget(widget)
+    decision_layout.addSpacing(4)
+    decision_layout.addWidget(field_block("Destination", decision_destination_combo))
+    decision_layout.addWidget(decision_target_label)
+    decision_layout.addWidget(field_block("Rôle de l'entreprise (global)", decision_role))
+    decision_layout.addWidget(decision_warning)
+    decision_layout.addStretch(1)
+    decision_layout.addWidget(decision_validate_button)
+    queue_decision_stack.addWidget(decision_single)
+
+    decision_bulk = QWidget()
+    decision_bulk_layout = QVBoxLayout(decision_bulk)
+    decision_bulk_layout.setContentsMargins(22, 22, 22, 12)
+    decision_bulk_layout.setSpacing(14)
+    decision_bulk_layout.addWidget(kicker_label("Classement"))
+    bulk_category = SegmentedControl(
+        list(zip(MAIL_TYPE_OPTIONS, DESTINATION_OPTIONS, strict=True)),
+        vertical=True,
+        allow_none=True,
+    )
+    bulk_role = SegmentedControl(
+        [("Client", InterlocutorType.CLIENT), ("Fournisseur", InterlocutorType.FOURNISSEUR)],
+        allow_none=True,
+    )
+    bulk_warning = text_label("", "warning", wrap=True)
+    bulk_apply_button = BlueprintButton("Appliquer")
+    bulk_cancel_button = QPushButton("Annuler")
+    decision_bulk_layout.addWidget(bulk_category)
+    decision_bulk_layout.addWidget(field_block("Rôle de l'entreprise", bulk_role))
+    decision_bulk_layout.addWidget(bulk_warning)
+    decision_bulk_layout.addStretch(1)
+    decision_bulk_layout.addWidget(bulk_apply_button)
+    decision_bulk_layout.addWidget(bulk_cancel_button)
+    queue_decision_stack.addWidget(decision_bulk)
+
+    decision_empty = QWidget()
+    decision_empty_layout = QVBoxLayout(decision_empty)
+    decision_empty_layout.setContentsMargins(22, 22, 22, 22)
+    decision_empty_layout.setSpacing(12)
+    decision_empty_layout.addWidget(kicker_label("Proposition IA"))
+    decision_empty_layout.addWidget(text_label(
+        "Après le scan, la proposition de classement de chaque mail s'affiche ici pour "
+        "être validée ou corrigée.",
+        "muted",
+        wrap=True,
+    ))
+    decision_empty_layout.addStretch(1)
+    queue_decision_stack.addWidget(decision_empty)
+
+    queue_view_layout.addWidget(queue_pane)
+    queue_view_layout.addWidget(queue_detail, 1)
+    queue_view_layout.addWidget(queue_decision)
+    mail_views.addWidget(queue_view)
+
+    table_view = QWidget()
+    mail_layout = QVBoxLayout(table_view)
+    mail_layout.setContentsMargins(20, 16, 20, 12)
     mail_layout.setSpacing(10)
     mail_heading = QLabel("Votre espace de classement")
     mail_heading.setProperty("role", "heading")
-    mail_layout.addWidget(mail_heading)
+    table_toggle_host = QHBoxLayout()
+    table_toggle_host.setContentsMargins(0, 0, 0, 0)
+    mail_heading_row = QHBoxLayout()
+    mail_heading_row.addWidget(mail_heading)
+    mail_heading_row.addStretch(1)
+    mail_heading_row.addLayout(table_toggle_host)
+    mail_layout.addLayout(mail_heading_row)
     summary_label = QLabel("Prêt pour votre première analyse")
     summary_label.setProperty("role", "summary")
     summary_label.setWordWrap(True)
@@ -497,12 +873,15 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
     table.setMinimumHeight(220)
-    table.setAlternatingRowColors(True)
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     table.setShowGrid(False)
     table.verticalHeader().hide()
     table.verticalHeader().setDefaultSectionSize(38)
     table.setAccessibleName("Mails analysés et propositions de classement")
+    for aligned_table in (table,):
+        aligned_table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
     table.horizontalHeader().setSectionsMovable(True)
     table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
     # Keep the information used to make a decision visible first on smaller displays.
@@ -510,8 +889,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         table.horizontalHeader().moveSection(
             table.horizontalHeader().visualIndex(logical_index), visual_index
         )
-    for column in (0, 1, 2, TYPE_COLUMN, INTERLOCUTOR_COLUMN, 8):
-        table.setColumnHidden(column, True)
+    for column_index in (0, 1, 2, TYPE_COLUMN, INTERLOCUTOR_COLUMN, 8):
+        table.setColumnHidden(column_index, True)
     mail_layout.addWidget(actions)
     mail_results = QStackedWidget()
     mail_results.addWidget(table)
@@ -544,74 +923,123 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     selection_status = QLabel("Aucun mail sélectionné")
     selection_status.setProperty("role", "muted")
     mail_layout.addWidget(selection_status)
+    mail_views.addWidget(table_view)
     pages.addWidget(mail_page)
 
+    # ── Arborescence (2a): folders, the selected folder, rename or merge it. ──
     tree_widget = QWidget()
-    tree_layout = QVBoxLayout(tree_widget)
-    tree_layout.setContentsMargins(0, 0, 0, 0)
-    tree_layout.setSpacing(6)
+    tree_page_layout = QHBoxLayout(tree_widget)
+    tree_page_layout.setContentsMargins(0, 0, 0, 0)
+    tree_page_layout.setSpacing(0)
+    tree_pane, tree_layout = column("list", width=340)
+    tree_header, tree_header_layout = column("header", margins=(16, 14, 16, 12), spacing=2)
     tree_heading = QLabel("Dossiers proposés")
     tree_heading.setProperty("role", "heading")
-    tree_hint = QLabel("Organisez les destinations avant de lancer l'archivage.")
-    tree_hint.setProperty("role", "muted")
-    tree_layout.addWidget(tree_heading)
-    tree_layout.addWidget(tree_hint)
+    tree_hint = text_label("Organisez les destinations avant de lancer l'archivage.", "small")
+    tree_hint.setWordWrap(True)
+    tree_header_layout.addWidget(tree_heading)
+    tree_header_layout.addWidget(tree_hint)
     folder_tree = QTreeWidget()
-    folder_tree.setHeaderLabels(["Dossier propose", "Mails"])
-    folder_tree.setMinimumHeight(320)
+    folder_tree.setProperty("pane", "plain")
+    folder_tree.setColumnCount(3)
+    folder_tree.setHeaderLabels(["Dossier propose", "", "Mails"])
+    folder_tree.setHeaderHidden(True)
+    folder_tree.setIndentation(18)
+    folder_tree.setIconSize(QSize(15, 15))
+    folder_tree.setAccessibleName("Dossiers proposés pour l'archivage")
+    folder_tree.header().setStretchLastSection(False)
     folder_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
     folder_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-    tree_buttons = QWidget()
-    tree_buttons_layout = QHBoxLayout(tree_buttons)
-    tree_buttons_layout.setContentsMargins(0, 0, 0, 0)
+    folder_tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+    tree_footer, tree_footer_layout = column("footer", margins=(11, 7, 11, 7))
+    tree_archive_button = BlueprintButton("Archiver")
+    tree_archive_button.setToolTip("Archiver tous les mails prêts, après confirmation")
+    tree_footer_layout.addWidget(tree_archive_button)
+    tree_layout.addWidget(tree_header)
+    tree_layout.addWidget(folder_tree, 1)
+    tree_layout.addWidget(tree_footer)
+
+    tree_detail, tree_detail_layout = column("detail", margins=(28, 22, 28, 18), spacing=12)
+    tree_detail.setMinimumWidth(300)
+    tree_breadcrumb = text_label("", "muted")
+    tree_folder_title = text_label("Aucun dossier sélectionné", "display", wrap=True)
+    tree_duplicate_tag = tag_label("", "outline")
+    tree_mails_frame = BlueprintFrame()
+    tree_mails_table = QTableWidget(0, 2)
+    tree_mails_table.setProperty("pane", "plain")
+    tree_mails_table.horizontalHeader().hide()
+    tree_mails_table.verticalHeader().hide()
+    tree_mails_table.setShowGrid(False)
+    tree_mails_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    tree_mails_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+    tree_mails_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    tree_mails_table.verticalHeader().setDefaultSectionSize(42)
+    tree_mails_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+    tree_mails_table.horizontalHeader().setSectionResizeMode(
+        1, QHeaderView.ResizeMode.ResizeToContents
+    )
+    tree_mails_table.setAccessibleName("Mails du dossier sélectionné")
+    tree_mails_frame.body.addWidget(tree_mails_table)
+    tree_folder_note = text_label(
+        "Sélectionnez un dossier à gauche pour voir ses mails.", "muted", wrap=True
+    )
+    tree_detail_layout.addWidget(tree_breadcrumb)
+    tree_detail_layout.addWidget(tree_folder_title)
+    tree_detail_layout.addWidget(row_layout(tree_duplicate_tag, stretch_at=1))
+    tree_detail_layout.addWidget(tree_mails_frame)
+    tree_detail_layout.addWidget(tree_folder_note)
+    tree_detail_layout.addStretch(1)
+
+    tree_decision, tree_decision_layout = column(
+        "decision", width=340, margins=(22, 22, 22, 12), spacing=12
+    )
+    tree_kicker = kicker_label("Dossier")
+    tree_decision_title = text_label("", "statement", wrap=True)
+    tree_decision_text = text_label("", None, wrap=True)
+    tree_decision_text.setStyleSheet("QLabel { font-size: 13.5px; }")
+    tree_target_input = QLineEdit()
+    tree_target_input.setReadOnly(True)
+    tree_target_field = field_block("Nom du dossier cible", tree_target_input)
+    tree_merge_duplicate_button = BlueprintButton("Fusionner et suivant")
     rename_folder_button = QPushButton("Renommer dossier")
     merge_folder_button = QPushButton("Fusionner vers...")
-    tree_buttons_layout.addWidget(rename_folder_button)
-    tree_buttons_layout.addWidget(merge_folder_button)
-    tree_buttons_layout.addStretch(1)
-    tree_layout.addWidget(tree_buttons)
-    tree_layout.addWidget(folder_tree, 1)
+    tree_ignore_duplicate_button = QPushButton("Ignorer ce doublon")
+    tree_ignore_duplicate_button.setProperty("role", "ghost")
+    for widget in (tree_kicker, tree_decision_title, tree_decision_text, tree_target_field):
+        tree_decision_layout.addWidget(widget)
+    tree_decision_layout.addStretch(1)
+    for widget in (
+        tree_merge_duplicate_button, rename_folder_button, merge_folder_button,
+        tree_ignore_duplicate_button,
+    ):
+        tree_decision_layout.addWidget(widget)
+    tree_page_layout.addWidget(tree_pane)
+    tree_page_layout.addWidget(tree_detail, 1)
+    tree_page_layout.addWidget(tree_decision)
     pages.addWidget(tree_widget)
 
+    # ── Annuaire (2b): companies, the selected company, its global role. ──
     directory_page = QWidget()
-    directory_layout = QVBoxLayout(directory_page)
-    directory_layout.setContentsMargins(0, 0, 0, 0)
-    directory_layout.setSpacing(8)
-    directory_heading = QLabel("Votre annuaire d'entreprises")
-    directory_heading.setProperty("role", "heading")
-    directory_hint = QLabel(
-        "Les rôles enregistrés fixent le classement des mails. Pour une entreprise sans "
-        "rôle, Jev suggère fournisseur ou client : un rôle validé s'applique aussitôt aux "
-        "mails, sans nouvel appel à l'IA."
-    )
-    directory_hint.setWordWrap(True)
-    directory_hint.setProperty("role", "muted")
-    directory_layout.addWidget(directory_heading)
-    directory_layout.addWidget(directory_hint)
-    directory_actions = QWidget()
-    directory_actions_layout = QHBoxLayout(directory_actions)
-    directory_actions_layout.setContentsMargins(0, 0, 0, 0)
+    directory_page_layout = QHBoxLayout(directory_page)
+    directory_page_layout.setContentsMargins(0, 0, 0, 0)
+    directory_page_layout.setSpacing(0)
+    directory_views = QStackedWidget()
+    directory_view_toggle = SegmentedControl([("Liste", "list"), ("Tableau", "table")])
+    directory_view_toggle.setFixedWidth(150)
+    directory_view_toggle.set_value("list")
     import_directory_button = QPushButton(UI_TEXT["import_directory"])
     refresh_directory_button = QPushButton(UI_TEXT["refresh_directory"])
     add_directory_button = QPushButton(UI_TEXT["add_directory"])
     delete_directory_button = QPushButton(UI_TEXT["delete_directory"])
     rename_directory_button = QPushButton(UI_TEXT["rename_directory"])
     merge_directory_button = QPushButton(UI_TEXT["merge_directory"])
-    directory_actions_layout.addWidget(import_directory_button)
-    directory_actions_layout.addWidget(refresh_directory_button)
-    directory_actions_layout.addWidget(add_directory_button)
-    directory_actions_layout.addStretch(1)
-    validate_suggestions_button = QPushButton(UI_TEXT["validate_role_suggestions"])
-    validate_suggestions_button.setToolTip(
-        "Enregistrer les rôles suggérés avec au moins 80 % de confiance, après confirmation."
-    )
-    validate_suggestions_button.setEnabled(False)
-    refresh_roles_button = QPushButton(UI_TEXT["refresh_roles"])
-    refresh_roles_button.setToolTip(
-        "Appliquer les rôles de l'annuaire aux mails affichés, sans nouvel appel à l'IA."
-    )
-    directory_actions_layout.addWidget(validate_suggestions_button)
-    directory_actions_layout.addWidget(refresh_roles_button)
+    directory_global_actions = QWidget()
+    directory_global_layout = QGridLayout(directory_global_actions)
+    directory_global_layout.setContentsMargins(0, 0, 0, 0)
+    directory_global_layout.setSpacing(8)
+    directory_global_layout.addWidget(import_directory_button, 0, 0, 1, 2)
+    directory_global_layout.addWidget(add_directory_button, 1, 0)
+    directory_global_layout.addWidget(refresh_directory_button, 1, 1)
     directory_edit_actions = QWidget()
     directory_edit_layout = QHBoxLayout(directory_edit_actions)
     directory_edit_layout.setContentsMargins(0, 0, 0, 0)
@@ -619,12 +1047,114 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     directory_edit_layout.addWidget(merge_directory_button)
     directory_edit_layout.addWidget(delete_directory_button)
     directory_edit_layout.addStretch(1)
+
+    directory_list_view = QWidget()
+    directory_list_view_layout = QHBoxLayout(directory_list_view)
+    directory_list_view_layout.setContentsMargins(0, 0, 0, 0)
+    directory_list_view_layout.setSpacing(0)
+    directory_list_pane, directory_list_layout = column("list", width=340)
+    directory_list_header, directory_list_header_layout = column(
+        "header", margins=(16, 14, 16, 12), spacing=8
+    )
+    directory_list_title = text_label("Entreprises", "heading")
+    directory_list_count = text_label("", "small")
+    directory_toggle_host_list = QHBoxLayout()
+    directory_toggle_host_list.setContentsMargins(0, 0, 0, 0)
+    directory_title_row = QHBoxLayout()
+    directory_title_row.setSpacing(8)
+    directory_title_row.addWidget(directory_list_title)
+    directory_title_row.addWidget(directory_list_count)
+    directory_title_row.addStretch(1)
+    directory_title_row.addLayout(directory_toggle_host_list)
+    directory_list_header_layout.addLayout(directory_title_row)
+    directory_search_input = QLineEdit()
+    directory_search_input.setPlaceholderText("Rechercher…")
+    directory_search_input.setClearButtonEnabled(True)
+    directory_search_input.setAccessibleName("Rechercher une entreprise")
+    directory_filter = SegmentedControl([("Toutes", "all"), ("Sans rôle", "without_role")])
+    directory_filter.set_value("all")
+    directory_list_header_layout.addWidget(directory_search_input)
+    directory_list_header_layout.addWidget(directory_filter)
+    directory_list = QListWidget()
+    directory_list.setProperty("pane", "queue")
+    directory_list.setAccessibleName("Entreprises de l'annuaire")
+    directory_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+    directory_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    directory_list_footer, directory_list_footer_layout = column(
+        "footer", margins=(16, 10, 16, 10)
+    )
+    directory_list_footer_layout.addWidget(directory_global_actions)
+    directory_list_layout.addWidget(directory_list_header)
+    directory_list_layout.addWidget(directory_list, 1)
+    directory_list_layout.addWidget(directory_list_footer)
+
+    directory_detail, directory_detail_layout = column(
+        "detail", margins=(28, 22, 28, 18), spacing=12
+    )
+    directory_detail.setMinimumWidth(300)
+    directory_role_tag = tag_label("", "outline")
+    directory_name_label = text_label("Aucune entreprise sélectionnée", "display", wrap=True)
+    directory_meta_label = text_label("", "muted", wrap=True)
+    directory_contacts_frame = BlueprintFrame()
+    directory_contacts_table = QTableWidget(0, 2)
+    directory_contacts_table.setProperty("pane", "plain")
+    directory_contacts_table.setHorizontalHeaderLabels(["Contact", "Adresse"])
+    directory_contacts_table.verticalHeader().hide()
+    directory_contacts_table.setShowGrid(False)
+    directory_contacts_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    directory_contacts_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+    directory_contacts_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    directory_contacts_table.horizontalHeader().setSectionResizeMode(
+        QHeaderView.ResizeMode.Stretch
+    )
+    directory_contacts_table.setAccessibleName("Contacts de l'entreprise")
+    directory_contacts_table.verticalHeader().setDefaultSectionSize(40)
+    directory_contacts_table.horizontalHeader().setFixedHeight(34)
+    directory_contacts_frame.body.addWidget(directory_contacts_table)
+    directory_projects_label = text_label("", "muted", wrap=True)
+    directory_detail_layout.addWidget(row_layout(directory_role_tag, stretch_at=1))
+    directory_detail_layout.addWidget(directory_name_label)
+    directory_detail_layout.addWidget(directory_meta_label)
+    directory_detail_layout.addWidget(directory_contacts_frame)
+    directory_detail_layout.addWidget(directory_projects_label)
+    directory_detail_layout.addStretch(1)
+    directory_edit_host_list = QVBoxLayout()
+    directory_edit_host_list.setContentsMargins(0, 0, 0, 0)
+    directory_detail_layout.addLayout(directory_edit_host_list)
+    directory_list_view_layout.addWidget(directory_list_pane)
+    directory_list_view_layout.addWidget(directory_detail, 1)
+    directory_views.addWidget(directory_list_view)
+
+    directory_table_view = QWidget()
+    directory_layout = QVBoxLayout(directory_table_view)
+    directory_layout.setContentsMargins(20, 16, 20, 12)
+    directory_layout.setSpacing(8)
+    directory_heading = QLabel("Votre annuaire d'entreprises")
+    directory_heading.setProperty("role", "heading")
+    directory_toggle_host_table = QHBoxLayout()
+    directory_toggle_host_table.setContentsMargins(0, 0, 0, 0)
+    directory_heading_row = QHBoxLayout()
+    directory_heading_row.addWidget(directory_heading)
+    directory_heading_row.addStretch(1)
+    directory_heading_row.addLayout(directory_toggle_host_table)
+    directory_hint = QLabel(
+        "Les rôles enregistrés fixent le classement des mails. Pour une entreprise sans "
+        "rôle, Jev suggère fournisseur ou client : un rôle validé s'applique aussitôt aux "
+        "mails, sans nouvel appel à l'IA."
+    )
+    directory_hint.setWordWrap(True)
+    directory_hint.setProperty("role", "muted")
+    directory_layout.addLayout(directory_heading_row)
+    directory_layout.addWidget(directory_hint)
+    directory_table_actions_host = QHBoxLayout()
+    directory_table_actions_host.setContentsMargins(0, 0, 0, 0)
+    directory_table_actions_host.setSpacing(16)
+    directory_layout.addLayout(directory_table_actions_host)
     directory_table = QTableWidget(0, len(DIRECTORY_COLUMNS))
     directory_table.setHorizontalHeaderLabels(list(DIRECTORY_COLUMNS))
     directory_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     directory_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
     directory_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-    directory_table.setAlternatingRowColors(True)
     directory_table.verticalHeader().hide()
     directory_table.verticalHeader().setDefaultSectionSize(38)
     directory_table.horizontalHeader().setSectionsMovable(True)
@@ -644,21 +1174,129 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QHeaderView.ResizeMode.ResizeToContents,
     )
     directory_table.setColumnWidth(0, 220)
-    directory_status_label = QLabel("Annuaire local")
-    directory_status_label.setWordWrap(True)
-    directory_status_label.setStyleSheet("QLabel { color: #334155; }")
-    directory_layout.addWidget(directory_actions)
-    directory_layout.addWidget(directory_edit_actions)
+    for aligned_table in (directory_table, directory_contacts_table):
+        aligned_table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
     directory_layout.addWidget(directory_table, 1)
-    directory_layout.addWidget(directory_status_label)
+    directory_views.addWidget(directory_table_view)
+
+    directory_decision, directory_decision_layout = column(
+        "decision", width=340, margins=(22, 22, 22, 12), spacing=12
+    )
+    directory_kicker = kicker_label("Rôle global")
+    directory_figure = QLabel()
+    directory_figure.setProperty("role", "figure")
+    directory_figure.setTextFormat(Qt.TextFormat.RichText)
+    directory_suggestion_label = QLabel()
+    directory_suggestion_label.setTextFormat(Qt.TextFormat.RichText)
+    directory_suggestion_label.setWordWrap(True)
+    directory_role_choice = SegmentedControl(
+        [("Client", InterlocutorType.CLIENT), ("Fournisseur", InterlocutorType.FOURNISSEUR)],
+        allow_none=True,
+    )
+    directory_role_note = text_label(
+        "S'applique aussitôt aux mails de cette entreprise et à tous les projets, sans "
+        "nouvel appel à l'IA.",
+        "small",
+        wrap=True,
+    )
+    validate_suggestions_button = QPushButton(UI_TEXT["validate_role_suggestions"])
+    validate_suggestions_button.setToolTip(
+        "Enregistrer les rôles suggérés avec au moins 80 % de confiance, après confirmation."
+    )
+    validate_suggestions_button.setEnabled(False)
+    refresh_roles_button = QPushButton(UI_TEXT["refresh_roles"])
+    refresh_roles_button.setToolTip(
+        "Appliquer les rôles de l'annuaire aux mails affichés, sans nouvel appel à l'IA."
+    )
+    directory_status_label = text_label("Annuaire local", "small", wrap=True)
+    directory_validate_button = BlueprintButton("Valider et suivant")
+    directory_validate_button.setToolTip(
+        "Enregistrer ce rôle dans l'annuaire et passer à l'entreprise suivante sans rôle"
+    )
+    for widget in (
+        directory_kicker, directory_figure, directory_suggestion_label,
+        field_block("Rôle global", directory_role_choice), directory_role_note,
+    ):
+        directory_decision_layout.addWidget(widget)
+    directory_decision_layout.addStretch(1)
+    for widget in (
+        validate_suggestions_button, refresh_roles_button, directory_status_label,
+        directory_validate_button,
+    ):
+        directory_decision_layout.addWidget(widget)
+    directory_page_layout.addWidget(directory_views, 1)
+    directory_page_layout.addWidget(directory_decision)
     pages.addWidget(directory_page)
 
+    # ── Boîte mail (2d): loose mails, the selected mail, where it will go. ──
     mailbox_page = QWidget()
-    mailbox_layout = QVBoxLayout(mailbox_page)
-    mailbox_layout.setContentsMargins(0, 0, 0, 0)
-    mailbox_layout.setSpacing(8)
+    mailbox_page_layout = QHBoxLayout(mailbox_page)
+    mailbox_page_layout.setContentsMargins(0, 0, 0, 0)
+    mailbox_page_layout.setSpacing(0)
+    mailbox_list_pane, mailbox_list_layout = column("list", width=340)
+    mailbox_list_header, mailbox_list_header_layout = column(
+        "header", margins=(16, 14, 16, 12), spacing=8
+    )
+    mailbox_options_button = QPushButton("Options")
+    mailbox_options_button.setProperty("role", "ghost")
+    mailbox_options_button.setToolTip("Choisir les dossiers et la période à analyser")
+    mailbox_list_header_layout.addWidget(
+        row_layout(text_label("À ranger", "heading"), mailbox_options_button, stretch_at=1)
+    )
+    mailbox_counts_label = text_label("Aucune analyse pour le moment", "small")
+    mailbox_list_header_layout.addWidget(mailbox_counts_label)
+    mailbox_summary_label = QLabel("Aucune analyse de la boîte mail pour le moment.")
+    mailbox_summary_label.setProperty("role", "summary")
+    mailbox_summary_label.setWordWrap(True)
+    mailbox_analyze_button = QPushButton(UI_TEXT["analyze_mailbox"])
+    mailbox_list_header_layout.addWidget(mailbox_analyze_button)
+    mailbox_filter_combo = QComboBox()
+    mailbox_filter_combo.setAccessibleName("Filtrer les mails de la boîte par état")
+    for label, status_value in STATUS_FILTERS:
+        mailbox_filter_combo.addItem(label, None if status_value is None else status_value.value)
+    mailbox_check_all_button = QPushButton("Tout cocher")
+    mailbox_uncheck_all_button = QPushButton("Tout décocher")
+    mailbox_list_header_layout.addWidget(mailbox_filter_combo)
+    mailbox_list_header_layout.addWidget(
+        row_layout(mailbox_check_all_button, mailbox_uncheck_all_button)
+    )
+    mailbox_table = QTableWidget(0, len(MAILBOX_SORT_COLUMNS))
+    mailbox_table.setProperty("pane", "plain")
+    mailbox_table.setHorizontalHeaderLabels(list(MAILBOX_SORT_COLUMNS))
+    mailbox_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    mailbox_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+    mailbox_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    mailbox_table.setShowGrid(False)
+    mailbox_table.verticalHeader().hide()
+    mailbox_table.verticalHeader().setDefaultSectionSize(40)
+    mailbox_table.setAccessibleName("Mails de la boîte et dossier projet proposé")
+    mailbox_table.setToolTip("Double-cliquez sur un mail pour l'ouvrir dans Outlook.")
+    mailbox_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    mailbox_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    mailbox_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+    # The list keeps the check, the subject and the state; the detail shows the rest.
+    for column_index in range(len(MAILBOX_SORT_COLUMNS)):
+        mailbox_table.setColumnHidden(column_index, column_index not in {CHECK_COLUMN, 4, 8})
+    mailbox_table.horizontalHeader().setDefaultAlignment(
+        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+    )
+    mailbox_table.setColumnWidth(CHECK_COLUMN, 58)
+    mailbox_table.setColumnWidth(8, 112)
+    mailbox_list_layout.addWidget(mailbox_list_header)
+    mailbox_list_layout.addWidget(mailbox_table, 1)
+
+    mailbox_detail, mailbox_detail_layout = column("detail")
+    mailbox_detail.setMinimumWidth(300)
+    mailbox_detail_stack = QStackedWidget()
+    mailbox_detail_layout.addWidget(mailbox_detail_stack)
+    mailbox_options_view = QWidget()
+    mailbox_layout = QVBoxLayout(mailbox_options_view)
+    mailbox_layout.setContentsMargins(28, 22, 28, 18)
+    mailbox_layout.setSpacing(10)
     mailbox_heading = QLabel("Ranger la boîte mail Outlook")
-    mailbox_heading.setProperty("role", "heading")
+    mailbox_heading.setProperty("role", "display")
     mailbox_hint = QLabel(
         "Place les mails de la boîte de réception, du dossier à classer et des éléments "
         "envoyés dans le dossier projet Outlook dont le numéro (20XX-XXXX) figure dans "
@@ -669,6 +1307,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     mailbox_hint.setWordWrap(True)
     mailbox_layout.addWidget(mailbox_heading)
     mailbox_layout.addWidget(mailbox_hint)
+    mailbox_layout.addWidget(mailbox_summary_label)
     mailbox_options = QGroupBox("Où chercher")
     mailbox_options_layout = QGridLayout(mailbox_options)
     mailbox_options_layout.setColumnStretch(3, 1)
@@ -725,67 +1364,103 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     )
     mailbox_jev_checkbox.setChecked(settings.mailbox_suggest_with_jev)
     mailbox_options_layout.addWidget(mailbox_jev_checkbox, 3, 0, 1, 4)
-    mailbox_analyze_button = QPushButton(UI_TEXT["analyze_mailbox"])
-    mailbox_analyze_button.setProperty("role", "primary")
-    mailbox_options_layout.addWidget(
-        mailbox_analyze_button, 4, 0, 1, 2, Qt.AlignmentFlag.AlignLeft
-    )
     mailbox_layout.addWidget(mailbox_options)
-    mailbox_summary_label = QLabel("Aucune analyse de la boîte mail pour le moment.")
-    mailbox_summary_label.setProperty("role", "summary")
-    mailbox_summary_label.setWordWrap(True)
-    mailbox_layout.addWidget(mailbox_summary_label)
-    mailbox_filters = QWidget()
-    mailbox_filters_layout = QHBoxLayout(mailbox_filters)
-    mailbox_filters_layout.setContentsMargins(0, 0, 0, 0)
-    mailbox_filter_combo = QComboBox()
-    mailbox_filter_combo.setAccessibleName("Filtrer les mails de la boîte par état")
-    for label, status_value in STATUS_FILTERS:
-        mailbox_filter_combo.addItem(label, None if status_value is None else status_value.value)
-    mailbox_check_all_button = QPushButton("Tout cocher")
-    mailbox_uncheck_all_button = QPushButton("Tout décocher")
-    mailbox_sort_button = QPushButton(UI_TEXT["sort_mailbox"])
-    mailbox_sort_button.setProperty("role", "primary")
-    mailbox_sort_button.setEnabled(False)
-    mailbox_filters_layout.addWidget(mailbox_filter_combo)
-    mailbox_filters_layout.addWidget(mailbox_check_all_button)
-    mailbox_filters_layout.addWidget(mailbox_uncheck_all_button)
-    mailbox_filters_layout.addStretch(1)
-    mailbox_projectflow_button = QPushButton("Créer les dossiers absents avec ProjectFlow")
-    mailbox_projectflow_button.setEnabled(False)
-    mailbox_filters_layout.addWidget(mailbox_projectflow_button)
-    mailbox_filters_layout.addWidget(mailbox_sort_button)
-    mailbox_layout.addWidget(mailbox_filters)
-    mailbox_table = QTableWidget(0, len(MAILBOX_SORT_COLUMNS))
-    mailbox_table.setHorizontalHeaderLabels(list(MAILBOX_SORT_COLUMNS))
-    mailbox_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-    mailbox_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-    mailbox_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-    mailbox_table.setAlternatingRowColors(True)
-    mailbox_table.setShowGrid(False)
-    mailbox_table.verticalHeader().hide()
-    mailbox_table.verticalHeader().setDefaultSectionSize(34)
-    mailbox_table.setAccessibleName("Mails de la boîte et dossier projet proposé")
-    mailbox_table.setToolTip("Double-cliquez sur un mail pour l'ouvrir dans Outlook.")
-    mailbox_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-    mailbox_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-    for column, width in (
-        (0, 64), (1, 96), (2, 128), (3, 160), (5, 100), (6, 110), (7, 210), (8, 190),
-    ):
-        mailbox_table.setColumnWidth(column, width)
-    mailbox_layout.addWidget(mailbox_table, 1)
+    mailbox_layout.addStretch(1)
+    mailbox_detail_stack.addWidget(mailbox_options_view)
+
+    mailbox_mail_view = QWidget()
+    mailbox_mail_layout = QVBoxLayout(mailbox_mail_view)
+    mailbox_mail_layout.setContentsMargins(28, 22, 28, 18)
+    mailbox_mail_layout.setSpacing(12)
+    mailbox_detail_tag = tag_label()
+    mailbox_detail_subject = text_label("", "display", wrap=True)
+    mailbox_detail_meta = text_label("", "muted", wrap=True)
+    mailbox_detail_frame = BlueprintFrame(padding=6)
+    mailbox_detail_values: dict[str, Any] = {}
+    mailbox_detail_grid = QGridLayout()
+    mailbox_detail_grid.setHorizontalSpacing(18)
+    mailbox_detail_grid.setVerticalSpacing(10)
+    mailbox_detail_grid.setColumnStretch(1, 1)
+    for row_index, (key, caption) in enumerate((
+        ("correspondent", "Interlocuteur"),
+        ("numbers", "Numéros trouvés"),
+        ("found_in", "Trouvé dans"),
+        ("note", "Remarque"),
+    )):
+        caption_label = text_label(caption, "field")
+        value_label = text_label("", None, wrap=True)
+        value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        mailbox_detail_grid.addWidget(caption_label, row_index, 0, Qt.AlignmentFlag.AlignTop)
+        mailbox_detail_grid.addWidget(value_label, row_index, 1)
+        mailbox_detail_values[key] = value_label
+    mailbox_detail_frame.body.addLayout(mailbox_detail_grid)
+    mailbox_mail_layout.addWidget(row_layout(mailbox_detail_tag, stretch_at=1))
+    mailbox_mail_layout.addWidget(mailbox_detail_subject)
+    mailbox_mail_layout.addWidget(mailbox_detail_meta)
+    mailbox_mail_layout.addWidget(mailbox_detail_frame)
+    mailbox_mail_layout.addWidget(text_label(
+        "Numéros cherchés dans l'objet, le corps et les pièces jointes. "
+        "Double-clic dans la liste : ouvrir le mail dans Outlook.",
+        "muted",
+        wrap=True,
+    ))
+    mailbox_mail_layout.addStretch(1)
+    mailbox_detail_stack.addWidget(mailbox_mail_view)
+
+    mailbox_decision, mailbox_decision_layout = column(
+        "decision", width=340, margins=(22, 22, 22, 12), spacing=12
+    )
+    mailbox_destination_title = text_label("Aucun mail sélectionné", "statement", wrap=True)
+    mailbox_destination_frame = BlueprintFrame(padding=6)
+    mailbox_destination_lines = QLabel()
+    mailbox_destination_lines.setWordWrap(True)
+    mailbox_destination_lines.setStyleSheet("QLabel { font-size: 13.5px; }")
+    mailbox_destination_frame.body.addWidget(mailbox_destination_lines)
+    mailbox_destination_note = text_label(
+        "Sélectionnez un mail analysé pour voir son dossier projet.", "small", wrap=True
+    )
     mailbox_status_label = QLabel("")
     mailbox_status_label.setWordWrap(True)
-    mailbox_status_label.setProperty("role", "muted")
-    mailbox_layout.addWidget(mailbox_status_label)
+    mailbox_status_label.setProperty("role", "small")
+    mailbox_projectflow_button = QPushButton("Créer les dossiers absents avec ProjectFlow")
+    mailbox_projectflow_button.setEnabled(False)
+    mailbox_sort_button = BlueprintButton(UI_TEXT["sort_mailbox"])
+    mailbox_sort_button.setEnabled(False)
+    for widget in (
+        kicker_label("Destination"), mailbox_destination_title, mailbox_destination_frame,
+        mailbox_destination_note,
+    ):
+        mailbox_decision_layout.addWidget(widget)
+    mailbox_decision_layout.addStretch(1)
+    for widget in (mailbox_status_label, mailbox_projectflow_button, mailbox_sort_button):
+        mailbox_decision_layout.addWidget(widget)
+    mailbox_page_layout.addWidget(mailbox_list_pane)
+    mailbox_page_layout.addWidget(mailbox_detail, 1)
+    mailbox_page_layout.addWidget(mailbox_decision)
     pages.addWidget(mailbox_page)
+
+    # ── Réglages (2c): sections, the selected section, the engine test. ──
+    settings_container = QWidget()
+    settings_container_layout = QHBoxLayout(settings_container)
+    settings_container_layout.setContentsMargins(0, 0, 0, 0)
+    settings_container_layout.setSpacing(0)
+    settings_sections_pane, settings_sections_layout = column("list", width=340)
+    settings_sections_header, settings_sections_header_layout = column(
+        "header", margins=(16, 14, 16, 12)
+    )
+    settings_sections_header_layout.addWidget(text_label("Réglages", "heading"))
+    settings_sections_list = QListWidget()
+    settings_sections_list.setProperty("pane", "queue")
+    settings_sections_list.setAccessibleName("Sections des réglages")
+    settings_sections_layout.addWidget(settings_sections_header)
+    settings_sections_layout.addWidget(settings_sections_list, 1)
 
     settings_page = QWidget()
     settings_layout = QVBoxLayout(settings_page)
-    settings_layout.setContentsMargins(0, 0, 0, 0)
-    settings_layout.setSpacing(8)
-    settings_heading = QLabel("Réglages")
-    settings_heading.setProperty("role", "heading")
+    settings_layout.setContentsMargins(28, 22, 28, 18)
+    settings_layout.setSpacing(12)
+    settings_heading = QLabel("Moteur IA")
+    settings_heading.setProperty("role", "display")
     settings_layout.addWidget(settings_heading)
     settings_hint = QLabel(
         "Enregistrez pour appliquer les choix IA et confidentialité. "
@@ -794,20 +1469,19 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     settings_hint.setProperty("role", "muted")
     settings_hint.setWordWrap(True)
     settings_layout.addWidget(settings_hint)
-    config = QGroupBox("Dossiers, intelligence artificielle et suivi")
-    grid = QGridLayout(config)
-    grid.setVerticalSpacing(14)
-    grid.setColumnStretch(1, 1)
-    grid.addWidget(QLabel("Dossier local des projets"), 0, 0)
-    projects_root_input = QLineEdit(str(settings.local_projects_root))
-    projects_root_picker = QWidget()
-    projects_root_layout = QHBoxLayout(projects_root_picker)
-    projects_root_layout.setContentsMargins(0, 0, 0, 0)
-    projects_root_layout.addWidget(projects_root_input)
-    browse_projects_button = QPushButton("Parcourir")
-    projects_root_layout.addWidget(browse_projects_button)
-    grid.addWidget(projects_root_picker, 0, 1)
-    grid.addWidget(QLabel("Mode IA"), 1, 0)
+    settings_sections_stack = QStackedWidget()
+    settings_layout.addWidget(settings_sections_stack)
+    settings_layout.addStretch(1)
+
+    def settings_section() -> tuple[Any, Any]:
+        section = QWidget()
+        section_layout = QVBoxLayout(section)
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setSpacing(16)
+        settings_sections_stack.addWidget(section)
+        return section, section_layout
+
+    _engine_section, engine_layout = settings_section()
     ai_mode_combo = QComboBox()
     for mode in (AiMode.DISABLED, AiMode.ALL):
         ai_mode_combo.addItem(ai_mode_label(mode), mode.value)
@@ -815,43 +1489,78 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         AiMode.ALL if settings.ai_mode == AiMode.AMBIGUOUS_ONLY else settings.ai_mode
     )
     set_combo_value_by_data(ai_mode_combo, selected_ai_mode.value)
-    grid.addWidget(ai_mode_combo, 1, 1)
-    grid.addWidget(QLabel("Moteur IA"), 2, 0)
+    ai_mode_combo.setVisible(False)
+    ai_mode_choice = SegmentedControl(
+        [("Activée", AiMode.ALL.value), ("Désactivée", AiMode.DISABLED.value)]
+    )
+    ai_mode_choice.setFixedWidth(240)
     ai_provider_combo = QComboBox()
     ai_provider_combo.addItem("OpenAI — API", "openai")
     ai_provider_combo.addItem("Ollama — IA locale sur ce PC", "ollama")
     ai_provider_combo.addItem("Jev (TypeSafe) — API de classification", "jev")
     set_combo_value_by_data(ai_provider_combo, settings.ai_provider)
-    grid.addWidget(ai_provider_combo, 2, 1)
+    ai_provider_combo.setVisible(False)
+    engine_layout.addWidget(ai_mode_combo)
+    engine_layout.addWidget(ai_provider_combo)
+    engine_layout.addWidget(field_block("Mode", ai_mode_choice))
+    provider_cards: dict[str, Any] = {}
+    provider_cards_widget = QWidget()
+    provider_cards_layout = QHBoxLayout(provider_cards_widget)
+    provider_cards_layout.setContentsMargins(0, 0, 0, 0)
+    provider_cards_layout.setSpacing(12)
+    provider_cards_group = QButtonGroup(provider_cards_widget)
+    for provider_key, card_kicker, card_title, card_body in (
+        ("openai", "Cloud", "OpenAI", "API OpenAI"),
+        ("ollama", "Local", "Ollama", "Mails analysés sur ce PC"),
+        ("jev", "API", "Jev (TypeSafe)", "Probabilités sur liste fermée"),
+    ):
+        card = QPushButton()
+        card.setCheckable(True)
+        card.setProperty("role", "card")
+        card.setFixedHeight(92)
+        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        card.setAccessibleName(f"Moteur {card_title}")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(12, 10, 12, 10)
+        card_layout.setSpacing(2)
+        card_kicker_label = kicker_label(card_kicker)
+        card_title_label = QLabel(card_title)
+        card_title_label.setFont(heading_font(17))
+        card_body_label = text_label(card_body, "small", wrap=True)
+        for card_child in (card_kicker_label, card_title_label, card_body_label):
+            card_child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            card_layout.addWidget(card_child)
+        card_layout.addStretch(1)
+        provider_cards_group.addButton(card)
+        provider_cards_layout.addWidget(card)
+        provider_cards[provider_key] = (card, card_kicker_label, card_kicker)
+    engine_layout.addWidget(field_block("Moteur", provider_cards_widget))
+    provider_grid = QGridLayout()
+    provider_grid.setVerticalSpacing(12)
+    provider_grid.setHorizontalSpacing(14)
+    provider_grid.setColumnStretch(1, 1)
+    engine_layout.addLayout(provider_grid)
     ai_model_label = QLabel("Modèle OpenAI")
-    grid.addWidget(ai_model_label, 3, 0)
+    provider_grid.addWidget(ai_model_label, 0, 0)
     ai_model_input = QComboBox()
     ai_model_input.setEditable(True)
     ai_model_input.addItems(list(AI_MODEL_OPTIONS))
     set_combo_value_by_text(ai_model_input, settings.ai_model)
-    grid.addWidget(ai_model_input, 3, 1)
+    provider_grid.addWidget(ai_model_input, 0, 1)
     openai_key_label = QLabel("Clé API OpenAI")
-    grid.addWidget(openai_key_label, 4, 0)
-    openai_key_widget = QWidget()
-    openai_key_layout = QHBoxLayout(openai_key_widget)
+    provider_grid.addWidget(openai_key_label, 1, 0)
+    key_fields = QWidget()
+    openai_key_layout = QHBoxLayout(key_fields)
     openai_key_layout.setContentsMargins(0, 0, 0, 0)
     openai_key_input = QLineEdit()
     openai_key_input.setEchoMode(QLineEdit.EchoMode.Password)
     openai_key_input.setPlaceholderText("Coller une nouvelle clé puis enregistrer")
     save_openai_key_button = QPushButton(UI_TEXT["save_openai_key"])
-    test_openai_key_button = QPushButton(UI_TEXT["test_openai_key"])
-    openai_key_status = QLabel()
     openai_key_layout.addWidget(openai_key_input)
     openai_key_layout.addWidget(save_openai_key_button)
-    openai_key_layout.addWidget(test_openai_key_button)
-    key_fields = QWidget()
-    key_fields_layout = QVBoxLayout(key_fields)
-    key_fields_layout.setContentsMargins(0, 0, 0, 0)
-    key_fields_layout.addWidget(openai_key_widget)
-    key_fields_layout.addWidget(openai_key_status)
-    grid.addWidget(key_fields, 4, 1)
+    provider_grid.addWidget(key_fields, 1, 1)
     ollama_model_label = QLabel("Modèle local installé")
-    grid.addWidget(ollama_model_label, 5, 0)
+    provider_grid.addWidget(ollama_model_label, 2, 0)
     ollama_models_widget = QWidget()
     ollama_models_layout = QHBoxLayout(ollama_models_widget)
     ollama_models_layout.setContentsMargins(0, 0, 0, 0)
@@ -861,9 +1570,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     ollama_models_layout.addWidget(ollama_model_input, 1)
     refresh_ollama_models_button = QPushButton("Actualiser les modèles")
     ollama_models_layout.addWidget(refresh_ollama_models_button)
-    grid.addWidget(ollama_models_widget, 5, 1)
+    provider_grid.addWidget(ollama_models_widget, 2, 1)
     ollama_url_label = QLabel("Adresse Ollama sur ce PC")
-    grid.addWidget(ollama_url_label, 6, 0)
+    provider_grid.addWidget(ollama_url_label, 3, 0)
     ollama_base_url_input = QLineEdit(settings.ollama_base_url)
     ollama_base_url_input.setPlaceholderText(DEFAULT_OLLAMA_BASE_URL)
     ollama_address_widget = QWidget()
@@ -878,19 +1587,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     ollama_timeout_input.setSuffix(" s")
     ollama_timeout_input.setValue(settings.ollama_timeout_seconds)
     ollama_address_layout.addWidget(ollama_timeout_input)
-    grid.addWidget(ollama_address_widget, 6, 1)
-    ollama_test_widget = QWidget()
-    ollama_test_layout = QVBoxLayout(ollama_test_widget)
-    ollama_test_layout.setContentsMargins(0, 0, 0, 0)
-    test_ollama_button = QPushButton("Tester IA locale")
-    test_ollama_button.setToolTip("Classer un mail fictif pour vérifier Ollama et le modèle.")
-    ollama_test_layout.addWidget(test_ollama_button, 0, Qt.AlignmentFlag.AlignLeft)
-    ollama_status = QLabel("Connexion locale à tester.")
-    ollama_status.setWordWrap(True)
-    ollama_test_layout.addWidget(ollama_status)
-    grid.addWidget(ollama_test_widget, 7, 1)
+    provider_grid.addWidget(ollama_address_widget, 3, 1)
     jev_model_label = QLabel("Modèle Jev")
-    grid.addWidget(jev_model_label, 8, 0)
+    provider_grid.addWidget(jev_model_label, 4, 0)
     jev_model_input = QComboBox()
     jev_model_input.setEditable(True)
     jev_model_input.addItems(list(JEV_MODEL_OPTIONS))
@@ -899,43 +1598,71 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         "jev-latest suit la dernière version de Jev. Le test affiche le modèle qui a "
         "répondu : saisir ce nom fige la version."
     )
-    grid.addWidget(jev_model_input, 8, 1)
+    provider_grid.addWidget(jev_model_input, 4, 1)
     jev_key_label = QLabel("Clé API Jev (TypeSafe)")
-    grid.addWidget(jev_key_label, 9, 0)
-    jev_key_widget = QWidget()
-    jev_key_layout = QHBoxLayout(jev_key_widget)
+    provider_grid.addWidget(jev_key_label, 5, 0)
+    jev_key_fields = QWidget()
+    jev_key_layout = QHBoxLayout(jev_key_fields)
     jev_key_layout.setContentsMargins(0, 0, 0, 0)
     jev_key_input = QLineEdit()
     jev_key_input.setEchoMode(QLineEdit.EchoMode.Password)
     jev_key_input.setPlaceholderText("Coller la clé de console.typesafe.ai puis enregistrer")
     save_jev_key_button = QPushButton(UI_TEXT["save_openai_key"])
-    test_jev_key_button = QPushButton(UI_TEXT["test_jev_key"])
-    test_jev_key_button.setToolTip("Classer un mail fictif avec Jev pour vérifier la clé.")
-    jev_key_status = QLabel()
     jev_key_layout.addWidget(jev_key_input)
     jev_key_layout.addWidget(save_jev_key_button)
-    jev_key_layout.addWidget(test_jev_key_button)
-    jev_key_fields = QWidget()
-    jev_key_fields_layout = QVBoxLayout(jev_key_fields)
-    jev_key_fields_layout.setContentsMargins(0, 0, 0, 0)
-    jev_key_fields_layout.addWidget(jev_key_widget)
-    jev_key_fields_layout.addWidget(jev_key_status)
-    grid.addWidget(jev_key_fields, 9, 1)
+    provider_grid.addWidget(jev_key_fields, 5, 1)
     ai_provider_hint = QLabel()
     ai_provider_hint.setWordWrap(True)
     ai_provider_hint.setProperty("role", "muted")
-    grid.addWidget(ai_provider_hint, 10, 1)
+    engine_layout.addWidget(ai_provider_hint)
+
+    _privacy_section, privacy_layout = settings_section()
     ai_include_body_checkbox = QCheckBox("Inclure l'extrait nettoyé du corps dans l'analyse IA")
     ai_include_body_checkbox.setChecked(settings.ai_include_body_excerpt)
-    grid.addWidget(ai_include_body_checkbox, 11, 1)
+    privacy_layout.addWidget(ai_include_body_checkbox)
+    privacy_layout.addWidget(text_label(
+        "Sinon : sujet, métadonnées et noms des pièces jointes seulement.", "small", wrap=True
+    ))
     privacy_phone_checkbox = QCheckBox("Masquer les numéros de téléphone avant l'analyse IA")
     privacy_phone_checkbox.setChecked(settings.privacy_mask_phone_numbers)
-    grid.addWidget(privacy_phone_checkbox, 12, 1)
-    grid.addWidget(QLabel("Horaires des rappels"), 13, 0)
-    review_reminder_times_input = QLineEdit(format_reminder_times(settings.review_reminder_times))
-    review_reminder_times_input.setPlaceholderText("09:00, 14:00, 16:30")
-    grid.addWidget(review_reminder_times_input, 13, 1)
-    grid.addWidget(QLabel("ProjectFlow Automator"), 14, 0)
+    privacy_layout.addWidget(privacy_phone_checkbox)
+    privacy_layout.addWidget(text_label(
+        "Les clés OpenAI et Jev restent dans le coffre du système, jamais dans le fichier "
+        "de réglages.",
+        "small",
+        wrap=True,
+    ))
+
+    _threshold_section, threshold_layout = settings_section()
+    threshold_slider = QSlider(Qt.Orientation.Horizontal)
+    threshold_minimum = round(REVIEW_CONFIDENCE_THRESHOLD * 100)
+    threshold_slider.setRange(threshold_minimum, 99)
+    threshold_slider.setValue(
+        min(max(round(settings.decision_confidence_threshold * 100), threshold_minimum), 99)
+    )
+    threshold_slider.setAccessibleName("Seuil de vérification")
+    threshold_value_label = QLabel()
+    threshold_value_label.setStyleSheet("QLabel { font-weight: 700; }")
+    threshold_value_label.setFixedWidth(48)
+    threshold_layout.addWidget(field_block(
+        "Seuil de vérification", row_layout(threshold_slider, threshold_value_label, spacing=12)
+    ))
+    threshold_layout.addWidget(text_label(
+        f"En dessous de ce seuil, un mail reste à vérifier. Le minimum est "
+        f"{threshold_minimum} % : l'IA n'archive jamais un mail moins sûr.",
+        "small",
+        wrap=True,
+    ))
+
+    _folders_section, folders_layout = settings_section()
+    projects_root_input = QLineEdit(str(settings.local_projects_root))
+    projects_root_picker = QWidget()
+    projects_root_layout = QHBoxLayout(projects_root_picker)
+    projects_root_layout.setContentsMargins(0, 0, 0, 0)
+    projects_root_layout.addWidget(projects_root_input)
+    browse_projects_button = QPushButton("Parcourir")
+    projects_root_layout.addWidget(browse_projects_button)
+    folders_layout.addWidget(field_block("Dossier local des projets", projects_root_picker))
     projectflow_widget = QWidget()
     projectflow_layout = QVBoxLayout(projectflow_widget)
     projectflow_layout.setContentsMargins(0, 0, 0, 0)
@@ -953,30 +1680,93 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     projectflow_status.setProperty("role", "muted")
     projectflow_layout.addWidget(projectflow_picker)
     projectflow_layout.addWidget(projectflow_status)
-    grid.addWidget(projectflow_widget, 14, 1)
-    grid.addWidget(QLabel("Mises à jour"), 15, 0)
+    folders_layout.addWidget(field_block("ProjectFlow Automator", projectflow_widget))
+
+    _watch_section, watch_layout = settings_section()
+    review_reminder_times_input = QLineEdit(format_reminder_times(settings.review_reminder_times))
+    review_reminder_times_input.setPlaceholderText("09:00, 14:00, 16:30")
+    watch_layout.addWidget(field_block("Horaires des rappels", review_reminder_times_input))
+    watch_layout.addWidget(text_label(
+        "Quand la surveillance Outlook est active, MailFlow contrôle les dossiers projet "
+        "toutes les 5 minutes et rappelle à ces heures les mails qui attendent une "
+        "vérification.",
+        "small",
+        wrap=True,
+    ))
+
+    _updates_section, updates_layout = settings_section()
     update_widget = QWidget()
     update_layout = QHBoxLayout(update_widget)
     update_layout.setContentsMargins(0, 0, 0, 0)
     check_updates_button = QPushButton(UI_TEXT["check_updates"])
     update_status = QLabel(f"Version {__version__}")
-    update_status.setStyleSheet("QLabel { color: #334155; }")
-    update_layout.addWidget(check_updates_button)
+    update_status.setStyleSheet(f"QLabel {{ color: {COLORS['muted']}; }}")
     update_layout.addWidget(update_status)
     update_layout.addStretch(1)
-    grid.addWidget(update_widget, 15, 1)
-    save_settings_button = QPushButton(UI_TEXT["save_settings"])
-    save_settings_button.setProperty("role", "primary")
-    grid.addWidget(save_settings_button, 16, 1)
-    settings_layout.addWidget(config)
-    settings_layout.addStretch(1)
+    update_layout.addWidget(check_updates_button)
+    updates_frame = BlueprintFrame(padding=8)
+    updates_frame.body.addWidget(kicker_label("Application"))
+    updates_frame.body.addWidget(update_widget)
+    updates_layout.addWidget(updates_frame)
+
     settings_scroll_area = QScrollArea()
+    settings_scroll_area.setProperty("pane", "plain")
     settings_scroll_area.setWidgetResizable(True)
     settings_scroll_area.setWidget(settings_page)
-    pages.addWidget(settings_scroll_area)
+    settings_scroll_area.setMinimumWidth(300)
 
-    preview = QGroupBox("Comprendre le classement")
+    settings_decision, settings_decision_layout = column(
+        "decision", width=340, margins=(22, 22, 22, 12), spacing=12
+    )
+    settings_decision_layout.addWidget(kicker_label("Test du moteur"))
+    settings_decision_layout.addWidget(text_label(
+        "Classe un mail fictif pour vérifier la clé et la connexion.", None, wrap=True
+    ))
+    test_openai_key_button = QPushButton(UI_TEXT["test_openai_key"])
+    openai_key_status = QLabel()
+    openai_key_status.setWordWrap(True)
+    openai_test_group = QWidget()
+    openai_test_layout = QVBoxLayout(openai_test_group)
+    openai_test_layout.setContentsMargins(0, 0, 0, 0)
+    openai_test_layout.addWidget(test_openai_key_button)
+    openai_test_layout.addWidget(openai_key_status)
+    test_jev_key_button = QPushButton(UI_TEXT["test_jev_key"])
+    test_jev_key_button.setToolTip("Classer un mail fictif avec Jev pour vérifier la clé.")
+    jev_key_status = QLabel()
+    jev_key_status.setWordWrap(True)
+    jev_test_group = QWidget()
+    jev_test_layout = QVBoxLayout(jev_test_group)
+    jev_test_layout.setContentsMargins(0, 0, 0, 0)
+    jev_test_layout.addWidget(test_jev_key_button)
+    jev_test_layout.addWidget(jev_key_status)
+    ollama_test_widget = QWidget()
+    ollama_test_layout = QVBoxLayout(ollama_test_widget)
+    ollama_test_layout.setContentsMargins(0, 0, 0, 0)
+    test_ollama_button = QPushButton("Tester IA locale")
+    test_ollama_button.setToolTip("Classer un mail fictif pour vérifier Ollama et le modèle.")
+    ollama_test_layout.addWidget(test_ollama_button)
+    ollama_status = QLabel("Connexion locale à tester.")
+    ollama_status.setWordWrap(True)
+    ollama_test_layout.addWidget(ollama_status)
+    for widget in (openai_test_group, jev_test_group, ollama_test_widget):
+        settings_decision_layout.addWidget(widget)
+    settings_decision_layout.addStretch(1)
+    save_settings_button = BlueprintButton(UI_TEXT["save_settings"])
+    settings_decision_layout.addWidget(save_settings_button)
+    settings_container_layout.addWidget(settings_sections_pane)
+    settings_container_layout.addWidget(settings_scroll_area, 1)
+    settings_container_layout.addWidget(settings_decision)
+    pages.addWidget(settings_container)
+
+    # ── Inspector of the table view, and the activity log under every screen. ──
+    preview = QFrame()
+    preview.setProperty("pane", "detail")
+    preview.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    preview.setMinimumWidth(320)
     preview_layout = QVBoxLayout(preview)
+    preview_layout.setContentsMargins(16, 16, 16, 12)
+    preview_layout.setSpacing(8)
+    preview_layout.addWidget(kicker_label("Comprendre le classement"))
     preview_tabs = QTabWidget()
     project_digest_preview = QTextEdit()
     project_digest_preview.setReadOnly(True)
@@ -984,7 +1774,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     project_digest_preview.setHtml(project_digest_to_html(build_project_digest([])))
     mail_preview = QTextEdit()
     mail_preview.setReadOnly(True)
-    mail_preview.setMinimumWidth(300)
+    mail_preview.setMinimumWidth(280)
     mail_preview.setPlaceholderText(
         "Sélectionnez un mail pour lire son contenu et comprendre le classement proposé.\n\n"
         "Double-cliquez sur une ligne pour corriger et mémoriser votre choix."
@@ -997,33 +1787,35 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     logs.setReadOnly(True)
     logs.setPlaceholderText(UI_TEXT["logs"])
     logs.setVisible(False)
-    logs_panel = QWidget()
+    logs_panel = QFrame()
+    logs_panel.setProperty("pane", "footer")
+    logs_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     logs_layout = QVBoxLayout(logs_panel)
-    logs_layout.setContentsMargins(0, 0, 0, 0)
+    logs_layout.setContentsMargins(12, 2, 20, 4)
     logs_layout.setSpacing(2)
     logs_header = QWidget()
     logs_header_layout = QHBoxLayout(logs_header)
     logs_header_layout.setContentsMargins(0, 0, 0, 0)
     logs_toggle = QToolButton()
     logs_toggle.setAutoRaise(True)
+    logs_toggle.setStyleSheet("QToolButton { border: none; padding: 2px; }")
     logs_toggle.setToolTip("Afficher ou masquer le journal d'activité")
     logs_toggle.setArrowType(Qt.ArrowType.RightArrow)
-    logs_label = QLabel("Journal d'activité")
-    logs_label.setStyleSheet("font-weight: 600;")
+    logs_label = text_label("Journal d'activité", "small")
     logs_header_layout.addWidget(logs_toggle)
     logs_header_layout.addWidget(logs_label)
     logs_header_layout.addStretch(1)
     logs_header_layout.addWidget(scan_status_label, 1)
     logs_layout.addWidget(logs_header)
     logs_layout.addWidget(logs)
-    logs_panel.setMaximumHeight(32)
+    logs_panel.setMaximumHeight(34)
 
     def toggle_logs() -> None:
         logs.setVisible(not logs.isVisible())
         logs_toggle.setArrowType(
             Qt.ArrowType.DownArrow if logs.isVisible() else Qt.ArrowType.RightArrow
         )
-        logs_panel.setMaximumHeight(190 if logs.isVisible() else 32)
+        logs_panel.setMaximumHeight(200 if logs.isVisible() else 34)
 
     logs_toggle.clicked.connect(toggle_logs)
 
@@ -1031,26 +1823,48 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     workspace_splitter.addWidget(preview)
     workspace_splitter.setStretchFactor(0, 5)
     workspace_splitter.setStretchFactor(1, 2)
-    workspace_splitter.setSizes([900, 360])
-    content_splitter.addWidget(workspace_splitter)
+    workspace_splitter.setSizes([900, 380])
+    right_column = QWidget()
+    right_layout = QVBoxLayout(right_column)
+    right_layout.setContentsMargins(0, 0, 0, 0)
+    right_layout.setSpacing(0)
+    right_layout.addWidget(top_bar)
+    right_layout.addWidget(workspace_splitter, 1)
+    right_layout.addWidget(logs_panel)
+    content_splitter.addWidget(right_column)
     content_splitter.setStretchFactor(0, 0)
     content_splitter.setStretchFactor(1, 1)
-    content_splitter.setSizes([150, 1250])
     layout.addWidget(content_splitter, 1)
-    layout.addWidget(logs_panel)
+
+    def update_inspector_visibility(*_args: Any) -> None:
+        preview.setVisible(
+            navigation.currentRow() == 0
+            and mail_views.currentIndex() == 1
+            and inspector_action.isChecked()
+        )
+
+    def set_mail_view(mode: object) -> None:
+        table_mode = mode == "table"
+        (table_toggle_host if table_mode else queue_toggle_host).addWidget(mail_view_toggle)
+        mail_view_toggle.set_value("table" if table_mode else "queue")
+        mail_views.setCurrentIndex(1 if table_mode else 0)
+        update_inspector_visibility()
+
     navigation.currentRowChanged.connect(pages.setCurrentIndex)
-    navigation.currentRowChanged.connect(
-        lambda index: preview.setVisible(index < 2 and inspector_action.isChecked())
-    )
-    inspector_action.toggled.connect(
-        lambda checked: preview.setVisible(checked and navigation.currentRow() < 2)
-    )
+    navigation.currentRowChanged.connect(update_inspector_visibility)
+    inspector_action.toggled.connect(update_inspector_visibility)
+    mail_view_toggle.changed.connect(set_mail_view)
+    set_mail_view("queue")
+
     def show_detail_columns(checked: bool) -> None:
-        for column in (0, 1, 2, TYPE_COLUMN, INTERLOCUTOR_COLUMN, 8):
-            table.setColumnHidden(column, not checked)
+        for column_index in (0, 1, 2, TYPE_COLUMN, INTERLOCUTOR_COLUMN, 8):
+            table.setColumnHidden(column_index, not checked)
 
     detail_columns_action.toggled.connect(show_detail_columns)
     empty_settings_button.clicked.connect(lambda: navigation.setCurrentRow(SETTINGS_PAGE))
+    queue_empty_settings_button.clicked.connect(
+        lambda: navigation.setCurrentRow(SETTINGS_PAGE)
+    )
     window.setCentralWidget(central)
     watch_timer = QTimer(window)
     watch_timer.setInterval(WATCH_INTERVAL_MS)
@@ -1103,11 +1917,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     def set_scan_status(message: str, *, success: bool | None = None) -> None:
         if success is True:
-            color = "#166534"
+            color = COLORS["success"]
         elif success is False:
-            color = "#9f1239"
+            color = COLORS["danger"]
         else:
-            color = "#475569"
+            color = COLORS["muted"]
         scan_status_label.setText(message)
         scan_status_label.setStyleSheet(f"QLabel {{ color: {color}; }}")
 
@@ -1153,15 +1967,110 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     def update_jev_key_status(*, valid: bool | None = None) -> None:
         set_jev_key_status(has_key=has_jev_api_key(), valid=valid)
 
+    settings_section_infos = (
+        (
+            "Moteur IA",
+            "Enregistrez pour appliquer les choix IA. Une panne d'un moteur ne bascule "
+            "jamais vers un autre.",
+        ),
+        ("Confidentialité", "Ce qui est envoyé au moteur IA pour classer un mail."),
+        ("Seuils", "La confiance minimale pour archiver un mail sans vérification."),
+        ("Dossiers", "Le dossier local sera utilisé au prochain scan."),
+        ("Surveillance", "Les rappels de la file de vérification."),
+        ("Mises à jour", "Recherche et installation des nouvelles versions de MailFlow."),
+    )
+    settings_section_subtitles: list[Any] = []
+    for section_title, _section_hint in settings_section_infos:
+        section_item = QListWidgetItem()
+        section_widget = QWidget()
+        section_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        section_widget_layout = QVBoxLayout(section_widget)
+        section_widget_layout.setContentsMargins(16, 11, 16, 11)
+        section_widget_layout.setSpacing(1)
+        section_title_label = QLabel(section_title)
+        section_title_label.setStyleSheet("QLabel { font-weight: 600; }")
+        section_subtitle_label = text_label("", "small")
+        section_widget_layout.addWidget(section_title_label)
+        section_widget_layout.addWidget(section_subtitle_label)
+        section_item.setSizeHint(QSize(0, section_widget.sizeHint().height()))
+        settings_sections_list.addItem(section_item)
+        settings_sections_list.setItemWidget(section_item, section_widget)
+        settings_section_subtitles.append(section_subtitle_label)
+
+    def settings_section_subtitle(index: int) -> str:
+        if index == 0:
+            label = engine_label(str(ai_provider_combo.currentData()))
+            if ai_mode_combo.currentData() == AiMode.DISABLED.value:
+                return f"{label} · IA désactivée"
+            return "Jev (TypeSafe)" if label == "Jev" else label
+        if index == 1:
+            return (
+                "Corps du mail inclus"
+                if ai_include_body_checkbox.isChecked()
+                else "Sujet et métadonnées seulement"
+            )
+        if index == 2:
+            return f"Vérification {threshold_slider.value()} %"
+        if index == 3:
+            root = projects_root_input.text().strip()
+            return root if len(root) <= 38 else f"…{root[-37:]}"
+        if index == 4:
+            times = review_reminder_times_input.text().strip()
+            return f"Rappels {times}" if times else "Aucun rappel"
+        return f"Version {__version__}"
+
+    def refresh_settings_subtitles(*_args: Any) -> None:
+        for index, subtitle_label in enumerate(settings_section_subtitles):
+            subtitle_label.setText(settings_section_subtitle(index))
+        threshold_value_label.setText(f"{threshold_slider.value()} %")
+
+    def show_settings_section(index: int) -> None:
+        if not 0 <= index < len(settings_section_infos):
+            return
+        settings_sections_stack.setCurrentIndex(index)
+        title, hint = settings_section_infos[index]
+        settings_heading.setText(title)
+        settings_hint.setText(hint)
+
+    def sync_engine_choices(*_args: Any) -> None:
+        provider = str(ai_provider_combo.currentData())
+        for provider_key, (card, card_kicker_label, card_kicker) in provider_cards.items():
+            selected = provider_key == provider
+            card.setChecked(selected)
+            set_kicker_text(card_kicker_label, "Sélectionné" if selected else card_kicker)
+        ai_mode_choice.set_value(str(ai_mode_combo.currentData()))
+        refresh_settings_subtitles()
+
+    for provider_key, (card, _card_kicker_label, _card_kicker) in provider_cards.items():
+        card.clicked.connect(
+            lambda _checked=False, key=provider_key: set_combo_value_by_data(
+                ai_provider_combo, key
+            )
+        )
+    ai_mode_choice.changed.connect(
+        lambda value: set_combo_value_by_data(ai_mode_combo, str(value))
+    )
+    ai_mode_combo.currentIndexChanged.connect(sync_engine_choices)
+    threshold_slider.valueChanged.connect(refresh_settings_subtitles)
+    ai_include_body_checkbox.toggled.connect(refresh_settings_subtitles)
+    projects_root_input.textChanged.connect(refresh_settings_subtitles)
+    review_reminder_times_input.textChanged.connect(refresh_settings_subtitles)
+    settings_sections_list.currentRowChanged.connect(show_settings_section)
+    settings_sections_list.setCurrentRow(0)
+
     def update_ai_provider_fields() -> None:
         provider = str(ai_provider_combo.currentData())
         widgets_by_provider: dict[str, tuple[Any, ...]] = {
-            "openai": (ai_model_label, ai_model_input, openai_key_label, key_fields),
+            "openai": (
+                ai_model_label, ai_model_input, openai_key_label, key_fields, openai_test_group,
+            ),
             "ollama": (
                 ollama_model_label, ollama_models_widget, ollama_url_label,
                 ollama_address_widget, ollama_test_widget,
             ),
-            "jev": (jev_model_label, jev_model_input, jev_key_label, jev_key_fields),
+            "jev": (
+                jev_model_label, jev_model_input, jev_key_label, jev_key_fields, jev_test_group,
+            ),
         }
         for widget_provider, widgets in widgets_by_provider.items():
             for widget in widgets:
@@ -1172,6 +2081,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             update_openai_key_status()
         elif provider == "jev":
             update_jev_key_status()
+        sync_engine_choices()
 
     update_ai_provider_fields()
 
@@ -1281,6 +2191,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             ready_selected.can_archive and not operation_in_progress
         )
         archive_all_action.setEnabled(ready_count > 0 and not operation_in_progress)
+        for side_archive_button in (queue_archive_button, tree_archive_button):
+            side_archive_button.setText(archive_button_text(ready_count))
+            side_archive_button.setEnabled(ready_count > 0 and not operation_in_progress)
         editable_count = sum(
             active_controller.preview_rows[index].action != PreviewAction.ARCHIVED
             for index in selected
@@ -1423,13 +2336,13 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                     if column_index == 0:
                         item.setData(Qt.ItemDataRole.UserRole, row.mail.entry_id)
                     if should_highlight_cell(row, column_index):
-                        item.setBackground(QColor("#fff3d6"))
+                        item.setBackground(QColor(COLORS["warning_bg"]))
                     if column_index == 9:
                         foreground, background = {
-                            PreviewAction.ARCHIVE: ("#1c6546", "#e8f4ed"),
-                            PreviewAction.REVIEW: ("#865500", "#fff3d6"),
-                            PreviewAction.IGNORE: ("#596779", "#edf1f5"),
-                            PreviewAction.ARCHIVED: ("#245c8a", "#eaf1fa"),
+                            PreviewAction.ARCHIVE: (COLORS["accent_800"], COLORS["accent_100"]),
+                            PreviewAction.REVIEW: (COLORS["warning"], COLORS["warning_bg"]),
+                            PreviewAction.IGNORE: (COLORS["neutral_800"], COLORS["neutral_100"]),
+                            PreviewAction.ARCHIVED: (COLORS["accent_700"], COLORS["bg"]),
                         }[row.action]
                         item.setForeground(QColor(foreground))
                         item.setBackground(QColor(background))
@@ -1446,7 +2359,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 elif value:
                     combo.setCurrentText(value)
                 if should_highlight_cell(row, column_index):
-                    combo.setStyleSheet("QComboBox { background-color: #fff3d6; }")
+                    combo.setStyleSheet(
+                        f"QComboBox {{ background-color: {COLORS['warning_bg']}; }}"
+                    )
                 combo.currentTextChanged.connect(
                     lambda _text, row=row_index: open_manual_dialog(row)
                 )
@@ -1500,6 +2415,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         refresh_project_digest()
         sync_review_queue_from_preview()
         update_mail_preview(table.currentRow())
+        refresh_review_queue(preferred_entry_id)
 
     def refresh_project_digest() -> None:
         project_digest_preview.setHtml(
@@ -1507,14 +2423,44 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         )
 
     def refresh_folder_tree() -> None:
-        folder_tree.clear()
-        for node in active_controller.folder_tree():
-            folder_tree.addTopLevelItem(folder_tree_item(node))
-        folder_tree.expandAll()
+        nonlocal preferred_folder_path
+        selected_path = preferred_folder_path or selected_folder_path()
+        preferred_folder_path = None
+        duplicates = {hint.source for hint in current_duplicates()}
+        folder_tree.blockSignals(True)
+        try:
+            folder_tree.clear()
+            for node in active_controller.folder_tree():
+                folder_tree.addTopLevelItem(folder_tree_item(node))
+            folder_tree.expandAll()
+            for item in tree_items():
+                path = str(item.data(0, Qt.ItemDataRole.UserRole))
+                tag_text = "doublon" if path in duplicates else folder_role_tag(path)
+                if tag_text:
+                    tag_holder = QWidget()
+                    tag_holder_layout = QHBoxLayout(tag_holder)
+                    tag_holder_layout.setContentsMargins(0, 0, 6, 0)
+                    tag_holder_layout.addWidget(
+                        tag_label(tag_text, "outline" if path in duplicates else "neutral")
+                    )
+                    folder_tree.setItemWidget(item, 1, tag_holder)
+                if path == selected_path:
+                    folder_tree.setCurrentItem(item)
+        finally:
+            folder_tree.blockSignals(False)
+        tree_hint.setText(tree_header_text(active_controller.preview_rows))
+        update_folder_panels()
 
     def folder_tree_item(node: Any) -> Any:
-        item = QTreeWidgetItem([str(node.name), str(node.mail_count)])
+        item = QTreeWidgetItem([str(node.name), "", str(node.mail_count)])
         item.setData(0, Qt.ItemDataRole.UserRole, str(node.relative_folder))
+        item.setIcon(0, folder_icon)
+        item.setForeground(2, QColor(COLORS["muted"]))
+        item.setTextAlignment(2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        if node.children:
+            font = item.font(0)
+            font.setWeight(QFont.Weight.DemiBold)
+            item.setFont(0, font)
         for child in node.children:
             item.addChild(folder_tree_item(child))
         return item
@@ -1726,6 +2672,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             directory_status_label.setText(f"Annuaire indisponible: {exc}")
             return
         suggestions = current_role_suggestions()
+        directory_entries_cache[:] = entries
+        directory_suggestions_cache.clear()
+        directory_suggestions_cache.update(suggestions)
         directory_table.clearContents()
         for row_index in range(directory_table.rowCount()):
             directory_table.removeCellWidget(row_index, DIRECTORY_ROLE_COLUMN)
@@ -1791,6 +2740,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         directory_status_label.setText(
             f"{len(entries)} entreprise(s) dans l'annuaire global."
         )
+        refresh_directory_list()
 
     def role_suggestion_cell(organization_id: int, name: str, suggestion: Any) -> Any:
         cell = QWidget()
@@ -1959,6 +2909,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         return combo
 
     def selected_directory_organization() -> tuple[int, str] | None:
+        current_entry = directory_entry(directory_current_id)
+        if current_entry is not None:
+            return int(current_entry.organization_id), str(current_entry.name)
         selection_model = directory_table.selectionModel()
         selected_rows = (
             selection_model.selectedRows()
@@ -2133,31 +3086,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             set_scan_status("Ce mail est déjà archivé. Son classement est conservé.")
             return
         update = ask_manual_classification(row_index)
-        if update is None:
-            refresh_table(preferred_row_index=row_index)
-            return
-        try:
-            updated = active_controller.apply_manual_update(row_index, update)
-            refresh_table(preferred_row_index=row_index)
-            append_log(
-                "Classement manuel enregistre pour "
-                f"{updated.mail.project_number}: "
-                f"{updated.decision.mail_type.value} -> "
-                f"{updated.decision.target_relative_folder}."
-            )
-            role_change = getattr(active_controller, "last_directory_role_change", None)
-            if role_change is not None:
-                refresh_directory_table()
-                message = (
-                    f"Annuaire : {role_change.organization_name} enregistre comme "
-                    f"{role_change.role.value}. {role_change.updated_row_count} autre(s) "
-                    "mail(s) de cette entreprise mis a jour."
-                )
-                append_log(message)
-                set_scan_status(message, success=True)
-        except Exception as exc:
-            refresh_table(preferred_row_index=row_index)
-            append_log(f"Erreur classement manuel: {exc}")
+        if update is not None:
+            commit_manual_update(row_index, update)
+        refresh_table(preferred_row_index=row_index)
 
     def open_bulk_manual_dialog(row_indexes: Sequence[int]) -> None:
         if refreshing_table or operation_in_progress:
@@ -2172,29 +3103,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 open_manual_dialog(editable[0])
             return
         update = ask_manual_classification(editable[0], selection_count=len(editable))
-        if update is None:
-            refresh_table(preferred_row_index=editable[0])
-            return
-        try:
-            result = active_controller.apply_manual_updates(editable, update)
-        except Exception as exc:
-            refresh_table(preferred_row_index=editable[0])
-            append_log(f"Erreur classement groupe: {exc}")
-            return
+        if update is not None:
+            commit_bulk_update(editable, update)
         refresh_table(preferred_row_index=editable[0])
-        message = f"Classement manuel applique a {result.updated_count} mail(s)."
-        if result.skipped_archived_count:
-            message += f" {result.skipped_archived_count} mail(s) archive(s) inchange(s)."
-        append_log(message)
-        for change in result.role_changes:
-            append_log(
-                f"Annuaire : {change.organization_name} enregistre comme {change.role.value}."
-            )
-        for error in result.errors:
-            append_log(f"Erreur classement manuel: {error}")
-        if result.role_changes:
-            refresh_directory_table()
-        set_scan_status(message, success=not result.errors)
 
     def ask_manual_classification(
         row_index: int,
@@ -2374,6 +3285,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             "privacy_mask_phone_numbers": privacy_phone_checkbox.isChecked(),
             "review_reminder_times": reminder_times,
             "projectflow_executable": projectflow_input.text().strip().strip('"'),
+            "decision_confidence_threshold": threshold_slider.value() / 100,
         }
         validated = type(settings).model_validate(settings.model_dump() | values)
         for field in values:
@@ -2486,7 +3398,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         )
 
     def set_ollama_status(message: str, *, success: bool | None = None) -> None:
-        color = "#166534" if success is True else "#9f1239" if success is False else "#334155"
+        color = (
+            COLORS["success"] if success is True
+            else COLORS["danger"] if success is False
+            else COLORS["muted"]
+        )
         ollama_status.setText(message)
         ollama_status.setStyleSheet(f"QLabel {{ color: {color}; }}")
 
@@ -2536,11 +3452,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     def set_update_status(message: str, *, success: bool | None = None) -> None:
         if success is True:
-            color = "#166534"
+            color = COLORS["success"]
         elif success is False:
-            color = "#9f1239"
+            color = COLORS["danger"]
         else:
-            color = "#334155"
+            color = COLORS["muted"]
         update_status.setText(message)
         update_status.setStyleSheet(f"QLabel {{ color: {color}; }}")
 
@@ -3080,6 +3996,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 row, wanted is not None and statuses.get(entry_id) != wanted
             )
         update_mailbox_actions()
+        update_mailbox_panels()
 
     def refresh_mailbox_table() -> None:
         analysis = getattr(active_controller, "mailbox_analysis", None)
@@ -3099,7 +4016,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                     if text:
                         item.setToolTip(text)
                     if not selectable:
-                        item.setForeground(QColor("#94a3b8"))
+                        item.setForeground(QColor(COLORS["disabled"]))
                     mailbox_table.setItem(row, column, item)
                 check_item = mailbox_table.item(row, CHECK_COLUMN)
                 if selectable and check_item is not None:
@@ -3111,6 +4028,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                     )
         finally:
             mailbox_table.blockSignals(False)
+        mailbox_counts_label.setText(mailbox_counts_text(analysis, days=mailbox_analysis_days))
         apply_mailbox_filter()
 
     def set_visible_mailbox_checks(checked: bool) -> None:
@@ -3390,6 +4308,726 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         except Exception as exc:
             append_log(f"Erreur archivage global: {exc}")
 
+    # ── Review queue (1c) and group validation (2e) ──
+    refreshing_queue = False
+    bulk_selection_key: tuple[str, ...] = ()
+
+    def elided(text: str, width: int, label: Any) -> str:
+        return str(label.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, width))
+
+    def build_queue_item_widget(row: PreviewRow) -> Any:
+        view = queue_item_view(row)
+        widget = QWidget()
+        widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        item_layout = QVBoxLayout(widget)
+        item_layout.setContentsMargins(14, 10, 14, 10)
+        item_layout.setSpacing(3)
+        correspondent = text_label("", "small")
+        correspondent.setText(elided(view.correspondent, 200, correspondent))
+        date_label = text_label(view.date_label, "small")
+        meta_row = QHBoxLayout()
+        meta_row.setSpacing(8)
+        meta_row.addWidget(correspondent)
+        meta_row.addStretch(1)
+        meta_row.addWidget(date_label)
+        item_layout.addLayout(meta_row)
+        subject = QLabel()
+        subject.setStyleSheet("QLabel { font-weight: 500; }")
+        subject.setText(elided(view.subject, 290, subject))
+        subject.setToolTip(view.subject)
+        item_layout.addWidget(subject)
+        tag_row = QHBoxLayout()
+        tag_row.addWidget(tag_label(view.tag_text, view.tag_kind))
+        tag_row.addStretch(1)
+        item_layout.addLayout(tag_row)
+        return widget
+
+    def fit_table_height(target: Any, row_count: int, *, max_rows: int = 10) -> None:
+        """Size a framed table to its rows, so the frame hugs them like in the mockups."""
+        header_height = 0 if target.horizontalHeader().isHidden() else 34
+        rows_height = target.verticalHeader().defaultSectionSize() * min(row_count, max_rows)
+        target.setFixedHeight(header_height + rows_height + 4)
+
+    def selected_queue_indexes() -> list[int]:
+        return sorted(queue_list.row(item) for item in queue_list.selectedItems())
+
+    def current_queue_index() -> int:
+        selected = selected_queue_indexes()
+        if len(selected) == 1:
+            return selected[0]
+        return -1 if selected else int(queue_list.currentRow())
+
+    def refresh_review_queue(preferred_entry_id: str | None = None) -> None:
+        nonlocal refreshing_queue
+        rows = active_controller.preview_rows
+        selected_ids = {
+            str(item.data(Qt.ItemDataRole.UserRole)) for item in queue_list.selectedItems()
+        }
+        current_item = queue_list.currentItem()
+        current_id = preferred_entry_id or (
+            str(current_item.data(Qt.ItemDataRole.UserRole)) if current_item else None
+        )
+        if preferred_entry_id is not None:
+            selected_ids = {preferred_entry_id}
+        scroll = queue_list.verticalScrollBar().value()
+        refreshing_queue = True
+        queue_list.blockSignals(True)
+        try:
+            queue_list.clear()
+            for row in rows:
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, row.mail.entry_id)
+                widget = build_queue_item_widget(row)
+                item.setSizeHint(QSize(0, widget.sizeHint().height()))
+                queue_list.addItem(item)
+                queue_list.setItemWidget(item, widget)
+            index_by_id = {row.mail.entry_id: index for index, row in enumerate(rows)}
+            restored = [
+                index_by_id[entry_id] for entry_id in selected_ids if entry_id in index_by_id
+            ]
+            target = index_by_id.get(current_id) if current_id is not None else None
+            if target is None:
+                target = restored[0] if restored else first_queue_index(rows)
+            if target is not None:
+                queue_list.setCurrentRow(target, QItemSelectionModel.SelectionFlag.NoUpdate)
+            for index in restored or ([] if target is None else [target]):
+                queue_list.item(index).setSelected(True)
+            queue_list.verticalScrollBar().setValue(scroll)
+            if preferred_entry_id is not None and target is not None:
+                queue_list.scrollToItem(queue_list.item(target))
+        finally:
+            queue_list.blockSignals(False)
+            refreshing_queue = False
+        progress = queue_progress(rows)
+        queue_progress_bar.set_segments([
+            (progress.treated_count, COLORS["accent"]),
+            (progress.review_count, COLORS["accent_900"]),
+        ])
+        update_queue_panels()
+
+    def current_destination() -> str | None:
+        index = decision_destination_combo.currentIndex()
+        return DESTINATION_OPTIONS[index] if 0 <= index < len(DESTINATION_OPTIONS) else None
+
+    def set_decision_destination(destination: str | None) -> None:
+        decision_destination_combo.blockSignals(True)
+        decision_destination_combo.setCurrentIndex(
+            DESTINATION_OPTIONS.index(destination) if destination in DESTINATION_OPTIONS else -1
+        )
+        decision_destination_combo.blockSignals(False)
+
+    def update_queue_panels() -> None:
+        nonlocal bulk_selection_key
+        if refreshing_queue:
+            return
+        rows = active_controller.preview_rows
+        queue_header_info.setText(queue_header_text(rows))
+        selected = selected_queue_indexes()
+        if len(selected) > 1:
+            show_queue_bulk(selected)
+            return
+        bulk_selection_key = ()
+        index = current_queue_index()
+        if not 0 <= index < len(rows):
+            if rows:
+                queue_empty_title.setText("Sélectionnez un mail dans la file")
+                queue_empty_body.setText(
+                    "Ctrl ou Maj + clic pour sélectionner plusieurs mails et leur appliquer "
+                    "le même classement."
+                )
+            else:
+                queue_empty_title.setText("Commencez par une analyse Outlook")
+                queue_empty_body.setText(
+                    "Choisissez votre compte et votre dossier source, puis cliquez sur "
+                    "Scanner Outlook. Les mails à vérifier apparaîtront ici, un à la fois."
+                )
+            queue_empty_settings_button.setVisible(not rows)
+            queue_detail_stack.setCurrentWidget(queue_empty)
+            queue_decision_stack.setCurrentWidget(decision_empty)
+            return
+        show_queue_mail(index)
+
+    def show_queue_mail(index: int) -> None:
+        from mailflow.ui.mail_preview import (
+            classification_highlight_terms,
+            highlight_terms_as_html,
+        )
+
+        rows = active_controller.preview_rows
+        row = rows[index]
+        view = queue_item_view(row)
+        queue_detail_stack.setCurrentWidget(queue_single)
+        queue_decision_stack.setCurrentWidget(decision_single)
+        set_tag(queue_action_tag, view.tag_text, view.tag_kind)
+        queue_meta_label.setText(mail_meta_text(row))
+        queue_subject_label.setText(view.subject)
+        queue_sender_label.setText(sender_html(row))
+        queue_attachments_label.setText(attachments_text(row))
+        body = highlight_terms_as_html(
+            row.mail.body_excerpt or "Aucun extrait disponible.",
+            classification_highlight_terms(row),
+        )
+        queue_body.setHtml(f"<div style='line-height:170%;'>{body}</div>")
+        queue_previous_button.setEnabled(index > 0)
+        queue_next_button.setEnabled(index < len(rows) - 1)
+        decision = decision_view(row, settings.ai_provider)
+        threshold = settings.decision_confidence_threshold
+        set_kicker_text(decision_kicker, decision.kicker)
+        decision_figure.setText(percent_html(decision.confidence))
+        decision_bar.set_values(decision.confidence, threshold)
+        decision_threshold_label.setText(f"Seuil de vérification : {threshold:.0%}")
+        decision_text.setText(decision_text_html(decision))
+        set_decision_destination(destination_category(row))
+        decision_role.set_value(role_choice(row))
+        decision_target_label.setText(
+            f"Dossier actuel : {row.decision.target_relative_folder}"
+        )
+        editable = row.action != PreviewAction.ARCHIVED
+        decision_destination_combo.setEnabled(editable)
+        decision_role.setEnabled(editable)
+        update_decision_validity()
+
+    def update_decision_validity() -> None:
+        rows = active_controller.preview_rows
+        index = current_queue_index()
+        if not 0 <= index < len(rows):
+            return
+        if rows[index].action == PreviewAction.ARCHIVED:
+            problem: str | None = "Ce mail est déjà archivé. Son classement est conservé."
+        else:
+            problem = validation_problem(current_destination(), cast(Any, decision_role.value()))
+        decision_warning.setText(problem or "")
+        decision_warning.setVisible(problem is not None)
+        decision_validate_button.setEnabled(problem is None and not operation_in_progress)
+
+    def on_decision_role_changed(role: object) -> None:
+        set_decision_destination(destination_for_role(current_destination(), cast(Any, role)))
+        update_decision_validity()
+
+    def choose_queue_role(role: InterlocutorType) -> None:
+        if len(selected_queue_indexes()) > 1:
+            if bulk_role.isEnabled():
+                bulk_role.set_value(role)
+                on_bulk_role_changed(role)
+            return
+        if decision_role.isEnabled():
+            decision_role.set_value(role)
+            on_decision_role_changed(role)
+
+    def commit_manual_update(row_index: int, update: ManualClassificationUpdate) -> bool:
+        try:
+            updated = active_controller.apply_manual_update(row_index, update)
+        except Exception as exc:
+            append_log(f"Erreur classement manuel: {exc}")
+            return False
+        append_log(
+            "Classement manuel enregistre pour "
+            f"{updated.mail.project_number}: "
+            f"{updated.decision.mail_type.value} -> "
+            f"{updated.decision.target_relative_folder}."
+        )
+        role_change = getattr(active_controller, "last_directory_role_change", None)
+        if role_change is not None:
+            refresh_directory_table()
+            message = (
+                f"Annuaire : {role_change.organization_name} enregistre comme "
+                f"{role_change.role.value}. {role_change.updated_row_count} autre(s) "
+                "mail(s) de cette entreprise mis a jour."
+            )
+            append_log(message)
+            set_scan_status(message, success=True)
+        return True
+
+    def commit_bulk_update(row_indexes: Sequence[int], update: ManualClassificationUpdate) -> None:
+        try:
+            result = active_controller.apply_manual_updates(row_indexes, update)
+        except Exception as exc:
+            append_log(f"Erreur classement groupe: {exc}")
+            return
+        message = f"Classement manuel applique a {result.updated_count} mail(s)."
+        if result.skipped_archived_count:
+            message += f" {result.skipped_archived_count} mail(s) archive(s) inchange(s)."
+        append_log(message)
+        for change in result.role_changes:
+            append_log(
+                f"Annuaire : {change.organization_name} enregistre comme {change.role.value}."
+            )
+        for error in result.errors:
+            append_log(f"Erreur classement manuel: {error}")
+        if result.role_changes:
+            refresh_directory_table()
+        set_scan_status(message, success=not result.errors)
+
+    def validate_queue_mail() -> None:
+        if operation_in_progress or refreshing_table:
+            return
+        rows = active_controller.preview_rows
+        index = current_queue_index()
+        if not 0 <= index < len(rows) or rows[index].action == PreviewAction.ARCHIVED:
+            return
+        destination = current_destination()
+        role = cast(Any, decision_role.value())
+        if destination is None or validation_problem(destination, role) is not None:
+            return
+        row = rows[index]
+        update = build_queue_update(destination, role, row.decision.interlocutor)
+        if not commit_manual_update(index, update):
+            refresh_table(preferred_row_index=index)
+            return
+        rows = active_controller.preview_rows
+        new_index = next(
+            (
+                position for position, candidate in enumerate(rows)
+                if candidate.mail.entry_id == row.mail.entry_id
+            ),
+            index,
+        )
+        next_index = next_review_index(rows, new_index)
+        refresh_table(preferred_row_index=new_index if next_index is None else next_index)
+        if next_index is None:
+            set_scan_status("File de vérification terminée : aucun autre mail à vérifier.",
+                            success=True)
+
+    def show_queue_bulk(indexes: Sequence[int]) -> None:
+        nonlocal bulk_selection_key
+        rows = active_controller.preview_rows
+        selection = [rows[index] for index in indexes if 0 <= index < len(rows)]
+        view = bulk_selection_view(selection)
+        queue_detail_stack.setCurrentWidget(queue_bulk)
+        queue_decision_stack.setCurrentWidget(decision_bulk)
+        queue_header_info.setText(f"{len(selection)} mails sélectionnés · {view.company_line}")
+        key = tuple(row.mail.entry_id for row in selection)
+        if key != bulk_selection_key:
+            bulk_selection_key = key
+            editable = [row for row in selection if row.action != PreviewAction.ARCHIVED]
+            categories = {destination_category(row) for row in editable}
+            roles = {role_choice(row) for row in editable}
+            bulk_category.set_value(categories.pop() if len(categories) == 1 else None)
+            bulk_role.set_value(roles.pop() if len(roles) == 1 else None)
+        update_bulk_summary()
+
+    def update_bulk_summary() -> None:
+        rows = active_controller.preview_rows
+        selection = [rows[index] for index in selected_queue_indexes() if index < len(rows)]
+        view = bulk_selection_view(selection)
+        destination = cast(Any, bulk_category.value())
+        role = cast(Any, bulk_role.value())
+        count_text = str(view.editable_count)
+        if view.archived_count:
+            count_text += f" ({view.archived_count} archivé(s) inchangé(s))"
+        queue_bulk_values["count"].setText(count_text)
+        queue_bulk_values["destination"].setText(
+            bulk_destination_text(destination, view.companies)
+        )
+        queue_bulk_values["role"].setText(role_text(role))
+        problem = (
+            "Aucun mail modifiable dans la sélection."
+            if view.editable_count == 0
+            else bulk_validation_problem(destination, role)
+        )
+        bulk_warning.setText(problem or "")
+        bulk_warning.setVisible(problem is not None)
+        bulk_apply_button.setText(
+            "Appliquer à 1 mail" if view.editable_count == 1
+            else f"Appliquer aux {view.editable_count} mails"
+        )
+        bulk_apply_button.setEnabled(problem is None and not operation_in_progress)
+
+    def on_bulk_role_changed(role: object) -> None:
+        bulk_category.set_value(
+            destination_for_role(cast(Any, bulk_category.value()), cast(Any, role))
+        )
+        update_bulk_summary()
+
+    def apply_bulk_classification() -> None:
+        if operation_in_progress or refreshing_table:
+            return
+        rows = active_controller.preview_rows
+        editable = [
+            index for index in selected_queue_indexes()
+            if 0 <= index < len(rows) and rows[index].action != PreviewAction.ARCHIVED
+        ]
+        destination = cast(Any, bulk_category.value())
+        role = cast(Any, bulk_role.value())
+        if not editable or bulk_validation_problem(destination, role) is not None:
+            return
+        commit_bulk_update(editable, build_queue_update(destination, role, role))
+        refresh_table(preferred_row_index=editable[0])
+
+    def cancel_bulk_selection() -> None:
+        index = queue_list.currentRow()
+        queue_list.clearSelection()
+        if index >= 0:
+            queue_list.setCurrentRow(index)
+
+    def move_in_queue(step: int) -> None:
+        index = current_queue_index()
+        target = index + step
+        if 0 <= target < queue_list.count():
+            queue_list.setCurrentRow(target)
+
+    def queue_validate_shortcut() -> None:
+        if len(selected_queue_indexes()) > 1:
+            if bulk_apply_button.isEnabled():
+                bulk_apply_button.click()
+        elif decision_validate_button.isEnabled():
+            decision_validate_button.click()
+
+    # ── Arborescence (2a) ──
+    ignored_duplicates: set[str] = set()
+    folder_icon = QIcon(icon_path("folder-tree"))
+
+    def current_duplicates() -> list[DuplicateHint]:
+        return find_duplicate_folders(active_controller.preview_rows, ignored=ignored_duplicates)
+
+    def duplicate_for(path: str | None) -> DuplicateHint | None:
+        return next((hint for hint in current_duplicates() if hint.source == path), None)
+
+    def tree_items() -> list[Any]:
+        items: list[Any] = []
+        pending: list[Any] = [
+            folder_tree.topLevelItem(index) for index in range(folder_tree.topLevelItemCount())
+        ]
+        while pending:
+            item = pending.pop(0)
+            items.append(item)
+            pending.extend(item.child(index) for index in range(item.childCount()))
+        return items
+
+    def update_folder_panels() -> None:
+        path = selected_folder_path()
+        rows = active_controller.preview_rows
+        hint = duplicate_for(path)
+        has_folder = path is not None
+        for button in (rename_folder_button, merge_folder_button):
+            button.setEnabled(has_folder)
+        tree_merge_duplicate_button.setVisible(hint is not None)
+        tree_ignore_duplicate_button.setVisible(hint is not None)
+        tree_target_field.setVisible(hint is not None)
+        if path is None:
+            duplicates = current_duplicates()
+            tree_breadcrumb.setText("")
+            tree_folder_title.setText("Aucun dossier sélectionné")
+            set_tag(tree_duplicate_tag, "", "outline")
+            tree_mails_table.setRowCount(0)
+            tree_mails_frame.setVisible(False)
+            tree_folder_note.setText("Sélectionnez un dossier à gauche pour voir ses mails.")
+            set_kicker_text(tree_kicker, "Dossiers")
+            tree_decision_title.setText(
+                f"{len(duplicates)} doublon(s) probable(s)" if duplicates else "Aucun doublon"
+            )
+            tree_decision_text.setText(
+                "Les dossiers marqués « doublon » portent presque le même nom qu'un autre "
+                "dossier de la même branche. Fusionnez-les avant l'archivage."
+                if duplicates
+                else "Renommez ou fusionnez un dossier avant l'archivage : rien n'est "
+                "créé sur le disque avant."
+            )
+            return
+        selection = folder_rows(rows, path)
+        tree_breadcrumb.setText(breadcrumb_text(path))
+        tree_folder_title.setText(leaf_name(path))
+        set_tag(
+            tree_duplicate_tag,
+            f"doublon probable de « {hint.target_name} »" if hint else "",
+            "outline",
+        )
+        tree_mails_frame.setVisible(bool(selection))
+        tree_mails_table.setRowCount(len(selection))
+        for row_index, row in enumerate(selection):
+            subject_item = QTableWidgetItem(row.mail.subject or "(Sans objet)")
+            subject_item.setToolTip(row.mail.subject)
+            date_item = QTableWidgetItem(f"{row.mail.sent_at:%d.%m.%Y}")
+            date_item.setForeground(QColor(COLORS["muted"]))
+            date_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            tree_mails_table.setItem(row_index, 0, subject_item)
+            tree_mails_table.setItem(row_index, 1, date_item)
+        fit_table_height(tree_mails_table, len(selection))
+        tree_folder_note.setText(duplicate_note(hint) if hint else folder_text(selection))
+        if hint is not None:
+            set_kicker_text(tree_kicker, "Fusion proposée")
+            tree_decision_title.setText(f"{hint.source_name} → {hint.target_name}")
+            tree_decision_text.setText(merge_text(hint))
+            tree_target_input.setText(hint.target_name)
+        else:
+            set_kicker_text(tree_kicker, "Dossier")
+            tree_decision_title.setText(leaf_name(path))
+            tree_decision_text.setText(folder_text(selection))
+
+    def merge_duplicate_and_next() -> None:
+        nonlocal preferred_folder_path
+        if operation_in_progress:
+            return
+        hint = duplicate_for(selected_folder_path())
+        if hint is None:
+            return
+        try:
+            active_controller.merge_preview_folder(hint.source, hint.target)
+        except Exception as exc:
+            append_log(f"Erreur fusion dossier: {exc}")
+            return
+        append_log(f"Dossier fusionne: {hint.source} -> {hint.target}.")
+        remaining = current_duplicates()
+        preferred_folder_path = remaining[0].source if remaining else hint.target
+        refresh_table()
+
+    def ignore_selected_duplicate() -> None:
+        path = selected_folder_path()
+        if path is None:
+            return
+        ignored_duplicates.add(path)
+        refresh_folder_tree()
+
+    # ── Annuaire (2b) ──
+    directory_entries_cache: list[Any] = []
+    directory_suggestions_cache: dict[int, Any] = {}
+    directory_current_id: int | None = None
+    refreshing_directory_list = False
+
+    def directory_entry(organization_id: int | None) -> Any | None:
+        return next(
+            (
+                entry for entry in directory_entries_cache
+                if int(entry.organization_id) == organization_id
+            ),
+            None,
+        )
+
+    def visible_directory_entries() -> list[Any]:
+        without_role = directory_filter.value() == "without_role"
+        query = directory_search_input.text()
+        return [
+            entry for entry in directory_entries_cache
+            if matches_directory_filter(entry, query, without_role_only=without_role)
+        ]
+
+    def build_directory_item_widget(view: Any) -> Any:
+        widget = QWidget()
+        widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        item_layout = QVBoxLayout(widget)
+        item_layout.setContentsMargins(16, 10, 16, 10)
+        item_layout.setSpacing(2)
+        name = QLabel()
+        name.setStyleSheet("QLabel { font-weight: 500; }")
+        name.setText(elided(view.name, 220, name))
+        top_row = QHBoxLayout()
+        top_row.addWidget(name)
+        top_row.addStretch(1)
+        top_row.addWidget(text_label(view.project_text, "small"))
+        item_layout.addLayout(top_row)
+        item_layout.addWidget(text_label(view.domain_text, "small"))
+        if view.suggestion_text:
+            suggestion = QLabel(view.suggestion_text)
+            suggestion.setStyleSheet(
+                f"QLabel {{ color: {COLORS['accent_700']}; font-size: 12px; }}"
+            )
+            item_layout.addWidget(suggestion)
+        return widget
+
+    def refresh_directory_list() -> None:
+        nonlocal refreshing_directory_list
+        visible = visible_directory_entries()
+        scroll = directory_list.verticalScrollBar().value()
+        refreshing_directory_list = True
+        directory_list.blockSignals(True)
+        try:
+            directory_list.clear()
+            for entry in visible:
+                view = directory_item_view(
+                    entry, directory_suggestions_cache.get(int(entry.organization_id))
+                )
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, view.organization_id)
+                widget = build_directory_item_widget(view)
+                item.setSizeHint(QSize(0, widget.sizeHint().height()))
+                directory_list.addItem(item)
+                directory_list.setItemWidget(item, widget)
+                if view.organization_id == directory_current_id:
+                    directory_list.setCurrentItem(item)
+            directory_list.verticalScrollBar().setValue(scroll)
+        finally:
+            directory_list.blockSignals(False)
+            refreshing_directory_list = False
+        directory_list_count.setText(str(len(directory_entries_cache)))
+        directory_filter.set_label(
+            "without_role", f"Sans rôle {without_role_count(directory_entries_cache)}"
+        )
+        update_directory_panels()
+
+    def select_directory_organization(organization_id: int | None) -> None:
+        nonlocal directory_current_id
+        directory_current_id = organization_id
+        update_directory_panels()
+
+    def on_directory_list_row_changed(row: int) -> None:
+        if refreshing_directory_list:
+            return
+        item = directory_list.item(row) if row >= 0 else None
+        if item is not None:
+            select_directory_organization(int(item.data(Qt.ItemDataRole.UserRole)))
+
+    def on_directory_table_selection_changed() -> None:
+        if refreshing_directory_table:
+            return
+        selection_model = directory_table.selectionModel()
+        rows = selection_model.selectedRows() if selection_model is not None else []
+        item = directory_table.item(rows[0].row(), 0) if rows else None
+        if item is not None:
+            select_directory_organization(int(item.data(Qt.ItemDataRole.UserRole)))
+
+    def update_directory_panels() -> None:
+        entry = directory_entry(directory_current_id)
+        if entry is None:
+            set_tag(directory_role_tag, "", "outline")
+            directory_name_label.setText("Aucune entreprise sélectionnée")
+            directory_meta_label.setText(
+                "Sélectionnez une entreprise pour voir ses contacts et son rôle."
+            )
+            directory_contacts_frame.setVisible(False)
+            directory_projects_label.setText("")
+            set_kicker_text(directory_kicker, "Rôle global")
+            directory_figure.setVisible(False)
+            directory_suggestion_label.setText(
+                "Le rôle d'une entreprise fixe le classement de tous ses mails."
+            )
+            directory_role_choice.set_value(None)
+            directory_role_choice.setEnabled(False)
+            directory_validate_button.setEnabled(False)
+            return
+        role = entry_role(entry)
+        set_tag(directory_role_tag, *role_tag(role))
+        contacts = tuple(str(contact) for contact in entry.contacts)
+        directory_name_label.setText(str(entry.name))
+        directory_meta_label.setText(
+            f"{domains_text(tuple(str(domain) for domain in entry.domains))} · "
+            f"{len(contacts)} contact(s)"
+        )
+        directory_contacts_frame.setVisible(bool(contacts))
+        directory_contacts_table.setRowCount(len(contacts))
+        for row_index, contact in enumerate(contacts):
+            name, address = split_contact(contact)
+            directory_contacts_table.setItem(row_index, 0, QTableWidgetItem(name or "—"))
+            address_item = QTableWidgetItem(address)
+            address_item.setForeground(QColor(COLORS["muted"]))
+            directory_contacts_table.setItem(row_index, 1, address_item)
+        fit_table_height(directory_contacts_table, len(contacts))
+        directory_projects_label.setText(
+            f"Présente dans {projects_text(int(getattr(entry, 'project_count', 0)))}."
+        )
+        suggestion = selected_suggestion(directory_suggestions_cache, entry)
+        if suggestion is not None:
+            set_kicker_text(directory_kicker, "Suggestion Jev")
+            directory_figure.setText(percent_html(float(suggestion.probability)))
+            directory_figure.setVisible(True)
+            directory_suggestion_label.setText(suggestion_headline(suggestion))
+        else:
+            set_kicker_text(directory_kicker, "Rôle global")
+            directory_figure.setVisible(False)
+            directory_suggestion_label.setText(
+                f"Rôle enregistré : <b>{role_tag(role)[0].casefold()}</b>."
+                if has_business_role(entry)
+                else "Aucune suggestion pour cette entreprise : choisissez son rôle."
+            )
+        if has_business_role(entry):
+            proposed = role
+        elif suggestion is not None and suggestion.role in BUSINESS_ROLES:
+            proposed = suggestion.role
+        else:
+            proposed = None
+        directory_role_choice.set_value(proposed)
+        directory_role_choice.setEnabled(True)
+        directory_validate_button.setEnabled(proposed is not None and not operation_in_progress)
+
+    def validate_directory_role_and_next() -> None:
+        nonlocal directory_current_id
+        if operation_in_progress:
+            return
+        entry = directory_entry(directory_current_id)
+        role = cast(Any, directory_role_choice.value())
+        if entry is None or role is None:
+            return
+        organization_id = int(entry.organization_id)
+        if role != entry_role(entry):
+            before = mail_states()
+            try:
+                active_controller.set_directory_organization_role(organization_id, role)
+            except Exception as exc:
+                append_log(f"Erreur role global: {exc}")
+                return
+            refresh_table()
+            append_log(f"Role global applique: {role.value} pour {entry.name}.")
+            report_role_update(before)
+        refresh_directory_table()
+        next_id = next_without_role(visible_directory_entries(), organization_id)
+        directory_current_id = organization_id if next_id is None else next_id
+        refresh_directory_list()
+
+    def set_directory_view(mode: object) -> None:
+        table_mode = mode == "table"
+        (
+            directory_toggle_host_table if table_mode else directory_toggle_host_list
+        ).addWidget(directory_view_toggle)
+        if table_mode:
+            directory_table_actions_host.addWidget(directory_global_actions)
+            directory_table_actions_host.addWidget(directory_edit_actions, 1)
+        else:
+            directory_list_footer_layout.addWidget(directory_global_actions)
+            directory_edit_host_list.addWidget(directory_edit_actions)
+        directory_view_toggle.set_value("table" if table_mode else "list")
+        directory_views.setCurrentIndex(1 if table_mode else 0)
+
+    # ── Boîte mail (2d) ──
+    def selected_mailbox_proposal() -> Any | None:
+        analysis = getattr(active_controller, "mailbox_analysis", None)
+        if analysis is None:
+            return None
+        selection_model = mailbox_table.selectionModel()
+        rows = selection_model.selectedRows() if selection_model is not None else []
+        row = rows[0].row() if rows else -1
+        if not 0 <= row < len(mailbox_row_entry_ids) or mailbox_table.isRowHidden(row):
+            return None
+        entry_id = mailbox_row_entry_ids[row]
+        return next(
+            (proposal for proposal in analysis.proposals if proposal.entry_id == entry_id),
+            None,
+        )
+
+    def update_mailbox_panels() -> None:
+        proposal = selected_mailbox_proposal()
+        if proposal is None:
+            mailbox_detail_stack.setCurrentWidget(mailbox_options_view)
+            mailbox_destination_title.setText("Aucun mail sélectionné")
+            mailbox_destination_frame.setVisible(False)
+            mailbox_destination_note.setText(
+                "Sélectionnez un mail analysé pour voir son dossier projet."
+            )
+            return
+        analysis = getattr(active_controller, "mailbox_analysis", None)
+        folders = analysis.project_folders if analysis is not None else {}
+        mailbox_detail_stack.setCurrentWidget(mailbox_mail_view)
+        set_tag(
+            mailbox_detail_tag, STATUS_LABELS[proposal.status], STATUS_TAG_KINDS[proposal.status]
+        )
+        mailbox_detail_subject.setText(proposal.subject or "(sans objet)")
+        mailbox_detail_meta.setText(proposal_meta_text(proposal))
+        mailbox_detail_values["correspondent"].setText(proposal.correspondent or "—")
+        mailbox_detail_values["numbers"].setText(
+            ", ".join(reference.number for reference in proposal.references) or "—"
+        )
+        mailbox_detail_values["found_in"].setText(proposal_found_in(proposal))
+        mailbox_detail_values["note"].setText(proposal.note or "—")
+        destination = mailbox_destination_view(proposal, folders)
+        mailbox_destination_title.setText(destination.title)
+        mailbox_destination_lines.setText("\n".join(destination.lines))
+        mailbox_destination_frame.setVisible(bool(destination.lines))
+        mailbox_destination_note.setText(destination.note)
+
+    def show_mailbox_options() -> None:
+        mailbox_table.clearSelection()
+        mailbox_detail_stack.setCurrentWidget(mailbox_options_view)
+
     scan_button.clicked.connect(on_scan)
     search_input.textChanged.connect(apply_mail_filters)
     status_filter.currentIndexChanged.connect(apply_mail_filters)
@@ -3478,11 +5116,55 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     browse_projects_button.clicked.connect(browse_projects_root)
     account_combo.currentIndexChanged.connect(lambda _index: populate_outlook_root_options())
     table.cellDoubleClicked.connect(lambda row, _column: open_manual_dialog(row))
+    queue_list.itemSelectionChanged.connect(update_queue_panels)
+    queue_list.currentRowChanged.connect(lambda _row: update_queue_panels())
+    queue_list.itemDoubleClicked.connect(lambda item: open_manual_dialog(queue_list.row(item)))
+    queue_archive_button.clicked.connect(lambda _checked=False: on_archive_all_except_review())
+    queue_previous_button.clicked.connect(lambda _checked=False: move_in_queue(-1))
+    queue_next_button.clicked.connect(lambda _checked=False: move_in_queue(1))
+    decision_role.changed.connect(on_decision_role_changed)
+    decision_destination_combo.currentIndexChanged.connect(
+        lambda _index: update_decision_validity()
+    )
+    decision_validate_button.clicked.connect(lambda _checked=False: validate_queue_mail())
+    bulk_category.changed.connect(lambda _value: update_bulk_summary())
+    bulk_role.changed.connect(on_bulk_role_changed)
+    bulk_apply_button.clicked.connect(lambda _checked=False: apply_bulk_classification())
+    bulk_cancel_button.clicked.connect(lambda _checked=False: cancel_bulk_selection())
+    folder_tree.currentItemChanged.connect(lambda _current, _previous: update_folder_panels())
+    tree_archive_button.clicked.connect(lambda _checked=False: on_archive_all_except_review())
+    tree_merge_duplicate_button.clicked.connect(
+        lambda _checked=False: merge_duplicate_and_next()
+    )
+    tree_ignore_duplicate_button.clicked.connect(
+        lambda _checked=False: ignore_selected_duplicate()
+    )
+    directory_list.currentRowChanged.connect(on_directory_list_row_changed)
+    directory_table.itemSelectionChanged.connect(on_directory_table_selection_changed)
+    directory_search_input.textChanged.connect(lambda _text: refresh_directory_list())
+    directory_filter.changed.connect(lambda _value: refresh_directory_list())
+    directory_view_toggle.changed.connect(set_directory_view)
+    directory_role_choice.changed.connect(
+        lambda value: directory_validate_button.setEnabled(
+            value is not None and not operation_in_progress
+        )
+    )
+    directory_validate_button.clicked.connect(
+        lambda _checked=False: validate_directory_role_and_next()
+    )
+    mailbox_table.itemSelectionChanged.connect(update_mailbox_panels)
+    mailbox_options_button.clicked.connect(lambda _checked=False: show_mailbox_options())
     table.currentCellChanged.connect(lambda row, _col, _old_row, _old_col: update_mail_preview(row))
     table.itemSelectionChanged.connect(update_preview_from_selection)
+    def focus_mail_search() -> None:
+        # The search belongs to the table view; the queue has no filter of its own.
+        navigation.setCurrentRow(0)
+        set_mail_view("table")
+        search_input.setFocus()
+
     shortcut_actions: list[Any] = []
     for sequence, callback in (
-        ("Ctrl+F", lambda: (navigation.setCurrentRow(0), search_input.setFocus())),
+        ("Ctrl+F", focus_mail_search),
         ("Ctrl+R", on_scan),
         ("Ctrl+Return", on_archive_selection),
         ("Ctrl+,", lambda: navigation.setCurrentRow(SETTINGS_PAGE)),
@@ -3492,6 +5174,18 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         shortcut_action.triggered.connect(callback)
         window.addAction(shortcut_action)
         shortcut_actions.append(shortcut_action)
+    for sequence, callback in (
+        ("C", lambda: choose_queue_role(InterlocutorType.CLIENT)),
+        ("F", lambda: choose_queue_role(InterlocutorType.FOURNISSEUR)),
+        ("Return", queue_validate_shortcut),
+        ("Enter", queue_validate_shortcut),
+    ):
+        queue_shortcut = QAction(queue_view)
+        queue_shortcut.setShortcut(QKeySequence(sequence))
+        queue_shortcut.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        queue_shortcut.triggered.connect(callback)
+        queue_view.addAction(queue_shortcut)
+        shortcut_actions.append(queue_shortcut)
     review_shortcut = QAction(table)
     review_shortcut.setShortcut(QKeySequence("Return"))
     review_shortcut.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
@@ -3499,6 +5193,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     table.addAction(review_shortcut)
     shortcut_actions.append(review_shortcut)
     dynamic_window.mailflow_close_handler = handle_window_close
+    set_directory_view("list")
     populate_account_options()
     refresh_directory_table()
     update_mailbox_jev_option()
@@ -3613,6 +5308,46 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_mailbox_projectflow_button = mailbox_projectflow_button
     dynamic_window.mailflow_projectflow_input = projectflow_input
     dynamic_window.mailflow_projectflow_status = projectflow_status
+    dynamic_window.mailflow_mail_views = mail_views
+    dynamic_window.mailflow_mail_view_toggle = mail_view_toggle
+    dynamic_window.mailflow_set_mail_view = set_mail_view
+    dynamic_window.mailflow_queue_list = queue_list
+    dynamic_window.mailflow_queue_header_info = queue_header_info
+    dynamic_window.mailflow_queue_archive_button = queue_archive_button
+    dynamic_window.mailflow_queue_detail_stack = queue_detail_stack
+    dynamic_window.mailflow_queue_subject_label = queue_subject_label
+    dynamic_window.mailflow_decision_kicker = decision_kicker
+    dynamic_window.mailflow_decision_figure = decision_figure
+    dynamic_window.mailflow_decision_destination_combo = decision_destination_combo
+    dynamic_window.mailflow_decision_role = decision_role
+    dynamic_window.mailflow_decision_warning = decision_warning
+    dynamic_window.mailflow_decision_validate_button = decision_validate_button
+    dynamic_window.mailflow_bulk_category = bulk_category
+    dynamic_window.mailflow_bulk_role = bulk_role
+    dynamic_window.mailflow_bulk_apply_button = bulk_apply_button
+    dynamic_window.mailflow_bulk_values = queue_bulk_values
+    dynamic_window.mailflow_tree_folder_title = tree_folder_title
+    dynamic_window.mailflow_tree_decision_title = tree_decision_title
+    dynamic_window.mailflow_tree_merge_duplicate_button = tree_merge_duplicate_button
+    dynamic_window.mailflow_tree_ignore_duplicate_button = tree_ignore_duplicate_button
+    dynamic_window.mailflow_directory_list = directory_list
+    dynamic_window.mailflow_directory_views = directory_views
+    dynamic_window.mailflow_directory_view_toggle = directory_view_toggle
+    dynamic_window.mailflow_directory_filter = directory_filter
+    dynamic_window.mailflow_directory_search_input = directory_search_input
+    dynamic_window.mailflow_directory_name_label = directory_name_label
+    dynamic_window.mailflow_directory_role_choice = directory_role_choice
+    dynamic_window.mailflow_directory_validate_button = directory_validate_button
+    dynamic_window.mailflow_directory_figure = directory_figure
+    dynamic_window.mailflow_mailbox_detail_stack = mailbox_detail_stack
+    dynamic_window.mailflow_mailbox_destination_title = mailbox_destination_title
+    dynamic_window.mailflow_settings_sections_list = settings_sections_list
+    dynamic_window.mailflow_settings_heading = settings_heading
+    dynamic_window.mailflow_provider_cards = {
+        key: card for key, (card, _kicker, _text) in provider_cards.items()
+    }
+    dynamic_window.mailflow_ai_mode_choice = ai_mode_choice
+    dynamic_window.mailflow_threshold_slider = threshold_slider
     refresh_table()
     return window
 
@@ -3684,21 +5419,16 @@ def openai_key_status_style(
     testing: bool = False,
 ) -> str:
     if testing:
-        color = "#8a5a00"
-        background = "#fff8e6"
+        color, background = COLORS["warning"], COLORS["warning_bg"]
     elif not has_key or valid is False:
-        color = "#9f1239"
-        background = "#fff1f2"
+        color, background = COLORS["danger"], "#f6e8e8"
     elif valid is True:
-        color = "#166534"
-        background = "#ecfdf3"
+        color, background = COLORS["success"], "#e7f0eb"
     else:
-        color = "#334155"
-        background = "#f1f5f9"
+        color, background = COLORS["text"], COLORS["neutral_100"]
     return (
         f"QLabel {{ color: {color}; background: {background}; "
-        "border: 1px solid rgba(15, 23, 42, 0.12); border-radius: 4px; "
-        "padding: 3px 6px; }"
+        f"border: 1px solid {COLORS['rule']}; border-radius: 0; padding: 4px 8px; }}"
     )
 
 
