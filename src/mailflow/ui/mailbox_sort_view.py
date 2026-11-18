@@ -121,7 +121,8 @@ def summarize_mailbox_analysis(analysis: MailboxAnalysis, *, days: int) -> str:
         parts[0] += f" ({copies} copie(s))"
     if counts[SortStatus.SUGGESTED]:
         parts.append(f"{counts[SortStatus.SUGGESTED]} suggestion(s) Jev à vérifier")
-    parts.append(f"{counts[SortStatus.MISSING_FOLDER]} dossier(s) projet absent(s)")
+    # Mails are counted here; the ProjectFlow button counts the distinct folders.
+    parts.append(f"{counts[SortStatus.MISSING_FOLDER]} mail(s) sans dossier projet")
     parts.append(f"{counts[SortStatus.NO_NUMBER]} sans numéro")
     if counts[SortStatus.UNREADABLE]:
         parts.append(f"{counts[SortStatus.UNREADABLE]} illisible(s)")

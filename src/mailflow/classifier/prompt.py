@@ -19,7 +19,9 @@ Tu dois classer chaque e-mail dans exactement une categorie parmi:
 Le role et le nom d'entreprise fournis par l'annuaire dans known_context sont
 prioritaires et ne doivent jamais etre contredits. Pour un mail envoye, le premier
 destinataire externe est l'interlocuteur principal; les collegues Balz Metal en copie
-ne changent jamais ce choix.
+ne changent jamais ce choix. Si known_context.counterparty.source vaut
+internal_forward, le mail est le transfert entre collegues d'un message de cet
+interlocuteur: classe-le d'apres le message transfere, pas d'apres l'expediteur interne.
 
 Regles metier obligatoires:
 - un client est toujours classe en Correspondance;

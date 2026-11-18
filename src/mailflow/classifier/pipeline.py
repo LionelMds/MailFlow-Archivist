@@ -4,20 +4,26 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
+from mailflow.classifier.ai_classifier import AiResponseError
 from mailflow.classifier.decision_engine import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     ArchiveState,
     decide_archive,
+    internal_forward_note,
+    internal_mail_rule,
 )
-from mailflow.classifier.jev_classifier import JevError
-from mailflow.classifier.ollama_classifier import OllamaError
 from mailflow.classifier.routing_context import (
+    INTERNAL_FORWARD_SOURCE,
     ResolvedCounterparty,
     RoutingDirectoryProtocol,
     build_routing_context,
     resolve_counterparty,
 )
-from mailflow.core.correspondence_hierarchy import apply_correspondence_hierarchy
+from mailflow.core.correspondence_hierarchy import (
+    CORRESPONDENCE_FOLDER,
+    apply_correspondence_hierarchy,
+)
+from mailflow.core.domains import INTERNAL_COMPANY_FOLDER
 from mailflow.models import (
     AiMailClassification,
     AiMode,
@@ -51,6 +57,9 @@ class AiClassifierProtocol(Protocol):
 
 PreviewProgressCallback = Callable[[int, int], None]
 
+# Same limit as AiMailClassification.reason.
+MAX_REASON_LENGTH = 200
+
 
 def should_call_ai(*, ai_mode: AiMode) -> bool:
     return ai_mode != AiMode.DISABLED
@@ -62,7 +71,7 @@ class ClassificationPipeline:
         *,
         projects_root: Path,
         archive_state: ArchiveState | None = None,
-        ai_mode: AiMode = AiMode.AMBIGUOUS_ONLY,
+        ai_mode: AiMode = AiMode.ALL,
         ai_classifier: AiClassifierProtocol | None = None,
         decision_confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
         include_body_for_ai: bool = True,
@@ -150,8 +159,16 @@ class ClassificationPipeline:
         # Outlook's category proves that a mail was archived, but doesn't contain
         # its classification. Keep analysis for category-only historic archives.
         resolved = counterparty or resolve_counterparty(mail, self.organization_directory)
-        ai, ai_error, role_estimate = self._classify_with_ai(mail, resolved, history or [])
-        rule = _neutral_rule()
+        ai: AiMailClassification | None = None
+        ai_error: str | None = None
+        role_estimate: RoleEstimate | None = None
+        if resolved.role == InterlocutorType.INTERNE:
+            # Between colleagues nothing is left to decide: no engine call, so the
+            # mail is routed even when the engine is disabled or unreachable.
+            rule = internal_mail_rule()
+        else:
+            ai, ai_error, role_estimate = self._classify_with_ai(mail, resolved, history or [])
+            rule = _neutral_rule()
         decision = decide_archive(
             mail,
             projects_root=self.projects_root,
@@ -163,6 +180,11 @@ class ClassificationPipeline:
         if ai_error and decision.requires_review:
             decision = decision.model_copy(
                 update={"reason": f"{ai_error} {decision.reason}"}
+            )
+        if resolved.source == INTERNAL_FORWARD_SOURCE and resolved.email:
+            note = internal_forward_note(resolved.email)
+            decision = decision.model_copy(
+                update={"reason": f"{decision.reason} {note}".strip()}
             )
         row = PreviewRow(
             mail=mail,
@@ -210,7 +232,8 @@ class ClassificationPipeline:
             # API exception strings can contain request bodies or credentials.
             # Display only locally authored messages; leave the mail in review.
             status_code = getattr(exc, "status_code", None)
-            if isinstance(exc, OllamaError | JevError):
+            if isinstance(exc, AiResponseError):
+                # Written locally by the three engines: precise and safe to display.
                 error = str(exc)
             elif status_code in {401, 403}:
                 error = "Accès OpenAI refusé : vérifiez la clé et l'accès au modèle dans Réglages."
@@ -257,11 +280,18 @@ def apply_routing_guardrails(
         updates["requires_review"] = True
         reason_notes.append("Entreprise non confirmee dans l'annuaire.")
 
+    confidence = ai.confidence
     if role == InterlocutorType.CLIENT:
         updates["organization_role"] = InterlocutorType.CLIENT.value
         if ai.category != RoutingCategory.CORRESPONDANCE.value:
             updates["category"] = RoutingCategory.CORRESPONDANCE.value
             reason_notes.append("Role client: Correspondance imposee.")
+        if counterparty.organization_locked:
+            # The directory alone routes a client: the engine has nothing left to
+            # decide, whichever engine answered (Jev already returns 1 here).
+            confidence = 1.0
+            updates["confidence"] = confidence
+            updates["requires_review"] = False
     elif role == InterlocutorType.FOURNISSEUR:
         updates["organization_role"] = InterlocutorType.FOURNISSEUR.value
         if ai.category == RoutingCategory.CORRESPONDANCE.value:
@@ -272,7 +302,7 @@ def apply_routing_guardrails(
         updates["requires_review"] = True
         reason_notes.append("Role client/fournisseur a confirmer dans l'annuaire global.")
 
-    if ai.confidence < confidence_threshold:
+    if confidence < confidence_threshold:
         updates["requires_review"] = True
     if reason_notes:
         updates["reason"] = _append_reason(ai.reason, reason_notes)
@@ -299,11 +329,13 @@ def _neutral_rule() -> RuleClassification:
 
 
 def _archived_preview(mail: MailMetadata, record: ArchivedMailRecord) -> PreviewRow:
-    folder_root = record.target_folder.replace("\\", "/").split("/", 1)[0].casefold()
+    folder = record.target_folder.replace("\\", "/").strip("/").casefold()
     role = {
         "correspondance": InterlocutorType.CLIENT,
         "fournisseurs": InterlocutorType.FOURNISSEUR,
-    }.get(folder_root, InterlocutorType.INCONNU)
+    }.get(folder.split("/", 1)[0], InterlocutorType.INCONNU)
+    if folder == f"{CORRESPONDENCE_FOLDER}/{INTERNAL_COMPANY_FOLDER}".casefold():
+        role = InterlocutorType.INTERNE
     return PreviewRow(
         mail=mail,
         classification=ClassificationResult(rule=_neutral_rule()),
@@ -336,5 +368,7 @@ def _history_item(ai: AiMailClassification, mail: MailMetadata) -> dict[str, str
 
 
 def _append_reason(reason: str, notes: list[str]) -> str:
-    result = " ".join([reason.strip(), *notes]).strip()
-    return result[:200]
+    # The notes explain why the mail needs a review: a long engine reason gives way.
+    suffix = " ".join(notes)[:MAX_REASON_LENGTH]
+    room = MAX_REASON_LENGTH - len(suffix) - 1
+    return f"{reason.strip()[:max(room, 0)].rstrip()} {suffix}".strip()

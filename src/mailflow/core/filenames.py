@@ -9,6 +9,10 @@ from mailflow.models import Direction
 WINDOWS_FORBIDDEN_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 MULTISPACE_RE = re.compile(r"\s+")
 ARCHIVE_PREFIX_RE = re.compile(r"^(?P<order>\d+)-[ER]-", re.IGNORECASE)
+EXTENSION_RE = re.compile(r"\.[A-Za-z0-9]{1,10}$")
+# Characters kept for an attachment's own name, so that two attachments of a mail
+# with a long subject keep distinct, recognisable names.
+ATTACHMENT_STEM_LENGTH = 76
 
 
 def sanitize_windows_filename(value: str, max_length: int = 180) -> str:
@@ -62,9 +66,12 @@ def build_attachment_filename(
     original_filename: str,
     max_length: int = 180,
 ) -> str:
-    safe_original = sanitize_windows_filename(original_filename, max_length=80)
-    stem, extension = _split_extension(safe_original)
-    base = f"{mail_stem} - {stem}"
+    # Split the extension before shortening: a long name must keep its file type.
+    stem, extension = _split_extension(sanitize_windows_filename(original_filename, 255))
+    stem = stem[:ATTACHMENT_STEM_LENGTH].rstrip(" .") or "Piece jointe"
+    # The mail part gives way, never the attachment's own name.
+    mail_room = max(max_length - len(extension) - len(stem) - len(" - "), 20)
+    base = f"{mail_stem[:mail_room].rstrip(' .-')} - {stem}"
     available_base_length = max_length - len(extension)
     return f"{sanitize_windows_filename(base, max_length=available_base_length)}{extension}"
 
@@ -92,7 +99,8 @@ def suffix_copy_name(filename: str, copy_index: int) -> str:
 
 
 def _split_extension(filename: str) -> tuple[str, str]:
-    if "." not in filename.strip("."):
+    match = EXTENSION_RE.search(filename)
+    # "Offre no. 12 du client" has no extension; ".gitignore" is a name, not a type.
+    if match is None or not filename[: match.start()].strip("."):
         return filename, ""
-    stem, extension = filename.rsplit(".", 1)
-    return stem, f".{extension}"
+    return filename[: match.start()], match.group(0)

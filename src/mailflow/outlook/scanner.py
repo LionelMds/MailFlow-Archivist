@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from mailflow.core.body_cleaner import clean_body
+from mailflow.core.forwarded_mail import find_internal_forward
 from mailflow.core.project_paths import (
     extract_project_number_from_folder_name,
     is_project_folder_name,
@@ -24,6 +26,9 @@ SMTP_ADDRESS_SCHEMAS = (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class ScannedMail:
     item: object
@@ -33,6 +38,8 @@ class ScannedMail:
 class OutlookScanner:
     def __init__(self, *, account_email: str = "") -> None:
         self.account_email = account_email.strip().casefold()
+        # Items skipped because Outlook could not read them (encrypted, corrupted).
+        self.unreadable_count = 0
 
     def iter_project_folders(self, year_folder: Any) -> Iterable[Any]:
         for folder in iter_com_collection(getattr(year_folder, "Folders", [])):
@@ -97,10 +104,13 @@ class OutlookScanner:
             if project_numbers is not None and project_number not in project_numbers:
                 continue
             for item in iter_com_collection(getattr(project_folder, "Items", [])):
-                if _looks_like_mail_item(item):
-                    entry_id = _text_attr(item, "EntryID")
-                    if entry_id:
-                        entry_ids.add(entry_id)
+                try:
+                    entry_id = _text_attr(item, "EntryID") if _looks_like_mail_item(item) else ""
+                except Exception:
+                    self._skip_unreadable(project_number or "")
+                    continue
+                if entry_id:
+                    entry_ids.add(entry_id)
         return entry_ids
 
     def scan_all_project_folders_with_items(
@@ -143,19 +153,28 @@ class OutlookScanner:
         entry_ids: frozenset[str] | None = None,
     ) -> list[ScannedMail]:
         project_number = _project_number_from_folder(project_folder)
-        return [
-            ScannedMail(
-                item=item,
-                metadata=self.mail_item_to_metadata(
+        scanned: list[ScannedMail] = []
+        for item in iter_com_collection(getattr(project_folder, "Items", [])):
+            try:
+                if not _looks_like_mail_item(item) or (
+                    entry_ids is not None and _text_attr(item, "EntryID") not in entry_ids
+                ):
+                    continue
+                metadata = self.mail_item_to_metadata(
                     item,
                     project_number=project_number,
                     outlook_folder=outlook_path,
-                ),
-            )
-            for item in iter_com_collection(getattr(project_folder, "Items", []))
-            if _looks_like_mail_item(item)
-            and (entry_ids is None or _text_attr(item, "EntryID") in entry_ids)
-        ]
+                )
+            except Exception:
+                self._skip_unreadable(outlook_path)
+                continue
+            scanned.append(ScannedMail(item=item, metadata=metadata))
+        return scanned
+
+    def _skip_unreadable(self, outlook_path: str) -> None:
+        # One unreadable item must not hide the other mails of the scan.
+        self.unreadable_count += 1
+        logger.warning("Mail Outlook illisible ignore dans %s", outlook_path, exc_info=True)
 
     def scan_project_folder_directory_items(
         self,
@@ -163,18 +182,21 @@ class OutlookScanner:
         outlook_path: str,
     ) -> list[ScannedMail]:
         project_number = _project_number_from_folder(project_folder)
-        return [
-            ScannedMail(
-                item=item,
-                metadata=self.mail_item_to_directory_metadata(
+        scanned: list[ScannedMail] = []
+        for item in iter_com_collection(getattr(project_folder, "Items", [])):
+            try:
+                if not _looks_like_mail_item(item):
+                    continue
+                metadata = self.mail_item_to_directory_metadata(
                     item,
                     project_number=project_number,
                     outlook_folder=outlook_path,
-                ),
-            )
-            for item in iter_com_collection(getattr(project_folder, "Items", []))
-            if _looks_like_mail_item(item)
-        ]
+                )
+            except Exception:
+                self._skip_unreadable(outlook_path)
+                continue
+            scanned.append(ScannedMail(item=item, metadata=metadata))
+        return scanned
 
     def mail_item_to_metadata(
         self,
@@ -189,6 +211,11 @@ class OutlookScanner:
             or getattr(item, "ReceivedTime", None)
             or getattr(item, "CreationTime", None)
         )
+        subject = _text_attr(item, "Subject")
+        recipients = _recipient_names(getattr(item, "Recipients", []))
+        body = _text_attr(item, "Body")
+        # Read here, on the full body: the excerpt stops before any quoted message.
+        forwarded = find_internal_forward(subject, body, sender_email, recipients)
         return MailMetadata(
             entry_id=_text_attr(item, "EntryID"),
             conversation_id=_optional_text_attr(item, "ConversationID"),
@@ -196,13 +223,14 @@ class OutlookScanner:
             project_number=project_number,
             outlook_folder=outlook_folder,
             direction=_direction(sender_email, self.account_email),
-            subject=_text_attr(item, "Subject"),
+            subject=subject,
             sender_name=_text_attr(item, "SenderName"),
             sender_email=sender_email,
-            recipients=_recipient_names(getattr(item, "Recipients", [])),
+            recipients=recipients,
             sent_at=sent_at,
             attachment_names=_attachment_names(getattr(item, "Attachments", [])),
-            body_excerpt=clean_body(_text_attr(item, "Body")),
+            body_excerpt=clean_body(body) if forwarded is None else forwarded.excerpt(),
+            forwarded_external_email="" if forwarded is None else forwarded.external_email,
             categories=split_categories(_optional_text_attr(item, "Categories")),
         )
 

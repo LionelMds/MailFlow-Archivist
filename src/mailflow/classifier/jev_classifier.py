@@ -483,7 +483,13 @@ def _choice_probabilities(
     if not isinstance(answer, dict) or answer.get("type") != "choice":
         raise invalid
     raw = answer.get("probabilities")
-    if not isinstance(raw, dict) or set(raw) != options or answer.get("choice") not in options:
+    choice = answer.get("choice")
+    if (
+        not isinstance(raw, dict)
+        or set(raw) != options
+        or not isinstance(choice, str)
+        or choice not in options
+    ):
         raise invalid
     values: dict[str, float] = {}
     for name, value in raw.items():

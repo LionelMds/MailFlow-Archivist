@@ -1,13 +1,13 @@
 # Confidentialite
 
-Le moteur **Ollama (local)** traite les données sur le PC. MailFlow accepte uniquement
+Le moteur **Ollama — IA locale sur ce PC** traite les données sur le PC. MailFlow accepte uniquement
 une adresse de boucle locale (`127.0.0.1`, `localhost` ou `::1`), ignore les proxys
 HTTP système et refuse les redirections. Il vérifie que le modèle est installé
 localement et refuse les modèles cloud avant de transmettre un mail. Une erreur
 laisse le mail à vérifier, sans bascule vers OpenAI. Le téléchargement initial
 d'Ollama et du modèle nécessite Internet ; la classification locale n'en a pas besoin.
 
-Le moteur **OpenAI (API)** transmet les mêmes données à OpenAI. Le moteur
+Le moteur **OpenAI — API** transmet les mêmes données à OpenAI. Le moteur
 **Jev (TypeSafe)** transmet les mêmes données à l'API de TypeSafe
 (`https://api.typesafe.ai`), sans suivre de redirection. Le choix du moteur est
 explicite dans les réglages ; les anciennes configurations conservent OpenAI. Une panne
@@ -27,6 +27,12 @@ jusqu'à cinq exemples de corrections vérifiées pertinents. L'import de l'annu
 reste local, mais ces éléments sélectionnés sont transmis lors d'une classification IA.
 Les fichiers joints eux-mêmes ne sont pas transmis.
 
+Un mail interne (échangé uniquement entre adresses Balz Metal, ou avec une entreprise
+au rôle `interne` dans l'annuaire) n'est transmis à aucun moteur : il est classé
+localement dans `Correspondance/Balzmetal`. Exception : le transfert entre collègues
+d'un mail externe est classé comme un mail de cette entreprise. Il est donc transmis au
+moteur choisi, avec le texte du message transféré à la place de l'extrait habituel.
+
 En mode OpenAI, les appels Responses utilisent `store=False` pour ne pas demander la conservation
 de la réponse comme ressource API. Les éventuelles obligations de conservation ou
 journaux côté fournisseur dépendent des conditions du compte OpenAI ; cette option
@@ -42,7 +48,7 @@ Les cles API OpenAI et Jev sont stockees via `keyring`, dans le coffre du system
 deux entrees distinctes, et ne sont jamais ecrites dans les logs ou le fichier de
 configuration JSON.
 
-Les boutons `Tester IA` et `Tester Jev` utilisent uniquement un mail fictif de
+Les boutons `Tester OpenAI`, `Tester Ollama` et `Tester Jev` utilisent uniquement un mail fictif de
 diagnostic. Aucun mail Outlook reel ni piece jointe n'est envoye pour verifier la
 validite de la cle.
 

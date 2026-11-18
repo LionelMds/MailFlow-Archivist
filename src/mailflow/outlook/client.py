@@ -120,7 +120,8 @@ def _iter_com_collection(collection: Any) -> list[Any]:
 def _split_path(path: str | Sequence[str]) -> list[str]:
     if isinstance(path, str):
         return [part.strip() for part in path.replace("\\", "/").split("/") if part.strip()]
-    return [str(part).strip() for part in path if str(part).strip()]
+    # A root such as "Boite de reception/Projets" may arrive as one element of a list.
+    return [segment for part in path for segment in _split_path(str(part))]
 
 
 def is_archive_folder_name(name: str) -> bool:

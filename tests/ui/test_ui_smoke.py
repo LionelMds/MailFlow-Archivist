@@ -352,13 +352,13 @@ def test_outlook_account_label_includes_smtp_address() -> None:
 
 
 def test_ai_settings_labels_are_french() -> None:
-    assert ai_mode_label(AiMode.DISABLED) == "desactivee"
-    assert ai_mode_label(AiMode.AMBIGUOUS_ONLY) == "activee"
-    assert ai_mode_label(AiMode.ALL) == "activee"
-    assert openai_key_status_text(True) == "Cle enregistree (non testee)"
-    assert openai_key_status_text(True, valid=True) == "Cle valide - IA OK"
-    assert openai_key_status_text(True, valid=False) == "Cle invalide ou indisponible"
-    assert openai_key_status_text(False) == "Aucune cle"
+    assert ai_mode_label(AiMode.DISABLED) == "Désactivée"
+    assert ai_mode_label(AiMode.AMBIGUOUS_ONLY) == "Activée"
+    assert ai_mode_label(AiMode.ALL) == "Activée"
+    assert openai_key_status_text(True) == "Clé enregistrée (non testée)"
+    assert openai_key_status_text(True, valid=True) == "Clé valide - IA OK"
+    assert openai_key_status_text(True, valid=False) == "Clé invalide ou indisponible"
+    assert openai_key_status_text(False) == "Aucune clé"
     assert "#166534" in openai_key_status_style(True, valid=True)
 
 
@@ -447,7 +447,7 @@ def test_format_project_html_export_result_lists_paths(tmp_path: Path) -> None:
     message = format_project_html_export_result([result])
 
     assert "2 mail(s)" in message
-    assert "1 piece(s) jointe(s)" in message
+    assert "1 pièce(s) jointe(s)" in message
     assert "Correspondance projet.html" in message
 
 
@@ -483,7 +483,7 @@ def test_should_pause_watch_scan_only_when_preview_is_open() -> None:
 def test_tray_tooltip_shows_watch_state() -> None:
     assert tray_tooltip_text(False) == "MailFlow Archivist - surveillance inactive"
     assert tray_tooltip_text(True) == "MailFlow Archivist - surveillance active"
-    assert tray_tooltip_text(True, 3) == "MailFlow Archivist - surveillance active - 3 a verifier"
+    assert tray_tooltip_text(True, 3) == "MailFlow Archivist - surveillance active - 3 à vérifier"
 
 
 def test_review_reminder_time_helpers() -> None:
@@ -527,7 +527,7 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_ai_model_input.currentText() == "gpt-6-astra"
     assert dynamic_window.mailflow_ai_model_input.count() >= len(AI_MODEL_OPTIONS)
     assert dynamic_window.mailflow_openai_key_input.echoMode() == QLineEdit.EchoMode.Password
-    assert dynamic_window.mailflow_test_openai_key_button.text() == "Tester IA"
+    assert dynamic_window.mailflow_test_openai_key_button.text() == "Tester OpenAI"
     assert dynamic_window.mailflow_check_updates_button.text() == "Rechercher une mise à jour"
     assert "Version" in dynamic_window.mailflow_update_status.text()
     assert dynamic_window.mailflow_ai_include_body_checkbox.isChecked()
@@ -546,9 +546,9 @@ def test_main_window_instantiates_when_pyside6_is_available() -> None:
     assert dynamic_window.mailflow_tray_open_action.text() == "Ouvrir MailFlow"
     assert dynamic_window.mailflow_tray_watch_action.isCheckable()
     assert dynamic_window.mailflow_tray_quit_action.text() == "Quitter"
-    assert dynamic_window.mailflow_folder_tree.headerItem().text(0) == "Dossier propose"
+    assert dynamic_window.mailflow_folder_tree.headerItem().text(0) == "Dossier proposé"
     assert dynamic_window.mailflow_rename_folder_button.text() == "Renommer dossier"
-    assert dynamic_window.mailflow_merge_folder_button.text() == "Fusionner vers..."
+    assert dynamic_window.mailflow_merge_folder_button.text() == "Fusionner vers…"
     assert dynamic_window.mailflow_archive_button.text() == "Archiver"
     assert dynamic_window.mailflow_archive_selection_action.text() == "Archiver la sélection"
     assert dynamic_window.mailflow_archive_all_action.text() == "Archiver tous les mails prêts"
@@ -1041,7 +1041,7 @@ def test_jev_settings_key_and_test_never_touch_openai(
     assert not window.mailflow_openai_key_input.isEnabled()
     assert window.mailflow_ai_model_input.isHidden()
     assert not window.mailflow_ollama_model_input.isEnabled()
-    assert window.mailflow_jev_key_status.text() == "Aucune cle"
+    assert window.mailflow_jev_key_status.text() == "Aucune clé"
 
     window.mailflow_jev_model_input.setCurrentText("jev-2026-09-15")
     window.mailflow_save_settings_button.click()
@@ -1053,7 +1053,7 @@ def test_jev_settings_key_and_test_never_touch_openai(
     window.mailflow_save_jev_key_button.click()
     assert key_store["key"] == "ts-test-key"
     assert window.mailflow_jev_key_input.text() == ""
-    assert window.mailflow_jev_key_status.text() == "Cle enregistree (non testee)"
+    assert window.mailflow_jev_key_status.text() == "Clé enregistrée (non testée)"
     assert isinstance(pipeline.ai_classifier, ResponsiveAiClassifier)
     assert built[-1] == {
         "api_key": "ts-test-key", "model": "jev-2026-09-15", "timeout_seconds": 20.0,
@@ -1061,7 +1061,7 @@ def test_jev_settings_key_and_test_never_touch_openai(
 
     window.mailflow_test_jev_key_button.click()
     assert built[-1]["model"] == "jev-2026-09-15"
-    assert window.mailflow_jev_key_status.text() == "Cle valide - IA OK"
+    assert window.mailflow_jev_key_status.text() == "Clé valide - IA OK"
     assert "Connexion Jev OK" in window.mailflow_logs.toPlainText()
     assert "ts-test-key" not in window.mailflow_logs.toPlainText()
 

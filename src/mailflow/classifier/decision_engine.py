@@ -8,6 +8,7 @@ from mailflow.core.correspondence_hierarchy import (
     SUPPLIER_ORDER_FOLDER,
     SUPPLIER_REQUEST_FOLDER,
 )
+from mailflow.core.domains import INTERNAL_COMPANY_FOLDER
 from mailflow.core.mail_file_plan import planned_msg_path
 from mailflow.core.project_paths import local_project_path
 from mailflow.models import (
@@ -23,6 +24,27 @@ from mailflow.models import (
 from mailflow.outlook.categories import ARCHIVED_CATEGORY
 
 DEFAULT_CONFIDENCE_THRESHOLD = REVIEW_CONFIDENCE_THRESHOLD
+INTERNAL_MAIL_RULE = "mail_interne"
+INTERNAL_MAIL_REASON = (
+    f"Mail interne Balz Metal: {CORRESPONDENCE_FOLDER}/{INTERNAL_COMPANY_FOLDER}, "
+    "sans analyse IA."
+)
+
+
+def internal_forward_note(external_email: str) -> str:
+    """Why a mail between colleagues is filed with an external company."""
+    return f"Transfert interne: classe chez l'auteur du message transfere ({external_email})."
+
+
+def internal_mail_rule() -> RuleClassification:
+    """Rule of a mail between colleagues: decided on its addresses, never on keywords."""
+    return RuleClassification(
+        suggested_type=MailType.CORRESPONDANCE_GENERALE,
+        suggested_interlocutor=InterlocutorType.INTERNE,
+        likely_archive=True,
+        confidence=1.0,
+        matched_rules=[INTERNAL_MAIL_RULE],
+    )
 
 
 class ArchiveState(Protocol):
@@ -130,7 +152,12 @@ def decide_archive(
             target_path=target_path,
             confidence=confidence,
             duplicate_status="none",
-            reason="Destination a verifier, validation utilisateur requise.",
+            # Without an engine answer, say so: it is the real cause of the review.
+            reason=(
+                reason
+                if ai is None
+                else "Destination a verifier, validation utilisateur requise."
+            ),
         )
 
     if confidence < confidence_threshold or mail_type == MailType.A_VERIFIER:
@@ -208,6 +235,15 @@ def _classification_choice(
     rule: RuleClassification,
     ai: AiMailClassification | None,
 ) -> tuple[MailType, InterlocutorType, bool, float, str]:
+    if INTERNAL_MAIL_RULE in rule.matched_rules:
+        # No engine answer can move an internal mail elsewhere.
+        return (
+            MailType.CORRESPONDANCE_GENERALE,
+            InterlocutorType.INTERNE,
+            True,
+            1.0,
+            INTERNAL_MAIL_REASON,
+        )
     if ai is not None:
         return (
             MailType(ai.mail_type),

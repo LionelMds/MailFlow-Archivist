@@ -16,6 +16,26 @@ class ArchiveService:
 
     def archive(self, item: Any, metadata: MailMetadata, decision: ArchiveDecision) -> ExportResult:
         result = self.exporter.export_mail(item, metadata, decision)
+        try:
+            self._record(metadata, decision, result)
+        except Exception:
+            # Without its journal entry the mail would be archived again as a copy:
+            # take back the files this call has just created, and only those.
+            for path in (result.msg_path, *result.attachment_paths):
+                path.unlink(missing_ok=True)
+            raise
+        try:
+            mark_archived(item)
+        except Exception:
+            result.warnings.append(
+                f"{metadata.subject or metadata.entry_id} : archive locale enregistree, "
+                "mais la categorie Outlook n'a pas pu etre appliquee."
+            )
+        return result
+
+    def _record(
+        self, metadata: MailMetadata, decision: ArchiveDecision, result: ExportResult,
+    ) -> None:
         self.store.record_archived(
             ArchivedMailRecord(
                 outlook_entry_id=metadata.entry_id,
@@ -32,11 +52,3 @@ class ArchiveService:
                 archived_at=datetime.now(UTC),
             )
         )
-        try:
-            mark_archived(item)
-        except Exception:
-            result.warnings.append(
-                f"{metadata.subject or metadata.entry_id} : archive locale enregistree, "
-                "mais la categorie Outlook n'a pas pu etre appliquee."
-            )
-        return result

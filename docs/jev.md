@@ -110,8 +110,8 @@ déclenchent un seul nouvel essai après une courte attente (5 secondes au plus)
 ou pour une clé refusée, un modèle introuvable ou une réponse invalide, le mail reste
 **À vérifier** avec un message local. Le texte renvoyé par le serveur n'est jamais
 affiché, car il peut recopier le contenu du mail. Une panne Jev ne bascule jamais vers
-OpenAI ni vers Ollama. Le délai par appel est de 20 secondes (`jev_timeout_seconds`
-dans `config.json`).
+OpenAI ni vers Ollama. Le délai par appel est de 20 secondes par défaut ; il se règle dans
+**Réglages**, à côté du modèle Jev.
 
 ## Mesurer Jev avant de l'adopter
 

@@ -1,5 +1,38 @@
 # Release
 
+## Version 0.16.0
+
+Revue complète du projet (voir [la revue](project-review.md)) : corrections, réglages
+manquants et textes harmonisés.
+
+- réglages : `Délai maximal par mail` pour OpenAI et Jev (comme Ollama) et `Seuil de
+  confiance` ; une clé saisie est enregistrée avec `Enregistrer les réglages` ;
+- `Ouvrir dossier projet` ouvre réellement le dossier local du projet ;
+- un client de l'annuaire va en `Correspondance` sans vérification avec les trois
+  moteurs, et un rôle `client` validé dans l'annuaire s'applique aussitôt à ses mails ;
+- un mail interne (uniquement entre adresses Balz Metal, ou avec une entreprise au rôle
+  `interne`) va d'office dans `Correspondance/Balzmetal`, sans analyse IA ;
+- le transfert entre collègues d'un mail externe (`TR:`, `FW:`, `WG:`) est rangé dans le
+  dossier de l'entreprise qui a écrit le message transféré ;
+- le dossier d'entreprise suit le destinataire qui fixe le rôle ; les adresses
+  `balzmetalsa.onmicrosoft.com` sont reconnues comme internes partout ;
+- export HTML : la confirmation liste tous les journaux qui seront remplacés ;
+- surveillance : elle garde l'année et le dossier de son activation ; un rappel manqué
+  est rattrapé pendant 10 minutes ;
+- scan : un mail Outlook illisible est ignoré et compté au lieu d'arrêter le scan ;
+  un scan en échec laisse les mails affichés utilisables ;
+- rangement : les coches sont conservées après un rangement ou un passage par
+  ProjectFlow ; seuls les numéros `AAAA-NNNN` sont transmis à ProjectFlow ;
+- pièces jointes : un nom long garde son extension et son propre nom ;
+- annuaire : renommer, fusionner ou supprimer une entreprise met à jour les mails
+  affichés ; aucun rôle n'est suggéré pour une entreprise au rôle choisi à la main ;
+- arborescence : un renommage ou une fusion reste dans une des trois catégories ;
+- mise à jour : téléchargement sans bloquer la fenêtre, et MailFlow se ferme pour
+  laisser l'installateur remplacer le programme ;
+- rapport CSV : un objet de mail ne peut plus être interprété comme une formule ;
+- boutons standard des dialogues en français ; textes de l'interface accentués ;
+- dépendances `structlog` et `pytest-qt`, inutilisées, retirées.
+
 ## Version 0.15.0
 
 - projets archivés dans Outlook (`00-Archives/Année/...`) : le scan d'une année les
@@ -194,7 +227,7 @@ meme icone `.ico`.
 
 ## Mises a jour
 
-L'application interroge la derniere release GitHub depuis le bouton `Rechercher mise a
+L'application interroge la derniere release GitHub depuis le bouton `Rechercher une mise à
 jour`. Si une version plus recente existe, elle selectionne automatiquement
 `MailFlow-Archivist-Setup.exe` sous Windows ou `MailFlow-Archivist.dmg` sous macOS,
 telecharge le fichier dans le dossier de telechargements utilisateur, puis lance

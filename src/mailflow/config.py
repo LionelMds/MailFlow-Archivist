@@ -186,8 +186,8 @@ def load_settings_with_recovery(path: Path | None = None) -> tuple[AppSettings, 
 def save_settings(settings: AppSettings, path: Path | None = None) -> None:
     config_path = path or settings.paths.config_file
     config_path.parent.mkdir(parents=True, exist_ok=True)
+    # API keys are never fields of AppSettings: they only live in the system keyring.
     data: dict[str, Any] = settings.model_dump(mode="json")
-    data.pop("openai_api_key", None)
     content = json.dumps(data, ensure_ascii=True, indent=2)
     # Write a sibling file, then swap it in, so a crash never leaves a truncated config.
     with tempfile.NamedTemporaryFile(

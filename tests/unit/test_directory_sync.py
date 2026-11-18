@@ -293,7 +293,7 @@ def test_manual_client_choice_is_logged_and_shown_in_directory(
     window.mailflow_preview_table.cellDoubleClicked.emit(0, 0)
 
     logs = window.mailflow_logs.toPlainText()
-    assert "Acme Metal enregistre comme client" in logs
+    assert "Acme Metal enregistré comme client" in logs
     assert "1 autre(s) mail(s)" in logs
     assert app.preview_rows[1].decision.interlocutor == InterlocutorType.CLIENT
     directory = window.mailflow_directory_table
@@ -392,4 +392,4 @@ def test_review_button_applies_one_choice_to_the_whole_selection(
     actions = [row.action for row in app.preview_rows]
     assert actions[0] == actions[2] == PreviewAction.ARCHIVE
     assert app.preview_rows[1].decision.interlocutor == InterlocutorType.CLIENT
-    assert "Classement manuel applique a 2 mail(s)." in window.mailflow_logs.toPlainText()
+    assert "Classement manuel appliqué à 2 mail(s)." in window.mailflow_logs.toPlainText()

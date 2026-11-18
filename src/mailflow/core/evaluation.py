@@ -161,11 +161,13 @@ def evaluate_case(
         return CaseResult(case=case, missing_in_outlook=True)
     counterparty = resolve_counterparty(mail, directory)
     if (
-        counterparty.role in {InterlocutorType.CLIENT, InterlocutorType.FOURNISSEUR}
+        counterparty.role
+        in {InterlocutorType.CLIENT, InterlocutorType.FOURNISSEUR, InterlocutorType.INTERNE}
         and counterparty.role != case.expected_role
     ):
         # The directory now gives the company another role: the guardrails would
-        # forbid the reference answer, so it no longer measures the model.
+        # forbid the reference answer, so it no longer measures the model. An
+        # internal mail is never sent to the model at all.
         return CaseResult(case=case, inconsistent_reference=True)
     # No history and no verified examples: an example built from this very
     # correction would hand the model its answer.

@@ -96,6 +96,8 @@ class MailMetadata(BaseModel):
     sent_at: datetime
     attachment_names: list[str] = Field(default_factory=list)
     body_excerpt: str = ""
+    # External author of the message a colleague forwarded to colleagues, else empty.
+    forwarded_external_email: str = ""
     categories: list[str] = Field(default_factory=list)
     archive_order: int | None = Field(default=None, ge=1)
 

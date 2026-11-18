@@ -7,20 +7,72 @@ from email.utils import parseaddr
 from typing import Protocol
 
 from mailflow.core.correspondence_hierarchy import safe_folder_name
+from mailflow.core.domains import (
+    INTERNAL_EMAIL_DOMAINS,
+    LEGAL_SUFFIXES,
+    email_domain,
+    is_internal_domain,
+)
+from mailflow.core.forwarded_mail import forwarded_counterparty_email
 from mailflow.models import InterlocutorType, MailMetadata
 
+# Mailbox providers: their domain never stands for one company, so two unrelated
+# people at the same provider must not share a company and its role.
 GENERIC_EMAIL_DOMAINS = {
+    "bluemail.ch",
     "bluewin.ch",
+    "citycable.ch",
+    "free.fr",
     "gmail.com",
+    "gmx.at",
+    "gmx.ch",
+    "gmx.com",
+    "gmx.de",
+    "gmx.fr",
+    "gmx.net",
+    "googlemail.com",
+    "hispeed.ch",
+    "hotmail.ch",
     "hotmail.com",
+    "hotmail.de",
+    "hotmail.fr",
+    "hotmail.it",
     "icloud.com",
+    "laposte.net",
+    "live.com",
+    "live.fr",
+    "mac.com",
+    "me.com",
+    "msn.com",
+    "netplus.ch",
+    "orange.fr",
     "outlook.com",
+    "outlook.de",
+    "outlook.fr",
+    "pm.me",
     "proton.me",
+    "protonmail.ch",
     "protonmail.com",
+    "sfr.fr",
+    "sunrise.ch",
+    "swissonline.ch",
+    "t-online.de",
+    "vtxnet.ch",
+    "wanadoo.fr",
+    "web.de",
     "yahoo.com",
+    "yahoo.de",
+    "yahoo.fr",
+    "yahoo.it",
 }
-INTERNAL_EMAIL_DOMAINS = {"balzmetal.ch", "balzmetalsa.onmicrosoft.com"}
-LEGAL_SUFFIXES = {"ag", "gmbh", "sa", "sarl", "sagl", "ltd", "llc", "inc", "spa", "srl"}
+
+__all__ = [
+    "GENERIC_EMAIL_DOMAINS",
+    "INTERNAL_EMAIL_DOMAINS",
+    "LEGAL_SUFFIXES",
+    "email_domain",
+    "is_internal_domain",
+]
 
 
 @dataclass(frozen=True)
@@ -149,6 +201,10 @@ def observation_for_email(mail: MailMetadata, email: str) -> ContactObservation 
 def contact_references_from_mail(mail: MailMetadata) -> list[str]:
     references = [format_contact_reference(mail.sender_name, mail.sender_email)]
     references.extend(mail.recipients)
+    # The author of a message forwarded between colleagues takes part in the project.
+    forwarded = forwarded_counterparty_email(mail)
+    if forwarded is not None:
+        references.append(forwarded)
     return [reference for reference in references if reference.strip()]
 
 
@@ -195,21 +251,6 @@ def split_contact(contact: str) -> tuple[str, str]:
         cleaned_display = re.sub(r"<[^>]+>", "", contact).strip()
         cleaned_display = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "", cleaned_display).strip()
     return cleaned_display, normalized_email
-
-
-def email_domain(email: str) -> str | None:
-    if "@" not in email:
-        return None
-    domain = email.rsplit("@", 1)[1].strip(". ").casefold()
-    return domain or None
-
-
-def is_internal_domain(domain: str) -> bool:
-    normalized = domain.casefold()
-    return any(
-        normalized == item or normalized.endswith(f".{item}")
-        for item in INTERNAL_EMAIL_DOMAINS
-    )
 
 
 def is_generic_email_domain(domain: str) -> bool:

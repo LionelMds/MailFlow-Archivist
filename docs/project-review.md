@@ -186,3 +186,70 @@ poste : l'ancien répertoire temporaire global de pytest n'y est pas accessible.
 
 Les tests ne sollicitent pas Outlook réel ni l'API OpenAI. L'accès Astra, la précision
 sur les dossiers métier, les coûts et les temps réels restent donc à mesurer.
+
+# Revue du 17 novembre 2026 (version 0.16.0)
+
+Les sections ci-dessus décrivent l'état de la 0.8.6 et restent un instantané. Cette
+seconde revue a relu tout le code de la 0.15.0 (classification, Outlook et stockage,
+rangement et annuaire, fenêtre principale) et confronté la documentation au code.
+Les corrections sont listées dans les [notes de version](release.md).
+
+## Constats corrigés
+
+| Priorité | Constat vérifié | Correction |
+| --- | --- | --- |
+| Haute | Un scan en échec remplaçait quand même le contrôleur : les mails restaient affichés mais plus rien ne s'ouvrait ni ne s'archivait. | Le nouveau contrôleur ne remplace l'ancien qu'après un scan réussi. |
+| Haute | L'export HTML confirmait un seul journal existant puis les remplaçait tous. | `ProjectHtmlExistsError` porte tous les chemins ; la confirmation les liste. |
+| Haute | Pour un mail envoyé à un fournisseur avec un client en copie, le rôle venait du premier destinataire et le nom du dossier d'un autre. | Le dossier d'entreprise suit le premier destinataire externe, comme le rôle. |
+| Haute | Deux définitions de « domaine interne » : `balzmetalsa.onmicrosoft.com` devenait l'entreprise « Onmicrosoft ». | Source unique `core/domains.py`. |
+| Haute | Un mail entre collègues n'avait aucun traitement : il était envoyé au moteur, restait « À vérifier » (rôle inconnu) et son dossier dépendait de l'adresse (« Balzmetal », « Onmicrosoft » ou « Interlocuteur inconnu »). | `is_internal_mail` le reconnaît sur ses adresses ; il va dans `Correspondance/Balzmetal`, prêt à archiver, sans appel IA. Le rôle `interne` de l'annuaire et le choix manuel `interne` mènent au même dossier. |
+| Haute | Le transfert par un collègue du mail d'un fournisseur aurait été rangé avec les mails internes, et son extrait s'arrêtait à la note du collègue. | `core.forwarded_mail` lit l'auteur du message transféré au scan ; le mail est rangé chez cette entreprise et l'extrait contient le message transféré. |
+| Haute | Sans Outlook classique, la fenêtre ne s'ouvrait pas au premier lancement. | L'appel est protégé ; l'erreur est journalisée. |
+| Haute | La surveillance relisait l'année du bandeau à chaque contrôle : une année modifiée rendait tous ses mails « nouveaux » et archivables. | La surveillance garde la demande de son activation ou du dernier scan. |
+| Moyenne | Un seul mail illisible (chiffré, corrompu) arrêtait tout le scan. | Le mail est ignoré, compté et signalé. |
+| Moyenne | Une pièce jointe au nom long perdait son extension ; un objet long effaçait le nom des pièces jointes. | L'extension et le nom propre sont réservés avant de raccourcir. |
+| Moyenne | Un échec du journal SQLite après publication laissait des fichiers sans trace, copiés de nouveau à la reprise. | Les fichiers créés par cet appel sont retirés avant de signaler l'échec. |
+| Moyenne | Un client de l'annuaire pouvait rester à vérifier selon le moteur ; un rôle validé ne débloquait que les lignes Jev. | Règle identique pour les trois moteurs. |
+| Moyenne | Les messages d'erreur locaux d'OpenAI étaient remplacés par un message générique ; le test de connexion citait le texte du serveur. | Messages locaux pour les trois moteurs. |
+| Moyenne | `openai_timeout_seconds`, `jev_timeout_seconds` et `decision_confidence_threshold` n'avaient aucun contrôle ; « Ouvrir dossier projet » n'ouvrait rien. | Contrôles ajoutés, action implémentée. |
+| Moyenne | Après un scan, la page Boîte mail gardait son tableau mais perdait l'analyse ; les coches étaient réinitialisées après un rangement. | Analyse et coches conservées. |
+| Moyenne | Renommer ou fusionner un dossier pouvait créer une quatrième catégorie ou mettre un fournisseur en Correspondance. | Les modifications restent dans une des trois catégories. |
+| Moyenne | Résultats d'archivage et erreurs visibles seulement dans le journal replié. | Barre d'état, et journal déplié en cas d'échec. |
+| Faible | Marqueurs de citation et de signature sans accents, filtre de secrets des logs trop large, formule possible dans le rapport CSV, domaines de messagerie génériques incomplets, boutons Oui/Non en anglais, textes sans accents, code mort. | Corrigés. |
+
+## Points laissés ouverts
+
+Ces constats sont réels mais demandent une décision métier, un essai sur Outlook réel
+ou un chantier séparé :
+
+1. **Doublons entre postes** : le dédoublonnage repose sur l'`EntryID` et la base
+   locale. Deux collaborateurs peuvent archiver le même mail dans le dossier OneDrive
+   partagé ; `internet_message_id` est stocké mais non interrogé.
+2. **Longueur des chemins** : le nom de fichier est plafonné à 180 caractères sans
+   tenir compte de la profondeur du dossier ; le dossier de transit ajoute 26 caractères.
+3. **Noms de dossiers projet** : `2026-5245-2`, `2026-5245_Dupont` ou `2026-5245-Dupont`
+   ne sont pas reconnus (seuls un espace ou `(` sont acceptés après le numéro).
+4. **Pièce jointe non enregistrable** : elle annule tout l'export du mail (choix
+   délibéré : pas d'archive partielle). Un objet OLE ou un lien cloud rend donc le mail
+   inarchivable.
+5. **Corps cité** : toute ligne « De : … » coupe l'extrait, même dans un texte normal
+   (choix délibéré : un numéro de projet d'un ancien message ne doit pas router le mail).
+6. **Contrepartie trouvée dans le corps** : quand l'adresse vient du corps du mail, le
+   nom du dossier peut encore venir du nom affiché de l'expéditeur.
+7. **Objets Outlook conservés** : tous les `MailItem` scannés restent référencés ; une
+   boîte Exchange en ligne peut atteindre sa limite d'éléments ouverts sur un gros scan.
+8. **Intégrité de l'installateur** : sans empreinte fournie par GitHub, seules la
+   taille et HTTPS protègent le téléchargement ; l'exécutable n'est pas signé.
+9. **Release** : rien ne compare le tag à la version du paquet dans le workflow (un
+   test vérifie désormais `pyproject.toml` et `mailflow.__version__`).
+10. **Copies du rangement** : si le déplacement échoue après une copie, relancer crée
+    une seconde copie dans le projet secondaire.
+11. **Terminologie** : « Sujet » (page Mails, export) et « Objet » (page Boîte mail)
+    désignent la même chose ; les raisons métier affichées restent sans accents.
+
+## Validation
+
+- **587 tests réussis** (556 avant la revue), dont `tests/unit/test_review_regressions.py`.
+- **Ruff** et **mypy** réussis.
+- Outlook réel, les API OpenAI, Jev et Ollama, ProjectFlow et les installateurs n'ont
+  pas été sollicités : les adaptateurs sont testés avec des doubles.

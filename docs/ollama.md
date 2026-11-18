@@ -1,6 +1,7 @@
 # IA locale avec Ollama
 
-MailFlow propose deux moteurs : OpenAI via API et Ollama sur le PC. Le choix se fait
+MailFlow propose trois moteurs : OpenAI via API, Jev (TypeSafe) via API et Ollama sur
+le PC. Le choix se fait
 dans **Réglages**. Chaque moteur conserve son modèle ; la clé OpenAI reste dans le
 coffre système et n'est pas nécessaire en mode local. Les anciennes installations
 conservent leur moteur OpenAI jusqu'à un changement explicite.
@@ -17,9 +18,9 @@ conservent leur moteur OpenAI jusqu'à un changement explicite.
    ollama pull qwen3.5:4b
    ```
 
-3. Dans MailFlow, choisir **Ollama (local)**, garder l'adresse
+3. Dans MailFlow, choisir **Ollama — IA locale sur ce PC**, garder l'adresse
    `http://127.0.0.1:11434`, puis choisir `qwen3.5:4b`.
-4. Cliquer sur **Tester IA locale**, puis enregistrer les réglages.
+4. Cliquer sur **Tester Ollama**, puis enregistrer les réglages.
 
 Les modèles sont stockés par Ollama dans `%USERPROFILE%\.ollama\models`, en dehors
 du dépôt de code et des dossiers de mails. Internet est nécessaire pour
@@ -44,7 +45,7 @@ la compatibilité du format, pas la qualité de toutes les classifications.
 MailFlow ne se connecte qu'à une adresse de boucle locale, ignore les proxys et
 refuse les redirections. Il vérifie les métadonnées locales du modèle avant
 d'envoyer le contenu du mail. Il n'utilise aucun secours automatique OpenAI.
-Les mêmes données et garde-fous métier sont utilisés par les deux moteurs.
+Les mêmes données et garde-fous métier sont utilisés par les trois moteurs.
 
 Une connexion impossible, un modèle absent, un délai dépassé ou une réponse invalide
 laisse le mail **À vérifier**. Une erreur ne devient jamais une décision d'archivage.

@@ -4,11 +4,19 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mailflow.core.correspondence_hierarchy import is_safe_relative_folder, safe_folder_name
+from mailflow.core.correspondence_hierarchy import (
+    CORRESPONDENCE_FOLDER,
+    SUPPLIER_ORDER_FOLDER,
+    SUPPLIER_REQUEST_FOLDER,
+    is_safe_relative_folder,
+    safe_folder_name,
+)
 from mailflow.core.project_paths import local_project_path
 from mailflow.models import PreviewAction, PreviewRow
 
 SPECIAL_FOLDERS = {"A verifier", "Ne pas archiver"}
+# The three business categories: a folder is renamed or merged inside one of them.
+CATEGORY_FOLDERS = (CORRESPONDENCE_FOLDER, SUPPLIER_REQUEST_FOLDER, SUPPLIER_ORDER_FOLDER)
 FOLDER_SORT_PRIORITY = {
     "Correspondance": 0,
     "Fournisseurs": 1,
@@ -193,6 +201,26 @@ def _validate_rewrite_target(source: str, target: str) -> None:
     if target == source or target.startswith(f"{source}/"):
         msg = "La destination ne peut pas etre identique ou enfant de la source"
         raise ValueError(msg)
+    source_category = _category_folder(source)
+    target_category = _category_folder(target)
+    if source in CATEGORY_FOLDERS or any(
+        category.startswith(f"{source}/") for category in CATEGORY_FOLDERS
+    ):
+        msg = f"Dossier de categorie non modifiable: {source}"
+        raise ValueError(msg)
+    if target_category is None or (
+        source_category is not None and target_category != source_category
+    ):
+        expected = source_category or ", ".join(CATEGORY_FOLDERS)
+        msg = f"La destination doit rester dans la categorie {expected}"
+        raise ValueError(msg)
+
+
+def _category_folder(relative_folder: str) -> str | None:
+    for category in CATEGORY_FOLDERS:
+        if relative_folder == category or relative_folder.startswith(f"{category}/"):
+            return category
+    return None
 
 
 def _folder_parts(relative_folder: str) -> list[str]:

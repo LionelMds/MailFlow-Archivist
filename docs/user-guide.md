@@ -144,10 +144,51 @@ n'est jamais cree automatiquement.
 Le role d'une entreprise est fixe globalement dans l'onglet `Annuaire`. Il sert de
 regle de base pour tous les projets existants et futurs. Seuls les
 roles `client` et `fournisseur` permettent l'archivage automatique; les autres restent
-a verifier. Une correction manuelle depuis une ligne peut modifier le role du mail
-concerne sans modifier le role global de l'annuaire ni les autres mails du projet.
+a verifier. Une correction manuelle qui choisit `client` ou `fournisseur` enregistre
+aussi ce role pour l'entreprise dans l'annuaire et l'applique a ses autres mails ;
+un client deja connu de l'annuaire va toujours en `Correspondance`, sans verification.
 Pour un mail envoye, le premier destinataire externe prime sur les collegues Balz Metal
 places ensuite en copie.
+
+### Mails internes
+
+Un mail échangé uniquement entre collègues Balz Metal est rangé d'office dans
+`Correspondance/Balzmetal`, prêt à archiver, sans analyse IA : il est donc classé même
+si le moteur est désactivé ou en panne, et son contenu n'est transmis à aucun service.
+
+Un mail est interne quand l'expéditeur et tous les destinataires ont une adresse
+`@balzmetal.ch` (ou `@balzmetalsa.onmicrosoft.com`). Sont aussi reconnus :
+
+- un expéditeur dont Outlook ne retrouve plus l'adresse (ancien collaborateur) ;
+- une entreprise à laquelle l'annuaire donne le rôle global `interne`, par exemple une
+  société sœur : ses mails vont dans le même dossier ;
+- le choix manuel `interne`, pour un collègue qui écrit depuis une adresse privée.
+
+Une seule adresse externe, même en copie, suffit pour que le mail soit traité comme un
+échange avec cette entreprise. Une adresse externe citée dans le corps ne compte pas.
+
+#### Transfert interne d'un mail externe
+
+Quand un collègue vous transfère le mail d'un fournisseur ou d'un client, le mail est
+rangé chez cette entreprise, comme si elle vous avait écrit directement : par exemple
+`Fournisseurs/Demande de prix/<entreprise>` pour l'offre d'un sous-traitant. La raison
+affichée indique « Transfert interne » et l'adresse retenue.
+
+MailFlow reconnaît un transfert à deux signes réunis :
+
+- l'objet commence par `TR:`, `FW:`, `Fwd:`, `WG:` ou `I:` ;
+- le corps contient le bloc du message transféré (`De :`, `Envoyé :`, `À :`, `Objet :`)
+  avec une adresse externe. L'auteur du message transféré est retenu ; s'il s'agit d'un
+  collègue (transfert d'un mail envoyé), c'est son premier destinataire externe.
+
+La suite est celle d'un mail ordinaire : l'annuaire fixe l'entreprise et son rôle, le
+moteur choisit `Demande de prix` ou `Commande` pour un fournisseur, et un rôle inconnu
+laisse le mail à vérifier. Le texte du message transféré remplace l'extrait habituel,
+qui s'arrêterait à la note du collègue.
+
+Restent dans `Correspondance/Balzmetal` : une réponse entre collègues (`RE:`), même si
+elle cite un mail externe, et un transfert dont le bloc ne montre que des noms sans
+adresse. Le choix manuel `interne` ou un autre classement manuel reste possible.
 
 ## Arborescence proposee
 
@@ -165,7 +206,7 @@ Actions possibles :
   `METAL-FACTORY` vers `Metal Factory` ;
 - `Fusionner vers...` deplace tous les mails du dossier selectionne vers un autre
   dossier deja propose, utile lorsqu'un doublon accidentel a ete detecte.
-- `Ignorer la sélection` marque seulement les lignes sélectionnées comme ignorées ;
+- `Ignorer la sélection` (menu `Plus` de la page `Mails`) marque seulement les lignes sélectionnées comme ignorées ;
 - `Rétablir les mails ignorés` remet les lignes archivables en action `Archiver`, sans
   toucher aux lignes déjà archivées ni aux lignes qui exigent une vérification.
   Seule cette action explicite réactive les mails ignorés encore admissibles.
@@ -192,21 +233,24 @@ entreprise sauf si le nom affiche contient clairement une societe.
 
 La colonne `Role global` permet de definir une entreprise comme cliente, fournisseur,
 intervenante externe, interne ou inconnue. Cette valeur s'applique a tous les projets.
+Le rôle `interne` range les mails de l'entreprise dans `Correspondance/Balzmetal`, comme
+ceux des collègues.
 Les anciens roles projet coherents sont repris automatiquement lors de la mise a jour.
 
 L'import peut aussi etre lance en ligne de commande :
 
 ```powershell
-python -m mailflow --import-contact-directory --account "prenom.nom@balzmetal.ch" --outlook-root "Boite de reception"
+.\.venv312\Scripts\python.exe -m mailflow --import-contact-directory --account "prenom.nom@balzmetal.ch" --outlook-root "Boite de reception"
 ```
 
 ## Mode IA
 
-Dans `Réglages`, choisir `activee` pour demander une classification IA sur les
-les mails. Le mode `desactivee` ne tente aucune classification locale : les lignes
+Dans `Réglages`, choisir `Activée` pour demander une classification IA sur les
+mails. Le mode `Désactivée` ne tente aucune classification locale : les lignes
 restent a verifier manuellement.
 
-Coller la cle OpenAI dans `Cle API OpenAI`, puis cliquer sur `Enregistrer cle`.
+Coller la cle OpenAI dans `Clé API OpenAI`, puis cliquer sur `Enregistrer la clé` ;
+`Enregistrer les réglages` enregistre aussi une cle saisie pour le moteur choisi.
 La cle est stockee dans le coffre du systeme et n'est pas sauvegardee dans le JSON.
 Le modèle par défaut est **GPT-6 Astra** (`gpt-6-astra`). L'ancien défaut
 `gpt-5.4-nano` est migré au chargement d'une configuration ancienne, puis cette
@@ -215,7 +259,7 @@ configuré et le mode IA désactivé sont conservés. Le sélecteur reste modifi
 Le délai réseau par défaut passe à 60 secondes, avec un nouvel essai possible par
 le SDK. Le raisonnement est réglé sur `low` pour Astra.
 
-Le bouton `Tester IA` verifie la cle et le modele avec un mail fictif. Le statut
+Le bouton `Tester OpenAI` verifie la cle et le modele avec un mail fictif. Le statut
 s'affiche directement a cote du champ : non testee, test en cours, valide ou invalide.
 Ce test ne lit aucun mail Outlook.
 
@@ -225,8 +269,17 @@ raison courte.
 
 Options de confidentialite :
 
-- `Envoyer l'extrait nettoye du corps a l'IA` peut etre decoche ;
-- `Masquer les numeros de telephone avant IA` remplace les numeros detectes.
+- `Inclure l'extrait nettoyé du corps dans l'analyse IA` peut etre decoche ;
+- `Masquer les numéros de téléphone avant l'analyse IA` remplace les numeros detectes.
+
+Autres réglages de la même page :
+
+- `Délai maximal par mail`, à côté du modèle de chaque moteur (OpenAI, Ollama, Jev) :
+  au-delà, le mail reste à vérifier, sans bascule vers un autre moteur ;
+- `Seuil de confiance` (80 à 100 %) : en dessous, un mail reste à vérifier ; 80 % est
+  le minimum du contrat IA et ne peut pas être abaissé ;
+- `Horaires des rappels` : heures auxquelles MailFlow rappelle, par une notification,
+  les mails qui attendent une vérification (par défaut 09:00 et 14:00).
 
 Si le mode IA est actif mais qu'aucune cle n'est disponible, MailFlow conserve les
 lignes en verification et affiche un avertissement dans les logs.
@@ -243,7 +296,7 @@ ne garantit pas l'exactitude d'une décision.
 
 ## Mises a jour
 
-Dans `Réglages`, le bouton `Rechercher mise a jour` verifie la derniere release
+Dans `Réglages`, le bouton `Rechercher une mise à jour` verifie la derniere release
 publiee sur GitHub. Si une version plus recente existe, MailFlow propose de telecharger
 et lancer l'installateur adapte :
 
@@ -258,8 +311,9 @@ l'installateur le demande.
 
 1. Scanner le dossier Outlook projet.
 2. Verifier ou corriger la previsualisation.
-3. Cliquer sur `Exporter HTML projet`.
-4. Confirmer la mise a jour si le journal HTML existe deja.
+3. Cliquer sur `Exporter le projet en HTML`.
+4. Confirmer la mise a jour si un journal HTML existe deja : la confirmation liste
+   tous les journaux qui seront remplaces.
 
 Sortie attendue :
 
@@ -296,7 +350,7 @@ de chantier ajoutee comme fichier, restent exportees comme pieces jointes.
 
 Avant un scan manuel, une fenetre liste tous les dossiers projet Outlook trouves pour
 l'annee selectionnee. Cocher uniquement les projets a classer, ou utiliser `Tout
-selectionner` et `Tout deselectionner`. Le champ `Projet` sert de preselection lorsqu'il
+sélectionner` et `Tout désélectionner`. Le champ `Projet` sert de preselection lorsqu'il
 contient un numero, mais tous les dossiers restent visibles.
 
 Les projets archives dans Outlook, par exemple
@@ -317,6 +371,13 @@ Si la fenetre MailFlow est ouverte avec une previsualisation en cours, la survei
 se met en attente pour ne pas ecraser les corrections manuelles. Lorsqu'un nouvel
 `EntryID` Outlook apparait, MailFlow l'ajoute a la previsualisation existante sans
 reclassifier les mails deja connus.
+
+Les nouveaux mails classés avec certitude (action `Archiver`) sont **archivés
+automatiquement**, sans confirmation, et une notification l'annonce. Les autres
+restent `À vérifier` : l'icône de la zone de notification affiche leur nombre, et un
+rappel est envoyé aux heures réglées dans `Réglages`. La surveillance garde le compte,
+le dossier source et l'année avec lesquels elle a été activée ou du dernier scan :
+modifier ces champs ne change rien tant qu'un scan n'est pas relancé.
 
 Si Outlook est ferme pendant un scan, l'erreur est affichee dans les logs et la
 surveillance reprendra au scan suivant lorsque Outlook sera de nouveau disponible.

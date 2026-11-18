@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import AbstractContextManager
-from datetime import datetime
 from pathlib import Path
 
 from mailflow.models import ArchivedMailRecord
@@ -118,7 +117,3 @@ class SQLiteArchiveStore:
 
     def _connect(self) -> AbstractContextManager[sqlite3.Connection]:
         return database_connection(self.db_path)
-
-
-def utc_now_naive() -> datetime:
-    return datetime.utcnow()

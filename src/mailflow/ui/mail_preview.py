@@ -46,26 +46,6 @@ def preview_row_to_html(row: PreviewRow) -> str:
     )
 
 
-def preview_row_to_text(row: PreviewRow) -> str:
-    mail = row.mail
-    direction = "Envoye" if mail.direction == Direction.SENT else "Recu"
-    attachments = ", ".join(mail.attachment_names) if mail.attachment_names else "Aucune"
-    recipients = ", ".join(mail.recipients) if mail.recipients else "-"
-    return "\n".join(
-        [
-            f"Projet: {mail.project_number}",
-            f"Date: {mail.sent_at:%Y-%m-%d %H:%M}",
-            f"Sens: {direction}",
-            f"Expediteur: {mail.sender_name or mail.sender_email}",
-            f"Destinataires: {recipients}",
-            f"Sujet: {mail.subject}",
-            f"Pieces jointes: {attachments}",
-            "",
-            mail.body_excerpt or "(Aucun extrait disponible)",
-        ]
-    )
-
-
 def classification_highlight_terms(row: PreviewRow) -> list[str]:
     ai = row.classification.ai
     return [] if ai is None else _dedupe_terms(list(ai.evidence))

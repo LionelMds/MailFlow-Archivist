@@ -96,7 +96,7 @@ def preview_row_to_cells(row: PreviewRow) -> list[str]:
         mail.sender_name or mail.sender_email,
         mail.subject,
         (
-            "A choisir"
+            "À choisir"
             if decision.mail_type == MailType.A_VERIFIER
             else routing_category_for_mail_type(decision.mail_type).value
         ),
@@ -105,28 +105,6 @@ def preview_row_to_cells(row: PreviewRow) -> list[str]:
         f"{decision.confidence:.0%}",
         ACTION_LABELS[row.action],
     ]
-
-
-def standard_mail_type_for_display(mail_type: MailType) -> MailType:
-    if mail_type in {MailType.DEMANDE_DE_PRIX, MailType.DEVIS}:
-        return MailType.DEMANDE_DE_PRIX
-    if mail_type in {
-        MailType.FACTURE,
-        MailType.TECHNIQUE,
-        MailType.PLAN,
-        MailType.LIVRAISON,
-        MailType.ADMINISTRATIF,
-    }:
-        return MailType.CORRESPONDANCE_GENERALE
-    return mail_type
-
-
-def mail_type_from_display(value: str) -> MailType:
-    return {
-        RoutingCategory.CORRESPONDANCE.value: MailType.CORRESPONDANCE_GENERALE,
-        RoutingCategory.DEMANDE_DE_PRIX.value: MailType.DEMANDE_DE_PRIX,
-        RoutingCategory.COMMANDE.value: MailType.COMMANDE,
-    }[value]
 
 
 class PreviewTableProtocol(Protocol):

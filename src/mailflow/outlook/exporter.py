@@ -54,8 +54,10 @@ class OutlookExporter:
         if msg_path.exists() and not overwrite_msg:
             raise FileExistsError(msg_path)
 
+        # A staging file still held by OneDrive or an antivirus must not turn a
+        # published export into a failure: the next attempt would archive a copy.
         with tempfile.TemporaryDirectory(
-            prefix=".mailflow-export-", dir=msg_path.parent,
+            prefix=".mailflow-export-", dir=msg_path.parent, ignore_cleanup_errors=True,
         ) as temp_dir:
             staged_msg = Path(temp_dir) / msg_path.name
             item.SaveAs(str(staged_msg), OL_MSG)
@@ -87,6 +89,7 @@ class OutlookExporter:
             resolved_target = _resolve_attachment_conflict(target, attachment_policy)
             if resolved_target is None:
                 continue
+            # A failure here cancels the whole export: no partial archive is published.
             attachment.SaveAsFile(str(resolved_target))
             if resolved_target not in saved:
                 saved.append(resolved_target)

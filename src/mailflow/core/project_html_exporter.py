@@ -39,6 +39,14 @@ class HtmlInlineImage:
     data_uri: str
 
 
+class ProjectHtmlExistsError(FileExistsError):
+    """Journals that an export would replace; all of them, so that all get confirmed."""
+
+    def __init__(self, paths: Sequence[Path]) -> None:
+        super().__init__(str(paths[0]))
+        self.paths = tuple(paths)
+
+
 @dataclass(frozen=True)
 class ProjectHtmlExportResult:
     project_number: str
@@ -71,9 +79,9 @@ def export_project_correspondence_html(
         project_number: _project_html_path(projects_root, project_number)
         for project_number in grouped
     }
-    for path in planned_paths.values():
-        if path.exists() and not overwrite_html:
-            raise FileExistsError(path)
+    existing = [path for _number, path in sorted(planned_paths.items()) if path.exists()]
+    if existing and not overwrite_html:
+        raise ProjectHtmlExistsError(existing)
 
     return [
         _export_one_project(

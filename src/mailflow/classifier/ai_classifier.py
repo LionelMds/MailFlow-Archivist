@@ -169,7 +169,20 @@ def _connection_test_mail() -> MailMetadata:
     )
 
 
+LOCAL_STATUS_MESSAGES = {
+    401: "clé refusée. Vérifiez la clé API dans Réglages.",
+    403: "accès refusé au modèle. Vérifiez les droits de la clé.",
+    404: "modèle indisponible. Vérifiez le nom du modèle.",
+    429: "quota ou limite de débit atteint.",
+}
+
+
 def _safe_error_message(exc: Exception, *, secret: str) -> str:
+    # An API answer may quote a fragment of the key or of the request: for the known
+    # HTTP errors, only a locally written explanation is shown.
+    local = LOCAL_STATUS_MESSAGES.get(getattr(exc, "status_code", None) or 0)
+    if local is not None:
+        return f"Echec OpenAI: {local}"
     message = str(exc).strip() or exc.__class__.__name__
     if secret:
         message = message.replace(secret, "[cle masquee]")

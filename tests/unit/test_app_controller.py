@@ -710,6 +710,54 @@ def test_controller_adds_and_deletes_directory_organization(tmp_path: Path) -> N
     assert directory_store.deleted == organization_id
 
 
+def test_renaming_a_directory_company_renames_the_folder_of_its_mails(tmp_path: Path) -> None:
+    class RenamingDirectoryStore(FakeDirectoryStore):
+        def rename_organization(self, organization_id: int, name: str) -> None:
+            super().rename_organization(organization_id, name)
+            self.domain_map["gva.ch"] = name
+
+    directory_store = RenamingDirectoryStore()
+    directory_store.domain_map["gva.ch"] = "AIG"
+    directory_store.global_roles[1] = InterlocutorType.CLIENT
+    base = make_row(tmp_path)
+    mail = make_mail().model_copy(
+        update={"sender_name": "Chef", "sender_email": "chef@gva.ch"}
+    )
+    decision = base.decision.model_copy(
+        update={
+            "mail_type": MailType.CORRESPONDANCE_GENERALE,
+            "interlocutor": InterlocutorType.CLIENT,
+            "target_relative_folder": "Correspondance/AIG",
+            "target_path": tmp_path / "2025" / "2025-4893" / "Correspondance" / "AIG",
+        }
+    )
+    archived = base.model_copy(
+        update={
+            "mail": mail.model_copy(update={"entry_id": "ENTRY-2"}),
+            "decision": decision.model_copy(update={"mail_id": "ENTRY-2"}),
+            "action": PreviewAction.ARCHIVED,
+        }
+    )
+    controller = AppController(
+        scan_service=FakeScanService([]),
+        preview_pipeline=FakePreviewPipeline([]),
+        projects_root=tmp_path,
+        report_dir=tmp_path,
+        directory_store=directory_store,
+    )
+    pending = base.model_copy(update={"mail": mail, "decision": decision})
+    controller.preview_rows = [pending, archived]
+
+    updated = controller.rename_directory_organization(1, "Aeroport de Geneve")
+
+    assert updated[0].decision.target_relative_folder == "Correspondance/Aeroport de Geneve"
+    assert updated[0].decision.target_path == (
+        tmp_path / "2025" / "2025-4893" / "Correspondance" / "Aeroport de Geneve"
+    )
+    # An archived mail keeps the folder where its file already lives.
+    assert updated[1].decision.target_relative_folder == "Correspondance/AIG"
+
+
 def test_controller_applies_global_directory_role_to_preview_rows(tmp_path: Path) -> None:
     directory_store = FakeDirectoryStore()
     directory_store.domain_map["gva.ch"] = "AIG"

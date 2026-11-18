@@ -47,8 +47,14 @@ def apply_manual_classification(
         msg = f"Destination manuelle invalide: {update.target_relative_folder}"
         raise ValueError(msg)
 
+    # The company folder follows the role just chosen: "interne" means Balzmetal.
+    chosen_row = row.model_copy(
+        update={
+            "decision": row.decision.model_copy(update={"interlocutor": update.interlocutor})
+        }
+    )
     target_relative_folder = resolve_manual_target_folder(
-        row,
+        chosen_row,
         update.target_relative_folder,
         organization_directory=organization_directory,
     )
@@ -82,7 +88,7 @@ def apply_manual_classification(
         misleading_term=None,
         manual_required=False,
         created_at=now or datetime.now(UTC),
-        organization_name=company_folder_for_row(row, organization_directory),
+        organization_name=company_folder_for_row(chosen_row, organization_directory),
         primary_email=primary_external_email(row.mail),
     )
     return updated_row, signal
@@ -91,7 +97,8 @@ def apply_manual_classification(
 def _normalized_business_update(
     update: ManualClassificationUpdate,
 ) -> ManualClassificationUpdate:
-    if update.interlocutor == InterlocutorType.CLIENT:
+    # A client and a colleague both go to Correspondance, whatever the phase chosen.
+    if update.interlocutor in {InterlocutorType.CLIENT, InterlocutorType.INTERNE}:
         return update.model_copy(
             update={
                 "mail_type": MailType.CORRESPONDANCE_GENERALE,
@@ -141,7 +148,7 @@ def suggested_manual_destination(
         if mail_type == MailType.DEMANDE_DE_PRIX:
             return SUPPLIER_REQUEST_FOLDER
         return "A verifier"
-    if interlocutor == InterlocutorType.CLIENT:
+    if interlocutor in {InterlocutorType.CLIENT, InterlocutorType.INTERNE}:
         return CORRESPONDENCE_FOLDER
     return "A verifier"
 

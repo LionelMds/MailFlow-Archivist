@@ -38,13 +38,18 @@ def preview_row_to_report_record(row: PreviewRow) -> dict[str, str]:
         "project": mail.project_number,
         "sent_at": mail.sent_at.isoformat(),
         "direction": mail.direction.value,
-        "sender": mail.sender_email or mail.sender_name,
-        "subject": mail.subject,
+        "sender": _text_cell(mail.sender_email or mail.sender_name),
+        "subject": _text_cell(mail.subject),
         "mail_type": decision.mail_type.value,
         "interlocutor": decision.interlocutor.value,
-        "target_folder": decision.target_relative_folder,
+        "target_folder": _text_cell(decision.target_relative_folder),
         "confidence": f"{decision.confidence:.2f}",
         "action": row.action.value,
         "duplicate_status": decision.duplicate_status,
-        "reason": decision.reason,
+        "reason": _text_cell(decision.reason),
     }
+
+
+def _text_cell(value: str) -> str:
+    """Keep a text that comes from a mail from being run as a formula by Excel."""
+    return f"'{value}" if value.startswith(("=", "+", "-", "@", "\t", "\r")) else value

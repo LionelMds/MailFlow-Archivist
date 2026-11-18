@@ -12,6 +12,7 @@ selected automatically: the user decides.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -36,6 +37,8 @@ from mailflow.outlook.mailbox import (
 )
 
 MAX_PROJECT_CANDIDATES = 12
+# ProjectFlow only knows numbers written AAAA-NNNN (see docs/projectflow.md).
+PROJECTFLOW_NUMBER_RE = re.compile(r"^20\d{2}-\d{4}$")
 
 # Called with (current, total, message); returning False stops the analysis.
 MailboxProgress = Callable[[int, int, str], bool]
@@ -215,17 +218,23 @@ def replan_proposal(
     if not proposal.references or proposal.status == SortStatus.UNREADABLE:
         return proposal
     status, destinations, missing, note = _routing(proposal.references, project_folders)
+    if status == SortStatus.NO_NUMBER:
+        # Only a year range was found: keep a Jev suggestion and its note as they are.
+        return proposal
     return replace(
         proposal, status=status, destinations=destinations, missing_numbers=missing, note=note,
     )
 
 
 def missing_project_numbers(analysis: MailboxAnalysis) -> list[str]:
-    """Numbers quoted in mails whose Outlook project folder does not exist."""
+    """Numbers quoted in mails that ProjectFlow can be asked to create a folder for."""
     numbers: dict[str, None] = {}
     for proposal in analysis.proposals:
         for number in proposal.missing_numbers:
-            numbers.setdefault(number, None)
+            # An invoice or order number shaped like a project is never sent: one
+            # refused number would make ProjectFlow reject the whole request.
+            if PROJECTFLOW_NUMBER_RE.fullmatch(number):
+                numbers.setdefault(number, None)
     return list(numbers)
 
 

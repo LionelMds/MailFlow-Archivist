@@ -4,16 +4,18 @@
 
 MailFlow Archivist est une application desktop Windows pour preparer et archiver les e-mails Outlook classes par projet vers les dossiers locaux Balz Metal Sa.
 
-Le MVP est non destructif :
+MailFlow est non destructif :
 
 - aucun mail Outlook n'est supprime ;
 - aucun fichier existant n'est ecrase sans confirmation explicite ;
-- les decisions passent par une previsualisation ;
+- les decisions passent par une previsualisation ; seule la surveillance Outlook, si
+  elle est activee, archive sans confirmation les nouveaux mails deja classes avec
+  certitude ;
 - SQLite garde une trace des mails archives pour eviter les doublons.
 
-## Etat de cette base
+## Fonctionnalites
 
-Cette premiere tranche met en place :
+L'application comprend :
 
 - architecture `src/mailflow` ;
 - modeles metier typés avec `pydantic` ;
@@ -35,14 +37,16 @@ Cette premiere tranche met en place :
 - logo officiel MailFlow utilise dans l'application, l'icone Windows et l'app macOS ;
 - resume projet automatique dans l'inspecteur et dans le journal HTML ;
 - export HTML projet centralise dans `Correspondance` avec pieces jointes liees ;
-- surveillance Outlook par scan regulier avec confirmation avant mise a jour HTML ;
+- surveillance Outlook par scan regulier : les nouveaux mails prets sont archives
+  automatiquement, les autres attendent une verification, avec rappels aux heures
+  choisies ;
 - export CSV de rapport sans corps de mails ;
 - interface PySide6 avec recherche, filtres de statut et aperçu de lecture ;
 - tests unitaires et smoke tests.
 
 ## Export HTML projet
 
-Le bouton `Exporter HTML projet` cree un journal par projet scanne :
+Le bouton `Exporter le projet en HTML` cree un journal par projet scanne :
 
 ```text
 [Projet]\Correspondance\2025-4893 - Correspondance projet.html
@@ -123,7 +127,7 @@ L'annuaire fixe l'entreprise et son role global. L'IA choisit uniquement entre
 et les corrections manuelles verifiees lui sont transmis comme contexte. Une
 correction apprend une decision complete, jamais un terme isole.
 
-Le moteur se choisit dans `Réglages` : **OpenAI (API)**, **Ollama (local)** ou
+Le moteur se choisit dans `Réglages` : **OpenAI — API**, **Ollama — IA locale sur ce PC** ou
 **Jev (TypeSafe)**.
 Ollama utilise un modèle installé sur le PC sans clé API ; les mails restent sur cette
 machine. Le modèle local proposé est **Qwen3.5 4B** (`qwen3.5:4b`). Le bouton
@@ -152,14 +156,14 @@ sont temporairement désactivées.
 Au chargement d'une ancienne configuration, l'ancien défaut `gpt-5.4-nano` est migré
 vers Astra. Un autre modèle configuré et le mode IA désactivé sont conservés. La
 sauvegarde des réglages mémorise cette migration ; le sélecteur reste modifiable.
-L'accès au modèle dépend du compte OpenAI et se vérifie avec `Tester IA`.
+L'accès au modèle dépend du compte OpenAI et se vérifie avec `Tester OpenAI`.
 
 Les échecs IA restent en vérification manuelle avec une explication visible. Aucun
 classement par mots-clés ne remplace une réponse manquante. Les requêtes utilisent
 `store=False` ; cela ne constitue pas une garantie de rétention nulle chez le fournisseur.
 
 La cle OpenAI est enregistree dans le coffre du systeme via `keyring`, jamais dans le
-fichier JSON ni dans les logs. Le bouton `Tester IA` lance un mini appel structure sur
+fichier JSON ni dans les logs. Le bouton `Tester OpenAI` lance un mini appel structure sur
 un mail fictif et affiche un statut colore. L'option d'envoi du corps peut etre
 desactivee pour n'envoyer que sujet, metadonnees et noms des pieces jointes.
 
@@ -231,18 +235,20 @@ sa propre entreprise ; les mails archives ne sont jamais modifies.
 ## Commandes utiles
 
 ```powershell
-python -m pip install -e ".[dev]"
-python -m pytest
-python -m ruff check .
-python -m mypy src tests
-python -m mailflow --diagnose-outlook
-python -m mailflow --import-contact-directory --account "prenom.nom@balzmetal.ch" --outlook-root "Boite de reception"
+.\.venv312\Scripts\python.exe -m pip install -e ".[dev]"
+$env:QT_QPA_PLATFORM = 'offscreen'
+.\.venv312\Scripts\python.exe -m pytest -q
+.\.venv312\Scripts\python.exe -m ruff check .
+.\.venv312\Scripts\python.exe -m mypy src tests
+.\.venv312\Scripts\python.exe -m mailflow --diagnose-outlook
+.\.venv312\Scripts\python.exe -m mailflow --import-contact-directory --account "prenom.nom@balzmetal.ch" --outlook-root "Boite de reception"
 ```
 
-Sur ce poste, si `python` pointe vers l'alias Microsoft Store, utiliser un Python 3.11+ explicite ou le runtime configure dans Codex.
+Sur ce poste, `python` peut pointer vers l'alias Microsoft Store : utiliser l'environnement `.venv312` comme ci-dessus.
 
-La [revue du projet](docs/project-review.md) décrit l'architecture, les corrections,
-les contrôles et les limites de validation. Le [guide utilisateur](docs/user-guide.md)
+L'[architecture](docs/architecture.md) décrit les modules ; la
+[revue du projet](docs/project-review.md) consigne les corrections, les contrôles et
+les limites connues. Le [guide utilisateur](docs/user-guide.md)
 présente le parcours et les réglages. Les pushes sur `main` et les pull requests
 déclenchent désormais tests, Ruff et mypy sur Windows et macOS, sans publier de release.
 
@@ -254,7 +260,7 @@ directement utilisables :
 - Windows : `MailFlow-Archivist-Setup.exe` ;
 - macOS : `MailFlow-Archivist.dmg`.
 
-Dans l'application, le bouton `Rechercher mise a jour` interroge la derniere release
+Dans l'application, le bouton `Rechercher une mise à jour` interroge la derniere release
 GitHub, telecharge l'installateur adapte a la plateforme et le lance apres confirmation.
 
 Pour publier une release :

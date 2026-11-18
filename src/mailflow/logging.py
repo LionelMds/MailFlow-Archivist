@@ -1,18 +1,42 @@
 from __future__ import annotations
 
 import logging
+import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+
+REDACTED = "[secret masque]"
+# Key-shaped values only: a file named "Risk-analyse.msg" is not a secret.
+SECRET_PATTERNS = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}"),
+    re.compile(r"(?i)\b(?:api[_-]?key|authorization)\b[\"']?\s*[:=]\s*[\"']?[^\s\"',;]{12,}"),
+)
+
+
+def redact_secrets(text: str) -> str:
+    for pattern in SECRET_PATTERNS:
+        text = pattern.sub(REDACTED, text)
+    return text
 
 
 class SecretRedactionFilter(logging.Filter):
+    """Mask key-shaped values in a log message, keeping the rest of the line."""
+
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
-        if "sk-" in message:
-            record.msg = "[redacted log message containing potential secret]"
+        redacted = redact_secrets(message)
+        if redacted != message:
+            record.msg = redacted
             record.args = ()
         return True
+
+
+class SecretRedactionFormatter(logging.Formatter):
+    """Also mask what the filter cannot see: tracebacks and exception texts."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_secrets(super().format(record))
 
 
 def configure_logging(log_dir: Path) -> None:
@@ -24,29 +48,7 @@ def configure_logging(log_dir: Path) -> None:
         encoding="utf-8",
     )
     handler.addFilter(SecretRedactionFilter())
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        handlers=[handler],
-        force=True,
+    handler.setFormatter(
+        SecretRedactionFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
     )
-    try:
-        import structlog
-
-        structlog.configure(
-            wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-            logger_factory=structlog.stdlib.LoggerFactory(),
-            cache_logger_on_first_use=True,
-        )
-    except Exception:
-        logging.getLogger(__name__).debug("structlog unavailable; using stdlib logging only")
-
-
-def get_logger(name: str) -> Any:
-    try:
-        import structlog
-
-        return structlog.get_logger(name)
-    except Exception:
-        return logging.getLogger(name)
-
+    logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)

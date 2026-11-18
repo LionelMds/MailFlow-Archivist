@@ -66,6 +66,11 @@ class OutlookScanService:
         self.folder_resolver = folder_resolver
         self.scanner = scanner
 
+    @property
+    def unreadable_count(self) -> int:
+        """Mails skipped since the start because Outlook could not read them."""
+        return int(getattr(self.scanner, "unreadable_count", 0))
+
     def scan(self, request: ScanRequest) -> list[MailMetadata]:
         return [scanned.metadata for scanned in self.scan_with_items(request)]
 

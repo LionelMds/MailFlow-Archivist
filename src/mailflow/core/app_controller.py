@@ -13,6 +13,7 @@ from mailflow.classifier.decision_engine import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     decide_archive,
     destination_for,
+    internal_mail_rule,
 )
 from mailflow.classifier.jev_classifier import JevClassifier
 from mailflow.classifier.jev_project_matcher import JevProjectMatcher
@@ -262,6 +263,8 @@ class AppController:
         self.preview_rows: list[PreviewRow] = []
         self.outlook_items: dict[str, object] = {}
         self.last_scan_directory_update: ScanDirectoryUpdate | None = None
+        # Mails of the last scan that Outlook could not read and that were skipped.
+        self.last_scan_unreadable_count = 0
         self.last_directory_role_change: DirectoryRoleChange | None = None
         self.mailbox_service = mailbox_service
         self.mailbox_analysis: MailboxAnalysis | None = None
@@ -275,6 +278,7 @@ class AppController:
         normalized = _normalize_preview_request(request)
         if progress_callback is not None:
             progress_callback("Lecture Outlook en cours...")
+        unreadable_before = self._unreadable_count()
         scanned = self.scan_service.scan_with_items(
             ScanRequest(
                 account_identifier=normalized.account_identifier,
@@ -284,6 +288,7 @@ class AppController:
                 project_numbers=normalized.project_numbers,
             )
         )
+        self.last_scan_unreadable_count = max(0, self._unreadable_count() - unreadable_before)
         mails = [item.metadata for item in scanned]
         # Before classification, so newly seen companies already name their folders.
         self._record_scanned_contacts(mails)
@@ -304,6 +309,10 @@ class AppController:
         if progress_callback is not None:
             progress_callback(f"{len(self.preview_rows)} mail(s) prets.")
         return self.preview_rows
+
+    def _unreadable_count(self) -> int:
+        count = getattr(self.scan_service, "unreadable_count", 0)
+        return count if isinstance(count, int) else 0
 
     def available_project_folders(
         self,
@@ -754,7 +763,7 @@ class AppController:
         )
 
     def directory_role_suggestions(self) -> dict[int, RoleSuggestion]:
-        """Suggested roles for companies whose directory role is not client or supplier."""
+        """Suggested roles for companies that have no role in the directory yet."""
         store = self.directory_store
         find_organization = getattr(store, "organization_id_for_email", None)
         if store is None or not callable(find_organization):
@@ -772,7 +781,8 @@ class AppController:
             known = {
                 entry.organization_id
                 for entry in store.list_organizations()
-                if entry.default_role in BUSINESS_ROLES
+                # A role chosen by hand, even "intervenant externe", is never suggested over.
+                if entry.default_role != InterlocutorType.INCONNU
             }
         except (sqlite3.Error, OSError):
             logger.warning("Suggestions de role indisponibles", exc_info=True)
@@ -783,23 +793,26 @@ class AppController:
             if organization_id not in known
         }
 
-    def delete_directory_organization(self, organization_id: int) -> None:
+    def delete_directory_organization(self, organization_id: int) -> list[PreviewRow]:
         if self.directory_store is None:
             msg = "Aucun annuaire n'est configure"
             raise RuntimeError(msg)
         self.directory_store.delete_organization(organization_id)
+        return self.refresh_directory_roles()
 
-    def rename_directory_organization(self, organization_id: int, name: str) -> None:
+    def rename_directory_organization(self, organization_id: int, name: str) -> list[PreviewRow]:
         if self.directory_store is None:
             msg = "Aucun annuaire n'est configure"
             raise RuntimeError(msg)
         self.directory_store.rename_organization(organization_id, name)
+        # The company folder of the mails still to archive follows the directory name.
+        return self.refresh_directory_roles()
 
     def merge_directory_organizations(
         self,
         source_organization_id: int,
         target_organization_id: int,
-    ) -> None:
+    ) -> list[PreviewRow]:
         if self.directory_store is None:
             msg = "Aucun annuaire n'est configure"
             raise RuntimeError(msg)
@@ -807,6 +820,7 @@ class AppController:
             source_organization_id,
             target_organization_id,
         )
+        return self.refresh_directory_roles()
 
     def current_project_number(self) -> str | None:
         for row in self.preview_rows:
@@ -1147,9 +1161,19 @@ def _row_with_directory_role(
     # A row that already has this role keeps its decision, renamed folders included.
     if role is None or role == row.decision.interlocutor:
         return row
+    if role == InterlocutorType.INTERNE and MANUAL_DECISION_REASON not in row.decision.reason:
+        return _row_as_internal(
+            row, projects_root, confidence_threshold=confidence_threshold,
+        )
     estimate = row.classification.role_estimate
     answer = estimate.classifications.get(role.value) if estimate is not None else None
-    if answer is not None and row.decision.reason != MANUAL_DECISION_REASON:
+    if answer is None and role == InterlocutorType.CLIENT:
+        # A client always goes to Correspondance: the engine answer already received
+        # is enough, whichever engine gave it. A supplier without a Jev estimate keeps
+        # its review, because that answer was given while the role was unknown.
+        answer = row.classification.ai
+    # The reason of a manual choice receives suffixes: compare its beginning only.
+    if answer is not None and MANUAL_DECISION_REASON not in row.decision.reason:
         return _row_from_role_answer(
             row, answer, role, directory_store, projects_root,
             confidence_threshold=confidence_threshold,
@@ -1176,6 +1200,45 @@ def _row_with_directory_role(
     )
     return row.model_copy(
         update={
+            "decision": decision,
+            "action": (
+                PreviewAction.IGNORE
+                if row.action == PreviewAction.IGNORE
+                else action_from_decision(
+                    archive=decision.archive,
+                    requires_review=decision.requires_review,
+                )
+            ),
+        }
+    )
+
+
+def _row_as_internal(
+    row: PreviewRow,
+    projects_root: Path,
+    *,
+    confidence_threshold: float,
+) -> PreviewRow:
+    """Route a mail whose company became internal in the directory, like the pipeline."""
+    rule = internal_mail_rule()
+    decision = decide_archive(
+        row.mail,
+        projects_root=projects_root,
+        rule=rule,
+        confidence_threshold=confidence_threshold,
+    )
+    decision = decision.model_copy(
+        update={
+            "reason": _append_directory_role_reason(decision.reason, InterlocutorType.INTERNE)
+        }
+    )
+    # The engine answer was given for an unknown role: it no longer describes the row.
+    classification = row.classification.model_copy(
+        update={"rule": rule, "ai": None, "ai_error": None, "role_estimate": None}
+    )
+    return row.model_copy(
+        update={
+            "classification": classification,
             "decision": decision,
             "action": (
                 PreviewAction.IGNORE

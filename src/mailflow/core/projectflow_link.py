@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 PROTOCOL_VERSION = 1
 ENSURE_OUTLOOK_FOLDERS = "ensure_outlook_folders"
@@ -194,7 +194,10 @@ class ProjectFlowLink:
         return merged
 
     def _request(self, numbers: list[str]) -> ProjectFlowResult:
-        with tempfile.TemporaryDirectory(prefix="mailflow-projectflow-") as temp_dir:
+        # ProjectFlow may still hold a file after a timeout: never fail on cleanup.
+        with tempfile.TemporaryDirectory(
+            prefix="mailflow-projectflow-", ignore_cleanup_errors=True,
+        ) as temp_dir:
             request_path = Path(temp_dir) / "demande.json"
             result_path = Path(temp_dir) / "resultat.json"
             request_path.write_text(
@@ -231,7 +234,8 @@ class ProjectFlowLink:
                 result = ProjectFlowResult.model_validate_json(
                     result_path.read_text(encoding="utf-8")
                 )
-            except (OSError, ValidationError) as exc:
+            except (OSError, ValueError) as exc:
+                # ValueError covers a malformed JSON, a wrong encoding and a wrong shape.
                 raise ProjectFlowError("Réponse de ProjectFlow illisible.") from exc
         if result.protocol != PROTOCOL_VERSION:
             raise ProjectFlowError(

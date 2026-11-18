@@ -7,8 +7,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from mailflow.core.domains import (
+    INTERNAL_COMPANY_FOLDER,
+    LEGAL_SUFFIXES,
+    is_internal_contact,
+    is_internal_domain,
+    is_internal_mail,
+)
+from mailflow.core.forwarded_mail import forwarded_counterparty_email
 from mailflow.core.project_paths import local_project_path
-from mailflow.models import Direction, PreviewAction, PreviewRow
+from mailflow.models import (
+    Direction,
+    InterlocutorType,
+    MailMetadata,
+    PreviewAction,
+    PreviewRow,
+)
 
 CORRESPONDENCE_FOLDER = "Correspondance"
 SUPPLIER_ROOT_FOLDER = "Fournisseurs"
@@ -17,8 +31,6 @@ SUPPLIER_ORDER_LABEL = "Commande"
 SUPPLIER_REQUEST_FOLDER = f"{SUPPLIER_ROOT_FOLDER}/{SUPPLIER_REQUEST_LABEL}"
 SUPPLIER_ORDER_FOLDER = f"{SUPPLIER_ROOT_FOLDER}/{SUPPLIER_ORDER_LABEL}"
 UNKNOWN_COMPANY = "Interlocuteur inconnu"
-INTERNAL_DOMAINS = ("balzmetal.ch",)
-LEGAL_SUFFIXES = {"ag", "gmbh", "sa", "sarl", "sagl", "ltd", "llc", "inc", "spa", "srl"}
 GENERIC_CONTACT_WORDS = {"contact", "info", "office", "sales", "vente", "bureau"}
 INVALID_PATH_CHARS = '<>:"/\\|?*'
 SPECIAL_FOLDERS = {"A verifier", "Ne pas archiver"}
@@ -55,30 +67,69 @@ def apply_correspondence_hierarchy(
     ]
 
 
+def is_internal_row(row: PreviewRow) -> bool:
+    """Internal by its addresses, by the directory role or by a manual choice.
+
+    A colleague's transfer of an external mail is about that external party: only the
+    directory role or a manual choice makes it internal.
+    """
+    if row.decision.interlocutor == InterlocutorType.INTERNE:
+        return True
+    return (
+        is_internal_mail(row.mail.sender_email, row.mail.recipients)
+        and forwarded_counterparty_email(row.mail) is None
+    )
+
+
+def company_for_mail(
+    mail: MailMetadata,
+    organization_directory: OrganizationDirectoryProtocol | None = None,
+) -> str:
+    direction, sender_name, sender_email, recipients = _company_fields(mail)
+    return company_from_mail(
+        direction,
+        sender_name,
+        sender_email,
+        recipients,
+        organization_directory=organization_directory,
+    )
+
+
 def company_folder_for_row(
     row: PreviewRow,
     organization_directory: OrganizationDirectoryProtocol | None = None,
 ) -> str:
-    return company_from_mail(
-        row.mail.direction,
-        row.mail.sender_name,
-        row.mail.sender_email,
-        row.mail.recipients,
-        organization_directory=organization_directory,
-    )
+    if is_internal_row(row):
+        return INTERNAL_COMPANY_FOLDER
+    return company_for_mail(row.mail, organization_directory)
 
 
 def company_key_for_row(
     row: PreviewRow,
     organization_directory: OrganizationDirectoryProtocol | None = None,
 ) -> str:
+    if is_internal_row(row):
+        return INTERNAL_COMPANY_FOLDER.casefold()
+    direction, sender_name, sender_email, recipients = _company_fields(row.mail)
     return company_key_from_mail(
-        row.mail.direction,
-        row.mail.sender_name,
-        row.mail.sender_email,
-        row.mail.recipients,
+        direction,
+        sender_name,
+        sender_email,
+        recipients,
         organization_directory=organization_directory,
     )
+
+
+def _company_fields(mail: MailMetadata) -> tuple[Direction, str, str, Sequence[str]]:
+    """Whose company names the folder.
+
+    For an external mail forwarded between colleagues it is the author of the forwarded
+    message, read as if that author had written to Balz Metal directly.
+    """
+    forwarded = forwarded_counterparty_email(mail)
+    if forwarded is not None:
+        return Direction.RECEIVED, "", forwarded, ()
+    return mail.direction, mail.sender_name, mail.sender_email, mail.recipients
 
 
 def company_from_mail(
@@ -106,14 +157,16 @@ def company_key_from_mail(
     recipients: Sequence[str],
     organization_directory: OrganizationDirectoryProtocol | None = None,
 ) -> str:
-    if direction == Direction.SENT:
+    if is_internal_mail(sender_email, recipients):
+        return INTERNAL_COMPANY_FOLDER.casefold()
+    if _counterparty_is_recipient(direction, sender_email):
         for recipient in recipients:
-            if not _is_internal_contact(recipient):
+            if not is_internal_contact(recipient):
                 return _company_key_from_contact(
                     recipient,
                     organization_directory=organization_directory,
                 )
-    if sender_email and not _is_internal_contact(sender_email):
+    if sender_email and not is_internal_contact(sender_email):
         return _company_key_from_contact(
             sender_email,
             organization_directory=organization_directory,
@@ -157,6 +210,13 @@ def _folder_plan(
             plan[row.mail.entry_id] = HierarchicalFolder(
                 company,
                 target_relative_folder,
+            )
+            continue
+        if is_internal_row(row):
+            # Never grouped with a company: the folder name is fixed.
+            plan[row.mail.entry_id] = HierarchicalFolder(
+                INTERNAL_COMPANY_FOLDER,
+                _standard_relative_folder(target_relative_folder, INTERNAL_COMPANY_FOLDER),
             )
             continue
         company_key = company_key_for_row(row, organization_directory)
@@ -250,17 +310,23 @@ def _company_candidates_from_mail(
     recipients: Sequence[str],
     organization_directory: OrganizationDirectoryProtocol | None = None,
 ) -> list[CompanyCandidate]:
-    if direction == Direction.SENT:
-        candidates: list[CompanyCandidate] = []
+    if is_internal_mail(sender_email, recipients):
+        # Whatever the address used (balzmetal.ch, onmicrosoft.com), one single folder.
+        return [CompanyCandidate(INTERNAL_COMPANY_FOLDER, -2)]
+    if _counterparty_is_recipient(direction, sender_email):
+        # The first external recipient is the counterparty that fixes the role: the
+        # folder must carry its company, not the one of a recipient in copy.
         for recipient in recipients:
-            if not _is_internal_contact(recipient):
-                candidates.extend(
-                    _company_candidates_from_contact(
-                        recipient,
-                        organization_directory=organization_directory,
-                    )
-                )
-        return candidates or [CompanyCandidate(UNKNOWN_COMPANY, 99)]
+            if is_internal_contact(recipient):
+                continue
+            candidates = _company_candidates_from_contact(
+                recipient,
+                organization_directory=organization_directory,
+            )
+            if any(candidate.name != UNKNOWN_COMPANY for candidate in candidates):
+                return candidates
+        if direction == Direction.SENT:
+            return [CompanyCandidate(UNKNOWN_COMPANY, 99)]
     return _company_candidates_from_contact(
         sender_name,
         sender_email,
@@ -403,10 +469,7 @@ def _best_company_display(
         candidate
         for row in rows
         for candidate in _company_candidates_from_mail(
-            row.mail.direction,
-            row.mail.sender_name,
-            row.mail.sender_email,
-            row.mail.recipients,
+            *_company_fields(row.mail),
             organization_directory=organization_directory,
         )
     ]
@@ -425,6 +488,9 @@ def _format_company_word(word: str) -> str:
     return word.capitalize()
 
 
-def _is_internal_contact(contact: str) -> bool:
-    lowered = contact.lower()
-    return any(domain in lowered for domain in INTERNAL_DOMAINS)
+def _counterparty_is_recipient(direction: Direction, sender_email: str) -> bool:
+    """A mail sent by Balz Metal, even read from a colleague's copy, is about its recipient."""
+    if direction == Direction.SENT:
+        return True
+    domain = sender_email.rsplit("@", 1)[-1].strip(". ") if "@" in sender_email else ""
+    return bool(domain) and is_internal_domain(domain)

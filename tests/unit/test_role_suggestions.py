@@ -308,7 +308,9 @@ def test_directory_tab_validates_one_suggestion_or_all_confident_ones(
     assert directory.cellWidget(gyso_row, DIRECTORY_SUGGESTION_COLUMN) is None
     assert window.mailflow_validate_suggestions_button.text().endswith("(1)")
     assert app.preview_rows[0].action == PreviewAction.ARCHIVE
-    assert "1 prêt(s) à archiver" in window.mailflow_directory_status_label.text()
+    # The mail of Client SA, a client of the directory, is routed by its role alone.
+    assert app.preview_rows[1].decision.target_relative_folder == "Correspondance/Client SA"
+    assert "2 prêt(s) à archiver" in window.mailflow_directory_status_label.text()
 
     questions: list[str] = []
 

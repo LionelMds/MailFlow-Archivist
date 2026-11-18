@@ -23,7 +23,16 @@ La CI (`.github/workflows/ci.yml`) lance ces trois contrôles sur Windows et mac
 - Non destructif : aucun mail Outlook supprimé, aucun fichier écrasé sans confirmation.
 - Trois catégories seulement : `Correspondance`, `Demande de prix`, `Commande`.
   L'annuaire fixe l'entreprise et son rôle ; l'IA ne choisit que la phase commerciale.
-- Un client va toujours en Correspondance, un fournisseur jamais.
+- Un client va toujours en Correspondance, un fournisseur jamais. Pour un client de
+  l'annuaire, `apply_routing_guardrails` fixe la confiance à 1 quel que soit le moteur.
+- Un mail interne (expéditeur et destinataires tous internes, `core.domains.is_internal_mail`,
+  ou entreprise au rôle `interne` dans l'annuaire) va toujours dans
+  `Correspondance/Balzmetal`, sans appel IA. Une seule adresse externe suffit à en faire
+  un échange externe ; une adresse citée dans le corps ne compte pas.
+- Seule exception : le transfert entre collègues d'un mail externe (`core/forwarded_mail.py`,
+  objet `TR:`/`FW:`/`WG:` et bloc `De / Envoyé / À / Objet` lu au scan). Son interlocuteur
+  est l'auteur externe du message transféré ; le mail suit alors le circuit ordinaire
+  (annuaire, moteur, garde-fous). Une réponse `RE:` entre collègues reste interne.
 - Aucun classement de secours par mots-clés ; un échec IA laisse le mail à vérifier.
 - Une panne d'un moteur (OpenAI, Ollama, Jev) ne bascule jamais vers un autre.
 - Les clés OpenAI et Jev restent dans `keyring`, jamais dans `config.json` ni dans les logs.
@@ -51,5 +60,10 @@ La CI (`.github/workflows/ci.yml`) lance ces trois contrôles sur Windows et mac
 - Pages de navigation : utiliser `MAILBOX_PAGE` et `SETTINGS_PAGE` plutôt qu'un index.
 - `ui/main_window.py` est une grande fonction à fermetures ; les tests accèdent aux
   widgets via les attributs `window.mailflow_*`. Les conserver lors d'un refactoring.
-- Textes UI en français ; beaucoup de chaînes existantes sont sans accents.
+- Textes UI en français, avec accents. Restent sans accents les valeurs comparées ou
+  stockées (`A verifier`, `Ne pas archiver`) et les raisons métier (`decision.reason`,
+  `MANUAL_DECISION_REASON`, `USER_FOLDER_REASONS`) : ne pas les accentuer isolément.
+- Domaines internes et suffixes juridiques : une seule source, `core/domains.py`.
+- Un scan lit les champs du bandeau (compte, dossier, année) ; la page Réglages ne
+  s'applique qu'à l'enregistrement. La surveillance garde la demande de son activation.
 - Mypy strict et Ruff (ligne de 100) doivent rester verts.

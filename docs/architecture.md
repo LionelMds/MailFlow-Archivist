@@ -8,6 +8,17 @@ Le code separe les zones a risque des fonctions pures :
   normalisation vers les trois dossiers metier, puis ajout du dossier entreprise.
 - `core.contact_directory` : extraction des contacts Outlook et preparation des
   observations pour l'annuaire.
+- `core.domains` : domaines internes Balz Metal et suffixes juridiques, source unique
+  pour l'annuaire, le routage et le nom des dossiers d'entreprise. `is_internal_mail`
+  y reconnaît un mail entre collègues ; le pipeline le range alors dans
+  `Correspondance/Balzmetal` par la règle `internal_mail_rule`, sans appeler de moteur.
+- `core.forwarded_mail` : transfert entre collègues d'un mail externe. Le scan lit le
+  bloc du message transféré sur le corps complet (objet `TR:`/`FW:`/`WG:` et bloc
+  `De / Envoyé / À / Objet`) et garde son auteur externe dans
+  `MailMetadata.forwarded_external_email` ; cet auteur devient l'interlocuteur
+  (`INTERNAL_FORWARD_SOURCE`) et le mail suit le circuit ordinaire.
+- `core.role_suggestions` : rôle suggéré par entreprise à partir des `RoleEstimate`
+  des moteurs ; une suggestion ne classe jamais seule.
 - `core.folder_tree` : construction de l'arborescence proposee et reecriture
   non destructive des destinations lors des renommages ou fusions.
 - `core.project_html_exporter` : generation du journal HTML projet et export des
@@ -52,7 +63,7 @@ l'adresse locale et les métadonnées du modèle. Une sortie invalide ou tronqu�
 un modèle absent ou une indisponibilité n'entraîne aucune bascule vers OpenAI.
 
 `JevClassifier` appelle `POST /v1/systemone` de TypeSafe avec `httpx`. Jev renvoie des
-probabilités sur une liste fermée : une seule question `choice` propose les phases
+probabilités sur une liste fermée : une question `choice` propose les phases
 permises par le rôle de l'annuaire (`SUPPLIER_PHASES`, `CLIENT_PHASES` ou, rôle
 inconnu, `UNKNOWN_ROLE_PHASES`). La probabilité d'une catégorie est la somme de ses
 phases et sert de confiance ; un client reçoit `Correspondance` avec une confiance de

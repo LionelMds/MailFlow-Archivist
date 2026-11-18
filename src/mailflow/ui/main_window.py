@@ -5,7 +5,7 @@ import unicodedata
 import webbrowser
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -13,6 +13,7 @@ from mailflow.core.archive_actions import rows_to_archive
 from mailflow.core.archive_batch import ArchiveBatchResult
 from mailflow.core.background_watcher import ReviewQueue, WatchState
 from mailflow.core.mailbox_sorting import MailboxSortRequest, missing_project_numbers
+from mailflow.core.project_paths import local_project_path
 from mailflow.core.projectflow_link import (
     ProjectFlowError,
     ProjectFlowInstallation,
@@ -23,6 +24,7 @@ from mailflow.core.projectflow_link import (
 from mailflow.core.update_installer import download_update_installer, launch_update_installer
 from mailflow.core.updates import UpdateCheckResult, check_for_updates
 from mailflow.models import (
+    REVIEW_CONFIDENCE_THRESHOLD,
     AiMode,
     InterlocutorType,
     MailType,
@@ -47,6 +49,7 @@ from mailflow.ui.mailbox_sort_view import (
     proposal_to_cells,
     summarize_mailbox_analysis,
 )
+from mailflow.ui.preview_table import interlocutor_option_label
 
 if TYPE_CHECKING:
     from mailflow.config import AppSettings
@@ -54,17 +57,13 @@ if TYPE_CHECKING:
 
 UI_TEXT = {
     "window_title": "MailFlow Archivist",
-    "configuration": "Configuration",
-    "scan": "Scan",
-    "preview": "Previsualisation",
-    "actions": "Actions",
     "logs": "Logs",
     "scan_button": "Scanner Outlook",
     "reset_workspace": "Réinitialiser",
     "watch_outlook": "Surveillance Outlook",
     "save_settings": "Enregistrer les réglages",
     "save_openai_key": "Enregistrer la clé",
-    "test_openai_key": "Tester IA",
+    "test_openai_key": "Tester OpenAI",
     "test_jev_key": "Tester Jev",
     "check_updates": "Rechercher une mise à jour",
     "archive_selection": "Archiver la sélection",
@@ -95,8 +94,13 @@ UI_TEXT = {
     "analyze_mailbox": "Analyser la boîte mail",
     "sort_mailbox": "Ranger les mails cochés",
 }
+MAIL_PAGE = 0
+FOLDER_PAGE = 1
+DIRECTORY_PAGE = 2
 MAILBOX_PAGE = 3
 SETTINGS_PAGE = 4
+# Pages that work on the scanned mails and show the mail inspector beside them.
+MAIL_REVIEW_PAGES = frozenset({MAIL_PAGE, FOLDER_PAGE})
 DIRECTORY_COLUMNS = (
     "Entreprise", "Domaines", "Contacts", "Rôle global", "Rôle suggéré", "Projets",
 )
@@ -104,8 +108,13 @@ DIRECTORY_ROLE_COLUMN = 3
 DIRECTORY_SUGGESTION_COLUMN = 4
 DIRECTORY_PROJECTS_COLUMN = 5
 
+# Settings may raise the review threshold, never lower it under the AI contract.
+MIN_CONFIDENCE_PERCENT = round(REVIEW_CONFIDENCE_THRESHOLD * 100)
+
 WATCH_INTERVAL_MS = 5 * 60 * 1000
 REMINDER_CHECK_INTERVAL_MS = 60 * 1000
+# A reminder still fires when its minute was missed (busy window, coarse timer).
+REMINDER_GRACE_MINUTES = 10
 
 
 def project_folder_selected_by_default(
@@ -149,12 +158,13 @@ def run_desktop_app(settings: AppSettings, *, startup_warning: str | None = None
 
     app = QApplication([])
     apply_light_theme(app)
+    install_french_translation(app)
     instance_lock = acquire_instance_lock(settings.paths.data_dir)
     if instance_lock is None:
         QMessageBox.information(
             None,
             "MailFlow Archivist",
-            "MailFlow est deja ouvert. Retrouvez-le dans la barre des taches "
+            "MailFlow est déjà ouvert. Retrouvez-le dans la barre des tâches "
             "ou dans la zone de notification.",
         )
         return 0
@@ -162,7 +172,7 @@ def run_desktop_app(settings: AppSettings, *, startup_warning: str | None = None
         window = MainWindow(settings)
         window.show()
         if startup_warning:
-            QMessageBox.warning(window, "Reglages reinitialises", startup_warning)
+            QMessageBox.warning(window, "Réglages réinitialisés", startup_warning)
         return int(app.exec())
     finally:
         instance_lock.unlock()
@@ -207,6 +217,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QPushButton,
         QScrollArea,
         QSizePolicy,
+        QSpinBox,
         QSplitter,
         QStackedWidget,
         QSystemTrayIcon,
@@ -224,7 +235,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     from mailflow import __version__
     from mailflow.classifier.ai_classifier import AiClassifier
-    from mailflow.classifier.jev_classifier import JevClassifier
+    from mailflow.classifier.jev_classifier import JevClassifier, JevError
     from mailflow.classifier.ollama_classifier import OllamaClassifier
     from mailflow.config import (
         AI_MODEL_OPTIONS,
@@ -264,7 +275,6 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         PREVIEW_COLUMNS,
         TYPE_COLUMN,
         editable_options_for_column,
-        interlocutor_option_label,
         interlocutor_type_from_option,
         preview_row_to_cells,
         should_highlight_cell,
@@ -289,8 +299,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     controller_was_injected = controller is not None
     active_controller = controller or build_default_controller(settings)
 
-    def enable_responsive_ai() -> None:
-        pipeline = getattr(active_controller, "preview_pipeline", None)
+    def enable_responsive_ai(target: Any | None = None) -> None:
+        pipeline = getattr(target or active_controller, "preview_pipeline", None)
         if pipeline is None:
             return
         classifier = getattr(pipeline, "ai_classifier", None)
@@ -306,6 +316,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         pipeline.ai_mode = settings.ai_mode
         pipeline.include_body_for_ai = settings.ai_include_body_excerpt
         pipeline.privacy_mask_phone_numbers = settings.privacy_mask_phone_numbers
+        pipeline.decision_confidence_threshold = settings.decision_confidence_threshold
         classifier = build_ai_classifier(settings)
         pipeline.ai_classifier = (
             ResponsiveAiClassifier(classifier) if classifier is not None else None
@@ -323,6 +334,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     refreshing_directory_table = False
     operation_in_progress = False
     watch_state = WatchState()
+    watch_request: Any | None = None
     review_queue = ReviewQueue()
     sent_review_reminders: set[str] = set()
     central = QWidget()
@@ -351,7 +363,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     outlook_root_combo.setMinimumWidth(180)
     outlook_root_combo.setAccessibleName("Dossier source Outlook")
     year_input = QLineEdit(settings.selected_year or "")
-    year_input.setPlaceholderText("Annee")
+    year_input.setPlaceholderText("Année")
     year_input.setFixedWidth(82)
     project_input = QLineEdit("")
     project_input.setPlaceholderText("Projet")
@@ -400,7 +412,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     navigation.setAccessibleName("Navigation principale")
     navigation.addItems(["Mails", "Arborescence", "Annuaire", "Boîte mail", "Réglages"])
     navigation.setFixedWidth(154)
-    navigation.setCurrentRow(0)
+    navigation.setCurrentRow(MAIL_PAGE)
     content_splitter.addWidget(navigation)
 
     workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -557,7 +569,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     tree_layout.addWidget(tree_heading)
     tree_layout.addWidget(tree_hint)
     folder_tree = QTreeWidget()
-    folder_tree.setHeaderLabels(["Dossier propose", "Mails"])
+    folder_tree.setHeaderLabels(["Dossier proposé", "Mails"])
     folder_tree.setMinimumHeight(320)
     folder_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
     folder_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -565,7 +577,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     tree_buttons_layout = QHBoxLayout(tree_buttons)
     tree_buttons_layout.setContentsMargins(0, 0, 0, 0)
     rename_folder_button = QPushButton("Renommer dossier")
-    merge_folder_button = QPushButton("Fusionner vers...")
+    merge_folder_button = QPushButton("Fusionner vers…")
     tree_buttons_layout.addWidget(rename_folder_button)
     tree_buttons_layout.addWidget(merge_folder_button)
     tree_buttons_layout.addStretch(1)
@@ -823,13 +835,40 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     ai_provider_combo.addItem("Jev (TypeSafe) — API de classification", "jev")
     set_combo_value_by_data(ai_provider_combo, settings.ai_provider)
     grid.addWidget(ai_provider_combo, 2, 1)
+
+    def timeout_input(seconds: float, *, step: float, engine: str) -> Any:
+        spinbox = QDoubleSpinBox()
+        spinbox.setRange(0.1, 3600.0)
+        spinbox.setDecimals(1)
+        spinbox.setSingleStep(step)
+        spinbox.setSuffix(" s")
+        spinbox.setValue(seconds)
+        spinbox.setAccessibleName(f"Délai maximal par mail ({engine})")
+        spinbox.setToolTip(
+            "Au-delà de ce délai, le mail reste à vérifier : aucun autre moteur ne prend le relais."
+        )
+        return spinbox
+
+    def model_with_timeout(model_input: Any, timeout_spinbox: Any) -> Any:
+        widget = QWidget()
+        widget_layout = QHBoxLayout(widget)
+        widget_layout.setContentsMargins(0, 0, 0, 0)
+        widget_layout.addWidget(model_input, 1)
+        widget_layout.addWidget(QLabel("Délai maximal par mail"))
+        widget_layout.addWidget(timeout_spinbox)
+        return widget
+
     ai_model_label = QLabel("Modèle OpenAI")
     grid.addWidget(ai_model_label, 3, 0)
     ai_model_input = QComboBox()
     ai_model_input.setEditable(True)
     ai_model_input.addItems(list(AI_MODEL_OPTIONS))
     set_combo_value_by_text(ai_model_input, settings.ai_model)
-    grid.addWidget(ai_model_input, 3, 1)
+    openai_timeout_input = timeout_input(
+        settings.openai_timeout_seconds, step=10.0, engine="OpenAI"
+    )
+    openai_model_widget = model_with_timeout(ai_model_input, openai_timeout_input)
+    grid.addWidget(openai_model_widget, 3, 1)
     openai_key_label = QLabel("Clé API OpenAI")
     grid.addWidget(openai_key_label, 4, 0)
     openai_key_widget = QWidget()
@@ -871,18 +910,15 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     ollama_address_layout.setContentsMargins(0, 0, 0, 0)
     ollama_address_layout.addWidget(ollama_base_url_input, 1)
     ollama_address_layout.addWidget(QLabel("Délai maximal par mail"))
-    ollama_timeout_input = QDoubleSpinBox()
-    ollama_timeout_input.setRange(0.1, 3600.0)
-    ollama_timeout_input.setDecimals(1)
-    ollama_timeout_input.setSingleStep(30.0)
-    ollama_timeout_input.setSuffix(" s")
-    ollama_timeout_input.setValue(settings.ollama_timeout_seconds)
+    ollama_timeout_input = timeout_input(
+        settings.ollama_timeout_seconds, step=30.0, engine="Ollama"
+    )
     ollama_address_layout.addWidget(ollama_timeout_input)
     grid.addWidget(ollama_address_widget, 6, 1)
     ollama_test_widget = QWidget()
     ollama_test_layout = QVBoxLayout(ollama_test_widget)
     ollama_test_layout.setContentsMargins(0, 0, 0, 0)
-    test_ollama_button = QPushButton("Tester IA locale")
+    test_ollama_button = QPushButton("Tester Ollama")
     test_ollama_button.setToolTip("Classer un mail fictif pour vérifier Ollama et le modèle.")
     ollama_test_layout.addWidget(test_ollama_button, 0, Qt.AlignmentFlag.AlignLeft)
     ollama_status = QLabel("Connexion locale à tester.")
@@ -899,7 +935,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         "jev-latest suit la dernière version de Jev. Le test affiche le modèle qui a "
         "répondu : saisir ce nom fige la version."
     )
-    grid.addWidget(jev_model_input, 8, 1)
+    jev_timeout_input = timeout_input(settings.jev_timeout_seconds, step=5.0, engine="Jev")
+    jev_model_widget = model_with_timeout(jev_model_input, jev_timeout_input)
+    grid.addWidget(jev_model_widget, 8, 1)
     jev_key_label = QLabel("Clé API Jev (TypeSafe)")
     grid.addWidget(jev_key_label, 9, 0)
     jev_key_widget = QWidget()
@@ -931,11 +969,33 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     privacy_phone_checkbox = QCheckBox("Masquer les numéros de téléphone avant l'analyse IA")
     privacy_phone_checkbox.setChecked(settings.privacy_mask_phone_numbers)
     grid.addWidget(privacy_phone_checkbox, 12, 1)
-    grid.addWidget(QLabel("Horaires des rappels"), 13, 0)
+    grid.addWidget(QLabel("Seuil de confiance"), 13, 0)
+    confidence_widget = QWidget()
+    confidence_layout = QHBoxLayout(confidence_widget)
+    confidence_layout.setContentsMargins(0, 0, 0, 0)
+    confidence_threshold_input = QSpinBox()
+    # The AI contract already sends any answer below 80 % to manual review.
+    confidence_threshold_input.setRange(MIN_CONFIDENCE_PERCENT, 100)
+    confidence_threshold_input.setSuffix(" %")
+    confidence_threshold_input.setValue(
+        max(MIN_CONFIDENCE_PERCENT, round(settings.decision_confidence_threshold * 100))
+    )
+    confidence_threshold_input.setAccessibleName("Seuil de confiance pour archiver")
+    confidence_hint = QLabel(
+        "En dessous de ce seuil, le mail reste à vérifier. S'applique aux prochaines analyses."
+    )
+    confidence_hint.setProperty("role", "muted")
+    confidence_layout.addWidget(confidence_threshold_input)
+    confidence_layout.addWidget(confidence_hint, 1)
+    grid.addWidget(confidence_widget, 13, 1)
+    grid.addWidget(QLabel("Horaires des rappels"), 14, 0)
     review_reminder_times_input = QLineEdit(format_reminder_times(settings.review_reminder_times))
     review_reminder_times_input.setPlaceholderText("09:00, 14:00, 16:30")
-    grid.addWidget(review_reminder_times_input, 13, 1)
-    grid.addWidget(QLabel("ProjectFlow Automator"), 14, 0)
+    review_reminder_times_input.setToolTip(
+        "Heures auxquelles MailFlow rappelle les mails à vérifier, séparées par des virgules."
+    )
+    grid.addWidget(review_reminder_times_input, 14, 1)
+    grid.addWidget(QLabel("ProjectFlow Automator"), 15, 0)
     projectflow_widget = QWidget()
     projectflow_layout = QVBoxLayout(projectflow_widget)
     projectflow_layout.setContentsMargins(0, 0, 0, 0)
@@ -953,8 +1013,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     projectflow_status.setProperty("role", "muted")
     projectflow_layout.addWidget(projectflow_picker)
     projectflow_layout.addWidget(projectflow_status)
-    grid.addWidget(projectflow_widget, 14, 1)
-    grid.addWidget(QLabel("Mises à jour"), 15, 0)
+    grid.addWidget(projectflow_widget, 15, 1)
+    grid.addWidget(QLabel("Mises à jour"), 16, 0)
     update_widget = QWidget()
     update_layout = QHBoxLayout(update_widget)
     update_layout.setContentsMargins(0, 0, 0, 0)
@@ -964,10 +1024,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     update_layout.addWidget(check_updates_button)
     update_layout.addWidget(update_status)
     update_layout.addStretch(1)
-    grid.addWidget(update_widget, 15, 1)
+    grid.addWidget(update_widget, 16, 1)
     save_settings_button = QPushButton(UI_TEXT["save_settings"])
     save_settings_button.setProperty("role", "primary")
-    grid.addWidget(save_settings_button, 16, 1)
+    grid.addWidget(save_settings_button, 17, 1)
     settings_layout.addWidget(config)
     settings_layout.addStretch(1)
     settings_scroll_area = QScrollArea()
@@ -1040,10 +1100,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     layout.addWidget(logs_panel)
     navigation.currentRowChanged.connect(pages.setCurrentIndex)
     navigation.currentRowChanged.connect(
-        lambda index: preview.setVisible(index < 2 and inspector_action.isChecked())
+        lambda index: preview.setVisible(
+            index in MAIL_REVIEW_PAGES and inspector_action.isChecked()
+        )
     )
     inspector_action.toggled.connect(
-        lambda checked: preview.setVisible(checked and navigation.currentRow() < 2)
+        lambda checked: preview.setVisible(
+            checked and navigation.currentRow() in MAIL_REVIEW_PAGES
+        )
     )
     def show_detail_columns(checked: bool) -> None:
         for column in (0, 1, 2, TYPE_COLUMN, INTERLOCUTOR_COLUMN, 8):
@@ -1115,6 +1179,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         if not logs.isVisible():
             toggle_logs()
 
+    def notify(message: str, *, success: bool | None = None) -> None:
+        """Show an outcome in the status line and keep it in the journal."""
+        set_scan_status(message, success=success)
+        append_log(message)
+
     def has_openai_api_key() -> bool:
         return get_openai_api_key() is not None
 
@@ -1156,12 +1225,18 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     def update_ai_provider_fields() -> None:
         provider = str(ai_provider_combo.currentData())
         widgets_by_provider: dict[str, tuple[Any, ...]] = {
-            "openai": (ai_model_label, ai_model_input, openai_key_label, key_fields),
+            "openai": (
+                ai_model_label, openai_model_widget, ai_model_input, openai_timeout_input,
+                openai_key_label, key_fields,
+            ),
             "ollama": (
                 ollama_model_label, ollama_models_widget, ollama_url_label,
                 ollama_address_widget, ollama_test_widget,
             ),
-            "jev": (jev_model_label, jev_model_input, jev_key_label, jev_key_fields),
+            "jev": (
+                jev_model_label, jev_model_widget, jev_model_input, jev_timeout_input,
+                jev_key_label, jev_key_fields,
+            ),
         }
         for widget_provider, widgets in widgets_by_provider.items():
             for widget in widgets:
@@ -1215,13 +1290,13 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     def hide_to_background() -> None:
         if not QSystemTrayIcon.isSystemTrayAvailable():
-            append_log("Mode arriere-plan indisponible: zone de notification introuvable.")
+            append_log("Mode arrière-plan indisponible : zone de notification introuvable.")
             return
         if not tray_icon.isVisible():
             tray_icon.show()
         window.hide()
         notify_user(
-            "MailFlow en arriere-plan",
+            "MailFlow en arrière-plan",
             tray_tooltip_text(watch_checkbox.isChecked(), review_queue.count),
         )
         status = (
@@ -1230,13 +1305,22 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             else UI_TEXT["tray_watch_inactive"]
         )
         append_log(
-            "Mode arriere-plan actif: "
+            "Mode arrière-plan actif : "
             f"{status}."
         )
 
     def quit_application() -> None:
         if operation_in_progress:
             return
+        dynamic_window.mailflow_force_quit = True
+        watch_timer.stop()
+        review_reminder_timer.stop()
+        tray_icon.hide()
+        QApplication.quit()
+
+    def quit_for_update() -> None:
+        # With the watch on, closing only hides the window and the installer could
+        # not replace the running program.
         dynamic_window.mailflow_force_quit = True
         watch_timer.stop()
         review_reminder_timer.stop()
@@ -1257,9 +1341,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             window.hide()
             notify_user(
                 "MailFlow reste actif",
-                "La surveillance Outlook continue en arriere-plan.",
+                "La surveillance Outlook continue en arrière-plan.",
             )
-            append_log("Fenetre masquee: MailFlow continue dans la zone de notification.")
+            append_log("Fenêtre masquée : MailFlow continue dans la zone de notification.")
             return
         event.accept()
 
@@ -1577,7 +1661,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             accounts = active_controller.available_outlook_accounts()
         except Exception as exc:
             accounts = []
-            append_log(f"Impossible de lire les comptes Outlook: {exc}")
+            append_log(f"Impossible de lire les comptes Outlook : {exc}")
         for account in accounts:
             account_combo.addItem(
                 format_outlook_account_label(account),
@@ -1585,7 +1669,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             )
         if not accounts and current:
             account_combo.addItem(current, current)
-        set_account_combo_value(current or active_controller.suggested_account_identifier())
+        suggestion = None
+        if not current:
+            try:
+                suggestion = active_controller.suggested_account_identifier()
+            except Exception as exc:
+                # Without classic Outlook the window must still open.
+                append_log(f"Compte Outlook par défaut indisponible : {exc}")
+        set_account_combo_value(current or suggestion)
         account_combo.blockSignals(False)
         refreshing_outlook_options = False
         populate_outlook_root_options()
@@ -1602,7 +1693,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             )
         except Exception as exc:
             folders = []
-            append_log(f"Impossible de lire les dossiers Outlook: {exc}")
+            append_log(f"Impossible de lire les dossiers Outlook : {exc}")
         for folder in folders:
             outlook_root_combo.addItem(folder)
         if not folders and current:
@@ -1624,7 +1715,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     def browse_projects_root() -> None:
         selected = QFileDialog.getExistingDirectory(
             window,
-            "Selectionner la racine projets locale",
+            "Sélectionner le dossier local des projets",
             projects_root_input.text().strip(),
         )
         if selected:
@@ -1642,13 +1733,13 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     def rename_selected_folder() -> None:
         source = selected_folder_path()
         if source is None:
-            append_log("Selectionner un dossier dans l'arborescence.")
+            notify("Sélectionnez un dossier dans l'arborescence.")
             return
         current_name = source.split("/")[-1]
         new_name, accepted = QInputDialog.getText(
             window,
             "Renommer dossier",
-            "Nouveau nom du dossier selectionne",
+            "Nouveau nom du dossier sélectionné",
             text=current_name,
         )
         if not accepted:
@@ -1656,14 +1747,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         try:
             active_controller.rename_preview_folder(source, new_name)
             refresh_table()
-            append_log(f"Dossier renomme: {source} -> {new_name.strip()}.")
+            append_log(f"Dossier renommé : {source} -> {new_name.strip()}.")
         except Exception as exc:
-            append_log(f"Erreur renommage dossier: {exc}")
+            notify(f"Erreur renommage dossier : {exc}", success=False)
 
     def merge_selected_folder() -> None:
         source = selected_folder_path()
         if source is None:
-            append_log("Selectionner un dossier dans l'arborescence.")
+            notify("Sélectionnez un dossier dans l'arborescence.")
             return
         options = [
             summary.relative_folder
@@ -1672,12 +1763,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             and not summary.relative_folder.startswith(f"{source}/")
         ]
         if not options:
-            append_log("Aucun dossier cible disponible pour la fusion.")
+            notify("Aucun dossier cible disponible pour la fusion.")
             return
         target, accepted = QInputDialog.getItem(
             window,
             "Fusionner dossier",
-            "Fusionner le dossier selectionne vers",
+            "Fusionner le dossier sélectionné vers",
             options,
             editable=False,
         )
@@ -1686,9 +1777,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         try:
             active_controller.merge_preview_folder(source, target)
             refresh_table()
-            append_log(f"Dossier fusionne: {source} -> {target}.")
+            append_log(f"Dossier fusionné : {source} -> {target}.")
         except Exception as exc:
-            append_log(f"Erreur fusion dossier: {exc}")
+            notify(f"Erreur fusion dossier : {exc}", success=False)
 
     def current_role_suggestions() -> dict[int, Any]:
         provider = getattr(active_controller, "directory_role_suggestions", None)
@@ -1697,7 +1788,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         try:
             return dict(provider())
         except Exception as exc:
-            append_log(f"Suggestions de role indisponibles: {exc}")
+            append_log(f"Suggestions de rôle indisponibles : {exc}")
             return {}
 
     def restore_directory_scroll(vertical: int, horizontal: int) -> None:
@@ -1723,7 +1814,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         except Exception as exc:
             refreshing_directory_table = False
             directory_table.setRowCount(0)
-            directory_status_label.setText(f"Annuaire indisponible: {exc}")
+            directory_status_label.setText(f"Annuaire indisponible : {exc}")
             return
         suggestions = current_role_suggestions()
         directory_table.clearContents()
@@ -1756,9 +1847,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 global_role_combo(organization_id, role),
             )
             suggestion = suggestions.get(organization_id)
-            if suggestion is not None and role not in {
-                InterlocutorType.CLIENT, InterlocutorType.FOURNISSEUR,
-            }:
+            if suggestion is not None and role == InterlocutorType.INCONNU:
                 directory_table.setCellWidget(
                     row_index,
                     DIRECTORY_SUGGESTION_COLUMN,
@@ -1842,12 +1931,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         try:
             active_controller.set_directory_organization_role(organization_id, role)
         except Exception as exc:
-            append_log(f"Erreur role global: {exc}")
+            notify(f"Erreur rôle global : {exc}", success=False)
             return
         refresh_table()
         refresh_directory_table()
         update_mail_preview(table.currentRow())
-        append_log(f"Role suggere valide: {name} enregistre comme {role.value}.")
+        append_log(f"Rôle suggéré validé : {name} enregistré comme {role.value}.")
         report_role_update(before)
 
     def refresh_roles_without_ai() -> None:
@@ -1860,7 +1949,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         try:
             refresher()
         except Exception as exc:
-            append_log(f"Actualisation des roles impossible: {exc}")
+            append_log(f"Actualisation des rôles impossible : {exc}")
             return
         refresh_table()
         refresh_directory_table()
@@ -1884,7 +1973,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 for entry in active_controller.directory_entries()
             }
         except Exception as exc:
-            append_log(f"Annuaire indisponible: {exc}")
+            append_log(f"Annuaire indisponible : {exc}")
             return
         lines = [
             f"• {names.get(organization_id, f'#{organization_id}')} → {suggestion.label}"
@@ -1916,10 +2005,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 }
             )
         except Exception as exc:
-            append_log(f"Erreur role global: {exc}")
+            notify(f"Erreur rôle global : {exc}", success=False)
             refresh_directory_table()
             return
-        append_log(f"{len(confident)} role(s) suggere(s) valide(s) dans l'annuaire.")
+        append_log(f"{len(confident)} rôle(s) suggéré(s) validé(s) dans l'annuaire.")
         refresh_table()
         refresh_directory_table()
         update_mail_preview(table.currentRow())
@@ -1943,14 +2032,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                     selected_role,
                 )
             except Exception as exc:
-                append_log(f"Erreur role global: {exc}")
+                notify(f"Erreur rôle global : {exc}", success=False)
                 refresh_directory_table()
                 return
             refresh_table()
             refresh_directory_table()
             update_mail_preview(table.currentRow())
             append_log(
-                "Role global applique: "
+                "Rôle global appliqué : "
                 f"{selected_role.value} pour l'entreprise #{organization_id}."
             )
             report_role_update(before)
@@ -1987,7 +2076,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         set_combo_value_by_data(role_combo, InterlocutorType.INCONNU.value)
         form.addRow("Entreprise", name_input)
         form.addRow("Domaine e-mail", domain_input)
-        form.addRow("Role global", role_combo)
+        form.addRow("Rôle global", role_combo)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
@@ -2006,19 +2095,20 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 domain=clean_optional_text(domain_input.text()),
                 role=role,
             )
+            refresh_table()
             refresh_directory_table()
             append_log(
-                f"Entreprise ajoutee a l'annuaire: {name_input.text().strip()} "
+                f"Entreprise ajoutée à l'annuaire : {name_input.text().strip()} "
                 f"(#{organization_id})."
             )
         except Exception as exc:
-            append_log(f"Erreur ajout entreprise: {exc}")
+            append_log(f"Erreur ajout entreprise : {exc}")
             QMessageBox.warning(window, "Ajout impossible", str(exc))
 
     def delete_selected_directory_organization() -> None:
         selected = selected_directory_organization()
         if selected is None:
-            append_log("Selectionner une entreprise dans l'annuaire.")
+            notify("Sélectionnez une entreprise dans l'annuaire.")
             return
         organization_id, name = selected
         entry = next(
@@ -2039,8 +2129,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             (
                 f"Supprimer {name} de l'annuaire ?\n\n"
                 f"{len(entry.domains)} domaine(s), {len(entry.contacts)} contact(s) "
-                "et son role global seront retires.\n"
-                "Aucun e-mail ni fichier archive ne sera supprime."
+                "et son rôle global seront retirés.\n"
+                "Aucun e-mail ni fichier archivé ne sera supprimé."
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -2049,16 +2139,17 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             return
         try:
             active_controller.delete_directory_organization(organization_id)
+            refresh_table()
             refresh_directory_table()
-            append_log(f"Entreprise supprimee de l'annuaire: {name}.")
+            append_log(f"Entreprise supprimée de l'annuaire : {name}.")
         except Exception as exc:
-            append_log(f"Erreur suppression entreprise: {exc}")
+            append_log(f"Erreur suppression entreprise : {exc}")
             QMessageBox.warning(window, "Suppression impossible", str(exc))
 
     def rename_selected_directory_organization() -> None:
         selected = selected_directory_organization()
         if selected is None:
-            append_log("Selectionner une entreprise dans l'annuaire.")
+            notify("Sélectionnez une entreprise dans l'annuaire.")
             return
         organization_id, current_name = selected
         new_name, accepted = QInputDialog.getText(
@@ -2071,21 +2162,22 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             return
         try:
             active_controller.rename_directory_organization(organization_id, new_name)
+            refresh_table()
             refresh_directory_table()
-            append_log(f"Entreprise renommee: {current_name} -> {new_name.strip()}.")
+            append_log(f"Entreprise renommée : {current_name} -> {new_name.strip()}.")
         except Exception as exc:
-            append_log(f"Erreur renommage entreprise: {exc}")
+            notify(f"Erreur renommage entreprise : {exc}", success=False)
 
     def merge_selected_directory_organization() -> None:
         selected = selected_directory_organization()
         if selected is None:
-            append_log("Selectionner une entreprise dans l'annuaire.")
+            notify("Sélectionnez une entreprise dans l'annuaire.")
             return
         source_id, source_name = selected
         try:
             entries = active_controller.directory_entries()
         except Exception as exc:
-            append_log(f"Annuaire indisponible: {exc}")
+            append_log(f"Annuaire indisponible : {exc}")
             return
         options_by_label = {
             format_directory_entry_label(entry): int(entry.organization_id)
@@ -2093,7 +2185,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             if int(entry.organization_id) != source_id
         }
         if not options_by_label:
-            append_log("Aucune autre entreprise disponible pour la fusion.")
+            notify("Aucune autre entreprise disponible pour la fusion.")
             return
         target_label, accepted = QInputDialog.getItem(
             window,
@@ -2107,10 +2199,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         target_id = options_by_label[str(target_label)]
         try:
             active_controller.merge_directory_organizations(source_id, target_id)
+            refresh_table()
             refresh_directory_table()
-            append_log(f"Entreprise fusionnee: {source_name} -> {target_label}.")
+            append_log(f"Entreprise fusionnée : {source_name} -> {target_label}.")
         except Exception as exc:
-            append_log(f"Erreur fusion entreprise: {exc}")
+            notify(f"Erreur fusion entreprise : {exc}", success=False)
 
     def log_scan_directory_update() -> bool:
         """Log what the last scan added to the directory; True if it changed."""
@@ -2118,7 +2211,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         if update is None:
             return False
         append_log(
-            f"Annuaire mis a jour : {update.contact_count} contact(s) vus, "
+            f"Annuaire mis à jour : {update.contact_count} contact(s) vus, "
             f"{update.new_organizations} nouvelle(s) entreprise(s), "
             f"{update.new_contacts} nouveau(x) contact(s)."
         )
@@ -2140,7 +2233,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             updated = active_controller.apply_manual_update(row_index, update)
             refresh_table(preferred_row_index=row_index)
             append_log(
-                "Classement manuel enregistre pour "
+                "Classement manuel enregistré pour "
                 f"{updated.mail.project_number}: "
                 f"{updated.decision.mail_type.value} -> "
                 f"{updated.decision.target_relative_folder}."
@@ -2149,15 +2242,15 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             if role_change is not None:
                 refresh_directory_table()
                 message = (
-                    f"Annuaire : {role_change.organization_name} enregistre comme "
+                    f"Annuaire : {role_change.organization_name} enregistré comme "
                     f"{role_change.role.value}. {role_change.updated_row_count} autre(s) "
-                    "mail(s) de cette entreprise mis a jour."
+                    "mail(s) de cette entreprise mis à jour."
                 )
                 append_log(message)
                 set_scan_status(message, success=True)
         except Exception as exc:
             refresh_table(preferred_row_index=row_index)
-            append_log(f"Erreur classement manuel: {exc}")
+            notify(f"Erreur classement manuel : {exc}", success=False)
 
     def open_bulk_manual_dialog(row_indexes: Sequence[int]) -> None:
         if refreshing_table or operation_in_progress:
@@ -2179,19 +2272,19 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             result = active_controller.apply_manual_updates(editable, update)
         except Exception as exc:
             refresh_table(preferred_row_index=editable[0])
-            append_log(f"Erreur classement groupe: {exc}")
+            notify(f"Erreur classement groupé : {exc}", success=False)
             return
         refresh_table(preferred_row_index=editable[0])
-        message = f"Classement manuel applique a {result.updated_count} mail(s)."
+        message = f"Classement manuel appliqué à {result.updated_count} mail(s)."
         if result.skipped_archived_count:
-            message += f" {result.skipped_archived_count} mail(s) archive(s) inchange(s)."
+            message += f" {result.skipped_archived_count} mail(s) archivé(s) inchangé(s)."
         append_log(message)
         for change in result.role_changes:
             append_log(
-                f"Annuaire : {change.organization_name} enregistre comme {change.role.value}."
+                f"Annuaire : {change.organization_name} enregistré comme {change.role.value}."
             )
         for error in result.errors:
-            append_log(f"Erreur classement manuel: {error}")
+            notify(f"Erreur classement manuel : {error}", success=False)
         if result.role_changes:
             refresh_directory_table()
         set_scan_status(message, success=not result.errors)
@@ -2226,8 +2319,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         subject_label.setWordWrap(True)
         form.addRow("Projet", QLabel(row.mail.project_number))
         form.addRow("Date", QLabel(row.mail.sent_at.strftime("%Y-%m-%d %H:%M")))
-        form.addRow("Sens", QLabel("Envoye" if row.mail.direction.value == "sent" else "Recu"))
-        form.addRow("Expediteur", QLabel(row.mail.sender_name or row.mail.sender_email))
+        form.addRow("Sens", QLabel("Envoyé" if row.mail.direction.value == "sent" else "Reçu"))
+        form.addRow("Expéditeur", QLabel(row.mail.sender_name or row.mail.sender_email))
         form.addRow("Sujet", subject_label)
 
         mail_type_combo = QComboBox()
@@ -2259,14 +2352,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             initial_destination,
             DESTINATION_OPTIONS,
         )
-        auto_destination = True
         routing_warning = QLabel("")
         routing_warning.setWordWrap(True)
         routing_warning.setStyleSheet("QLabel { color: #9a6700; font-weight: 600; }")
 
         def sync_suggested_destination(_value: str = "") -> None:
-            if not auto_destination:
-                return
             try:
                 selected_role = interlocutor_type_from_option(
                     interlocutor_combo.currentText()
@@ -2282,7 +2372,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 )
             except ValueError:
                 return
-            if selected_role == InterlocutorType.CLIENT:
+            if selected_role in {InterlocutorType.CLIENT, InterlocutorType.INTERNE}:
                 selected_type = MailType.CORRESPONDANCE_GENERALE
                 if mail_type_combo.currentText() != RoutingCategory.CORRESPONDANCE.value:
                     mail_type_combo.blockSignals(True)
@@ -2298,7 +2388,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 mail_type_combo.setCurrentIndex(-1)
                 mail_type_combo.blockSignals(False)
                 routing_warning.setText(
-                    "Role fournisseur enregistre. Choisissez Demande de prix ou "
+                    "Rôle fournisseur enregistré. Choisissez Demande de prix ou "
                     "Commande, ou utilisez ensuite Reclasser avec l'IA."
                 )
             elif (
@@ -2306,7 +2396,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 and selected_type == MailType.A_VERIFIER
             ):
                 routing_warning.setText(
-                    "Role fournisseur enregistre. Le classement restera A verifier "
+                    "Rôle fournisseur enregistré. Le classement restera à vérifier "
                     "jusqu'au choix Demande de prix ou Commande."
                 )
             else:
@@ -2320,7 +2410,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         interlocutor_combo.currentTextChanged.connect(sync_suggested_destination)
         sync_suggested_destination()
         form.addRow("Classement", mail_type_combo)
-        form.addRow("Role de l'entreprise", interlocutor_combo)
+        form.addRow("Rôle de l'entreprise", interlocutor_combo)
         form.addRow("Destination finale", destination_combo)
         form.addRow("", routing_warning)
 
@@ -2352,8 +2442,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             combo.addItem(value)
             combo.setCurrentText(value)
 
-    def update_projects_root() -> None:
+    def update_settings_from_inputs() -> None:
         reminder_times = parse_reminder_times(review_reminder_times_input.text())
+        if not projects_root_input.text().strip():
+            raise ValueError("Le dossier local des projets est obligatoire.")
         values = {
             "local_projects_root": Path(projects_root_input.text()),
             "selected_outlook_account": selected_account_identifier(),
@@ -2362,6 +2454,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             "ai_mode": AiMode(str(ai_mode_combo.currentData())),
             "ai_provider": str(ai_provider_combo.currentData()),
             "ai_model": clean_optional_text(ai_model_input.currentText()) or DEFAULT_AI_MODEL,
+            "openai_timeout_seconds": openai_timeout_input.value(),
             "ollama_model": (
                 clean_optional_text(ollama_model_input.currentText()) or DEFAULT_OLLAMA_MODEL
             ),
@@ -2370,6 +2463,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             ),
             "ollama_timeout_seconds": ollama_timeout_input.value(),
             "jev_model": clean_optional_text(jev_model_input.currentText()) or DEFAULT_JEV_MODEL,
+            "jev_timeout_seconds": jev_timeout_input.value(),
+            "decision_confidence_threshold": confidence_threshold_input.value() / 100,
             "ai_include_body_excerpt": ai_include_body_checkbox.isChecked(),
             "privacy_mask_phone_numbers": privacy_phone_checkbox.isChecked(),
             "review_reminder_times": reminder_times,
@@ -2379,35 +2474,59 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         for field in values:
             setattr(settings, field, getattr(validated, field))
 
+    def save_typed_api_key() -> str | None:
+        """Store a key typed for the selected engine; returns the engine name."""
+        provider = ai_provider_combo.currentData()
+        if provider == "openai":
+            api_key = clean_optional_text(openai_key_input.text())
+            if api_key is not None:
+                set_openai_api_key(api_key)
+                openai_key_input.clear()
+                update_openai_key_status(valid=None)
+                return "OpenAI"
+        elif provider == "jev":
+            api_key = clean_optional_text(jev_key_input.text())
+            if api_key is not None:
+                set_jev_api_key(api_key)
+                jev_key_input.clear()
+                update_jev_key_status(valid=None)
+                update_mailbox_jev_option()
+                return "Jev"
+        return None
+
     def save_current_settings() -> None:
         if operation_in_progress:
             return
         try:
-            update_projects_root()
+            update_settings_from_inputs()
+            saved_key = save_typed_api_key()
             apply_current_ai_settings()
             save_settings(settings)
-            set_scan_status("Réglages enregistrés. Les choix IA et confidentialité sont appliqués.")
+            message = "Réglages enregistrés. Les choix IA et confidentialité sont appliqués."
+            if saved_key:
+                message += f" Clé {saved_key} enregistrée dans le coffre du système."
+            set_scan_status(message)
             append_log("Réglages enregistrés et paramètres IA appliqués à la session.")
         except Exception as exc:
             set_scan_status("Réglages non enregistrés : vérifiez les champs et le journal.",
                             success=False)
-            append_log(f"Erreur enregistrement parametres: {exc}")
+            append_log(f"Erreur enregistrement des réglages : {exc}")
 
     def save_openai_key_from_input() -> None:
         if operation_in_progress or ai_provider_combo.currentData() != "openai":
             return
         api_key = clean_optional_text(openai_key_input.text())
         if api_key is None:
-            append_log("Aucune nouvelle cle OpenAI a enregistrer.")
+            append_log("Aucune nouvelle clé OpenAI à enregistrer.")
             return
         try:
             set_openai_api_key(api_key)
             apply_current_ai_settings()
             openai_key_input.clear()
             update_openai_key_status(valid=None)
-            append_log("Cle OpenAI enregistree dans le coffre du systeme.")
+            append_log("Clé OpenAI enregistrée dans le coffre du système.")
         except Exception as exc:
-            append_log(f"Erreur enregistrement cle OpenAI: {exc}")
+            append_log(f"Erreur enregistrement clé OpenAI : {exc}")
 
     @exclusive_operation
     def test_openai_key_from_input() -> None:
@@ -2416,7 +2535,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         api_key = clean_optional_text(openai_key_input.text()) or get_openai_api_key()
         if api_key is None:
             set_openai_key_status(has_key=False, valid=False)
-            append_log("Aucune cle OpenAI a tester.")
+            append_log("Aucune clé OpenAI à tester.")
             return
         model = clean_optional_text(ai_model_input.currentText()) or DEFAULT_AI_MODEL
         set_openai_key_status(has_key=True, testing=True)
@@ -2424,23 +2543,27 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         QApplication.processEvents()
         try:
             result = run_with_event_loop(
-                AiClassifier(api_key=api_key, model=model).check_connection
+                AiClassifier(
+                    api_key=api_key, model=model,
+                    timeout_seconds=openai_timeout_input.value(),
+                ).check_connection
             )
         except Exception as exc:
             set_openai_key_status(has_key=True, valid=False)
-            append_log(f"Test OpenAI impossible : {exc}")
+            # Remote error texts may quote the request: name the error only.
+            append_log(f"Test OpenAI impossible : {type(exc).__name__}")
             return
         finally:
             test_openai_key_button.setEnabled(True)
         set_openai_key_status(has_key=True, valid=result.ok)
-        append_log(f"Test OpenAI: {result.message}")
+        append_log(f"Test OpenAI : {result.message}")
 
     def save_jev_key_from_input() -> None:
         if operation_in_progress or ai_provider_combo.currentData() != "jev":
             return
         api_key = clean_optional_text(jev_key_input.text())
         if api_key is None:
-            append_log("Aucune nouvelle cle Jev a enregistrer.")
+            append_log("Aucune nouvelle clé Jev à enregistrer.")
             return
         try:
             set_jev_api_key(api_key)
@@ -2448,9 +2571,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             jev_key_input.clear()
             update_jev_key_status(valid=None)
             update_mailbox_jev_option()
-            append_log("Cle Jev enregistree dans le coffre du systeme.")
+            append_log("Clé Jev enregistrée dans le coffre du système.")
         except Exception as exc:
-            append_log(f"Erreur enregistrement cle Jev: {exc}")
+            append_log(f"Erreur enregistrement clé Jev : {exc}")
 
     @exclusive_operation
     def test_jev_key_from_input() -> None:
@@ -2459,7 +2582,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         api_key = clean_optional_text(jev_key_input.text()) or get_jev_api_key()
         if api_key is None:
             set_jev_key_status(has_key=False, valid=False)
-            append_log("Aucune cle Jev a tester.")
+            append_log("Aucune clé Jev à tester.")
             return
         model = clean_optional_text(jev_model_input.currentText()) or DEFAULT_JEV_MODEL
         set_jev_key_status(has_key=True, testing=True)
@@ -2468,12 +2591,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             result = run_with_event_loop(
                 JevClassifier(
                     api_key=api_key, model=model,
-                    timeout_seconds=settings.jev_timeout_seconds,
+                    timeout_seconds=jev_timeout_input.value(),
                 ).check_connection
             )
-        except Exception:
+        except Exception as exc:
             set_jev_key_status(has_key=True, valid=False)
-            append_log("Test Jev impossible.")
+            # JevError texts are written locally; other errors are only named.
+            reason = str(exc) if isinstance(exc, JevError) else type(exc).__name__
+            append_log(f"Test Jev impossible : {reason}")
             return
         set_jev_key_status(has_key=True, valid=result.ok)
         append_log(f"Test Jev : {result.message}")
@@ -2532,7 +2657,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                               success=False)
         else:
             set_ollama_status(f"{len(models)} modèle(s) installé(s). "
-                              "Cliquez sur « Tester IA locale » pour vérifier le classement.")
+                              "Cliquez sur « Tester Ollama » pour vérifier le classement.")
 
     def set_update_status(message: str, *, success: bool | None = None) -> None:
         if success is True:
@@ -2550,10 +2675,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         set_update_status("Recherche en cours...")
         QApplication.processEvents()
         try:
-            result = check_for_updates(__version__)
+            result = run_with_event_loop(lambda: check_for_updates(__version__))
         except Exception as exc:
             set_update_status("Recherche impossible", success=False)
-            append_log(f"Erreur recherche mise a jour: {exc}")
+            append_log(f"Erreur recherche mise à jour : {exc}")
             return
         finally:
             check_updates_button.setEnabled(True)
@@ -2561,33 +2686,39 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     def handle_update_result(result: UpdateCheckResult) -> None:
         if not result.update_available:
-            set_update_status(f"Version {result.current_version} a jour", success=True)
-            append_log("Aucune mise a jour disponible.")
+            set_update_status(f"Version {result.current_version} à jour", success=True)
+            append_log("Aucune mise à jour disponible.")
             return
         set_update_status(f"Version {result.latest_version} disponible")
         if result.installer_asset is None:
             append_log(
-                "Mise a jour disponible, mais aucun installateur adapte a cette plateforme."
+                "Mise à jour disponible, mais aucun installateur adapté à cette plateforme."
             )
             if confirm_open_release_page(result.release_url, parent=window):
                 webbrowser.open(result.release_url)
             return
         if not confirm_update_install(result, parent=window):
-            append_log("Mise a jour ignoree pour le moment.")
+            append_log("Mise à jour ignorée pour le moment.")
             return
+        installer_asset = result.installer_asset
+        set_update_status(f"Téléchargement de la version {result.latest_version}…")
         try:
-            installer_path = download_update_installer(result.installer_asset)
-            command = launch_update_installer(installer_path)
-            set_update_status(f"Installateur lance: {result.latest_version}", success=True)
-            append_log(f"Installateur telecharge: {installer_path}")
-            append_log(f"Commande lancee: {' '.join(command)}")
-            notify_user(
-                "Mise a jour MailFlow",
-                "L'installateur de mise a jour a ete lance.",
+            installer_path = run_with_event_loop(
+                lambda: download_update_installer(installer_asset)
             )
+            command = launch_update_installer(installer_path)
+            set_update_status(f"Installateur lancé : {result.latest_version}", success=True)
+            append_log(f"Installateur téléchargé : {installer_path}")
+            append_log(f"Commande lancée : {' '.join(command)}")
+            notify_user(
+                "Mise à jour MailFlow",
+                "L'installateur de mise à jour a été lancé.",
+            )
+            append_log("MailFlow se ferme pour laisser l'installateur remplacer le programme.")
+            QTimer.singleShot(0, quit_for_update)
         except Exception as exc:
             set_update_status("Installation impossible", success=False)
-            append_log(f"Erreur lancement installateur: {exc}")
+            append_log(f"Erreur lancement installateur : {exc}")
 
     def preview_request(
         *,
@@ -2604,30 +2735,53 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             ),
         )
 
+    def update_scan_fields() -> None:
+        # A scan uses the fields of its own banner; the Settings page applies on save.
+        settings.selected_outlook_account = selected_account_identifier()
+        settings.outlook_root_folder = current_outlook_root_folder()
+        settings.selected_year = clean_optional_text(year_input.text())
+
+    def persist_scan_fields() -> None:
+        """Remember account, folder and year for the next start of the real app."""
+        if controller_was_injected:
+            return
+        try:
+            save_settings(settings)
+        except Exception as exc:
+            append_log(f"Compte, dossier et année non mémorisés : {exc}")
+
     def scan_current_preview(
         *,
         project_numbers: Sequence[str] | None = None,
         progress_callback: Any | None = None,
     ) -> list[PreviewRow]:
         nonlocal active_controller
-        update_projects_root()
+        update_scan_fields()
         if settings.ai_mode != AiMode.DISABLED:
             if settings.ai_provider == "openai" and not has_openai_api_key():
-                append_log("Mode IA actif sans cle OpenAI: les lignes resteront a verifier.")
+                append_log("Mode IA actif sans clé OpenAI : les lignes resteront à vérifier.")
             elif settings.ai_provider == "jev" and not has_jev_api_key():
-                append_log("Mode IA actif sans cle Jev: les lignes resteront a verifier.")
-        if not controller_was_injected:
-            active_controller = build_default_controller(settings)
-            enable_responsive_ai()
-            dynamic_window.mailflow_controller = active_controller
-        return active_controller.scan_and_preview(
-            preview_request(project_numbers=project_numbers),
-            progress_callback=progress_callback,
-        )
+                append_log("Mode IA actif sans clé Jev : les lignes resteront à vérifier.")
+        request = preview_request(project_numbers=project_numbers)
+        if controller_was_injected:
+            return list(
+                active_controller.scan_and_preview(request, progress_callback=progress_callback)
+            )
+        # A new controller takes the saved settings into account. It replaces the
+        # current one only once its scan succeeded: after a failed scan the mails on
+        # screen stay the ones of the controller, still usable.
+        new_controller = build_default_controller(settings)
+        # The mailbox page still lists the last analysis: it must stay sortable.
+        new_controller.mailbox_analysis = getattr(active_controller, "mailbox_analysis", None)
+        enable_responsive_ai(new_controller)
+        rows = new_controller.scan_and_preview(request, progress_callback=progress_callback)
+        active_controller = new_controller
+        dynamic_window.mailflow_controller = active_controller
+        return rows
 
     def choose_project_folders(options: Sequence[Any]) -> list[str] | None:
         dialog = QDialog(window)
-        dialog.setWindowTitle("Dossiers Outlook a scanner")
+        dialog.setWindowTitle("Dossiers Outlook à scanner")
         dialog.resize(620, 520)
         dialog_layout = QVBoxLayout(dialog)
         folder_list = QListWidget()
@@ -2653,8 +2807,8 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         selection_actions = QWidget()
         selection_layout = QHBoxLayout(selection_actions)
         selection_layout.setContentsMargins(0, 0, 0, 0)
-        select_all_button = QPushButton("Tout selectionner")
-        select_none_button = QPushButton("Tout deselectionner")
+        select_all_button = QPushButton("Tout sélectionner")
+        select_none_button = QPushButton("Tout désélectionner")
         selection_layout.addWidget(select_all_button)
         selection_layout.addWidget(select_none_button)
         selection_layout.addStretch(1)
@@ -2688,6 +2842,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
 
     @exclusive_operation
     def on_scan() -> None:
+        nonlocal watch_request
         scan_button.setEnabled(False)
         set_scan_status("Lecture des dossiers Outlook...")
         append_log("Lecture des dossiers Outlook...")
@@ -2702,44 +2857,49 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                 preview_request(all_projects=True)
             )
             if not folders:
-                set_scan_status("Aucun dossier projet trouve", success=False)
-                append_log("Aucun dossier projet Outlook trouve pour cette annee.")
+                set_scan_status("Aucun dossier projet trouvé", success=False)
+                append_log("Aucun dossier projet Outlook trouvé pour cette année.")
                 return
             selected_projects = choose_project_folders(folders)
             if selected_projects is None:
-                set_scan_status("Scan annule")
-                append_log("Scan Outlook annule avant classification.")
+                set_scan_status("Scan annulé")
+                append_log("Scan Outlook annulé avant classification.")
                 return
             if not selected_projects:
-                set_scan_status("Aucun dossier selectionne", success=False)
-                append_log("Selectionner au moins un dossier projet a scanner.")
+                set_scan_status("Aucun dossier sélectionné", success=False)
+                append_log("Sélectionnez au moins un dossier projet à scanner.")
                 return
             set_scan_status("Scan Outlook en cours...")
             append_log(
-                f"Scan Outlook: {len(selected_projects)} dossier(s) selectionne(s)."
+                f"Scan Outlook : {len(selected_projects)} dossier(s) sélectionné(s)."
             )
             rows = scan_current_preview(
                 project_numbers=selected_projects,
                 progress_callback=progress,
             )
             if watch_checkbox.isChecked():
-                watch_state.reset_entry_ids(
-                    active_controller.scan_entry_ids(
-                        preview_request(all_projects=True)
-                    )
-                )
+                watch_request = preview_request(all_projects=True)
+                watch_state.reset_entry_ids(active_controller.scan_entry_ids(watch_request))
             else:
                 watch_state.reset(rows)
             refresh_table()
             refresh_directory_table()
-            navigation.setCurrentRow(0)
-            set_scan_status(f"{len(rows)} mail(s) charges.", success=True)
-            append_log(f"{len(rows)} mails charges en previsualisation.")
+            navigation.setCurrentRow(MAIL_PAGE)
+            set_scan_status(f"{len(rows)} mail(s) chargé(s).", success=True)
+            append_log(f"{len(rows)} mail(s) chargé(s) en prévisualisation.")
             log_scan_directory_update()
+            unreadable = getattr(active_controller, "last_scan_unreadable_count", 0)
+            if isinstance(unreadable, int) and unreadable > 0:
+                notify(
+                    f"{len(rows)} mail(s) chargé(s). {unreadable} mail(s) illisible(s) "
+                    "dans Outlook ont été ignorés.",
+                    success=True,
+                )
+            persist_scan_fields()
         except Exception as exc:
             set_scan_status("Erreur scan Outlook", success=False)
             expand_logs()
-            append_log(f"Erreur scan: {exc}")
+            append_log(f"Erreur scan : {exc}")
             QMessageBox.warning(window, "Erreur scan Outlook", str(exc))
         finally:
             scan_button.setEnabled(True)
@@ -2757,44 +2917,75 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             table.clearSelection()
             refresh_table()
             mail_preview.clear()
-            navigation.setCurrentRow(0)
+            navigation.setCurrentRow(MAIL_PAGE)
             append_log(
-                "Espace de travail reinitialise. Réglages, annuaire et archives conserves."
+                "Espace de travail réinitialisé. Réglages, annuaire et archives conservés."
             )
         except Exception as exc:
-            append_log(f"Erreur reinitialisation: {exc}")
+            notify(f"Erreur réinitialisation : {exc}", success=False)
+
+    def on_open_project_folder() -> None:
+        selected = selected_table_row_indexes()
+        rows = active_controller.preview_rows
+        project_number = (
+            rows[selected[0]].mail.project_number
+            if selected
+            else next(
+                (row.mail.project_number for row in rows if row.mail.project_number.strip()),
+                "",
+            )
+        )
+        target, found = project_folder_to_open(settings.local_projects_root, project_number)
+        if target is None:
+            message = f"Dossier local des projets introuvable : {settings.local_projects_root}"
+            set_scan_status(message, success=False)
+            append_log(message)
+            return
+        if project_number and not found:
+            append_log(
+                f"Dossier local du projet {project_number} absent : "
+                "ouverture du dossier des projets."
+            )
+        if open_local_folder(target):
+            set_scan_status(f"Dossier ouvert : {target}")
+            append_log(f"Dossier ouvert : {target}")
+        else:
+            set_scan_status(f"Impossible d'ouvrir le dossier : {target}", success=False)
+            append_log(f"Impossible d'ouvrir le dossier : {target}")
 
     def on_export_report() -> None:
         if operation_in_progress:
             return
         try:
             path = active_controller.export_report()
-            append_log(f"Rapport exporte: {path}")
+            notify(f"Rapport exporté : {path}", success=True)
         except Exception as exc:
-            append_log(f"Erreur export rapport: {exc}")
+            notify(f"Erreur export rapport : {exc}", success=False)
 
     def on_export_project_html() -> None:
         if operation_in_progress:
             return
         if not active_controller.preview_rows:
-            append_log("Aucun mail en previsualisation.")
+            notify("Aucun mail en prévisualisation.")
             return
         try:
             results = active_controller.export_project_html(overwrite_html=False)
         except FileExistsError as exc:
-            path = Path(str(exc))
-            if not confirm_html_overwrite(path, parent=window):
-                append_log("Export HTML annule.")
+            # Every journal that would be replaced is named before anything is written.
+            paths = list(getattr(exc, "paths", ())) or [Path(str(exc))]
+            if not confirm_html_overwrite(paths, parent=window):
+                notify("Export HTML annulé.")
                 return
             try:
                 results = active_controller.export_project_html(overwrite_html=True)
             except Exception as retry_exc:
-                append_log(f"Erreur export HTML projet: {retry_exc}")
+                notify(f"Erreur export HTML projet : {retry_exc}", success=False)
                 return
         except Exception as exc:
-            append_log(f"Erreur export HTML projet: {exc}")
+            notify(f"Erreur export HTML projet : {exc}", success=False)
             return
         append_log(format_project_html_export_result(results))
+        set_scan_status(f"{len(results)} journal(aux) HTML exporté(s).", success=True)
 
     def on_import_directory() -> None:
         try:
@@ -2807,18 +2998,18 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             refresh_directory_table()
             append_log(message)
         except Exception as exc:
-            append_log(f"Erreur import annuaire: {exc}")
+            notify(f"Erreur import annuaire : {exc}", success=False)
 
     def on_mark_ignored() -> None:
         if operation_in_progress:
             return
         indexes = selected_table_row_indexes()
         if not indexes:
-            append_log("Aucune ligne selectionnee a ignorer.")
+            notify("Aucune ligne sélectionnée à ignorer.")
             return
         active_controller.mark_selected_ignored(indexes)
         refresh_table()
-        append_log(f"{len(indexes)} ligne(s) marquee(s) comme ignoree(s).")
+        append_log(f"{len(indexes)} ligne(s) marquée(s) comme ignorée(s).")
 
     def on_restore_archivable() -> None:
         if operation_in_progress:
@@ -2830,13 +3021,13 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     @exclusive_operation
     def on_reclassify() -> None:
         if not active_controller.preview_rows:
-            append_log("Aucun mail a reclassifier.")
+            append_log("Aucun mail à reclasser.")
             return
         try:
-            scan_status_label.setText("Reclassification IA...")
+            set_scan_status("Reclassification IA...")
 
             def reclassify_progress(message: str) -> None:
-                scan_status_label.setText(message)
+                set_scan_status(message)
                 QApplication.processEvents()
 
             active_controller.reclassify_preview(
@@ -2844,11 +3035,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             )
             refresh_table()
             refresh_directory_table()
-            scan_status_label.setText("Reclassification terminee")
-            append_log("Projet reclasse avec l'IA et les roles actuels de l'annuaire.")
+            set_scan_status("Reclassification terminée", success=True)
+            append_log("Projet reclassé avec l'IA et les rôles actuels de l'annuaire.")
         except Exception as exc:
-            scan_status_label.setText("Echec reclassification")
-            append_log(f"Erreur reclassification: {exc}")
+            set_scan_status("Échec de la reclassification", success=False)
+            append_log(f"Erreur reclassification : {exc}")
 
     def archive_new_ready_rows(new_entry_ids: Sequence[str]) -> ArchiveBatchResult:
         new_ids = set(new_entry_ids)
@@ -2867,56 +3058,66 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         return active_controller.archive_selected(ready_indexes, include_review=False)
 
     def on_watch_toggled(enabled: bool) -> None:
+        nonlocal watch_request
         if not enabled:
             watch_timer.stop()
             sync_tray_watch_action(False)
-            append_log("Surveillance Outlook desactivee.")
+            append_log("Surveillance Outlook désactivée.")
             return
         try:
-            entry_ids = active_controller.scan_entry_ids(
-                preview_request(all_projects=True)
-            )
+            # The watch keeps the account, folder and year it was started with:
+            # another year typed in the banner must not make every mail "new".
+            request = preview_request(all_projects=True)
+            entry_ids = active_controller.scan_entry_ids(request)
+            watch_request = request
             watch_state.reset_entry_ids(entry_ids)
             sync_review_queue_from_preview()
             watch_timer.start()
             sync_tray_watch_action(True)
             notify_user(
-                "Surveillance activee",
+                "Surveillance activée",
                 "MailFlow surveille tous les dossiers projet toutes les 5 minutes.",
             )
             append_log(
-                "Surveillance Outlook activee sur tous les dossiers projet: "
-                f"{len(entry_ids)} mail(s) connus, controle toutes les 5 minutes."
+                "Surveillance Outlook activée sur tous les dossiers projet : "
+                f"{len(entry_ids)} mail(s) connus, contrôle toutes les 5 minutes."
             )
         except Exception as exc:
             watch_checkbox.blockSignals(True)
             watch_checkbox.setChecked(False)
             watch_checkbox.blockSignals(False)
             sync_tray_watch_action(False)
-            append_log(f"Impossible d'activer la surveillance Outlook: {exc}")
+            notify(f"Impossible d'activer la surveillance Outlook : {exc}", success=False)
 
-    @exclusive_operation
     def run_watch_scan() -> None:
         nonlocal watch_paused_logged
+        # Decided before taking the exclusive operation: a paused tick must not
+        # disable the window, which would steal the keyboard focus every 5 minutes.
+        if operation_in_progress:
+            return
         if should_pause_watch_scan(
             window_visible=window.isVisible(),
             preview_has_rows=bool(active_controller.preview_rows),
         ):
             if not watch_paused_logged:
                 append_log(
-                    "Surveillance Outlook en attente: previsualisation ouverte, "
+                    "Surveillance Outlook en attente : prévisualisation ouverte, "
                     "aucun scan automatique."
                 )
             watch_paused_logged = True
             return
         watch_paused_logged = False
+        scan_watched_folders()
+
+    @exclusive_operation
+    def scan_watched_folders() -> None:
         previous_entry_ids = set(watch_state.known_entry_ids)
         try:
-            request = preview_request(all_projects=True)
+            request = watch_request or preview_request(all_projects=True)
             current_entry_ids = active_controller.scan_entry_ids(request)
             change = watch_state.update_entry_ids(current_entry_ids)
         except Exception as exc:
-            append_log(f"Surveillance Outlook en attente: {exc}")
+            append_log(f"Surveillance Outlook en attente : {exc}")
             notify_user(
                 "Surveillance Outlook en attente",
                 "Outlook n'est pas disponible pour le moment.",
@@ -2932,10 +3133,10 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             )
         except Exception as exc:
             watch_state.reset_entry_ids(previous_entry_ids)
-            append_log(f"Surveillance Outlook en attente: {exc}")
+            append_log(f"Surveillance Outlook en attente : {exc}")
             notify_user(
                 "Nouveaux mails en attente",
-                "La lecture ou la classification a echoue; MailFlow reessaiera.",
+                "La lecture ou la classification a échoué ; MailFlow réessaiera.",
                 QSystemTrayIcon.MessageIcon.Warning,
             )
             return
@@ -2945,40 +3146,40 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         try:
             archive_result = archive_new_ready_rows(change.new_entry_ids)
         except Exception as exc:
-            append_log(f"Erreur archivage automatique: {exc}")
+            append_log(f"Erreur archivage automatique : {exc}")
             notify_user(
                 "Archivage automatique en erreur",
-                "Verifier MailFlow pour traiter les nouveaux mails.",
+                "Vérifiez MailFlow pour traiter les nouveaux mails.",
                 QSystemTrayIcon.MessageIcon.Warning,
             )
         new_pending_count = sync_review_queue_from_preview()
         refresh_table()
-        append_log(f"Surveillance Outlook: {change.new_count} nouveau(x) mail(s) detecte(s).")
+        append_log(f"Surveillance Outlook : {change.new_count} nouveau(x) mail(s) détecté(s).")
         if archive_result.exported_count:
-            append_log(f"Archivage automatique: {format_archive_result(archive_result)}")
+            append_log(f"Archivage automatique : {format_archive_result(archive_result)}")
             notify_user(
                 "Archivage automatique",
-                f"{archive_result.exported_count} nouveau(x) mail(s) archive(s).",
+                f"{archive_result.exported_count} nouveau(x) mail(s) archivé(s).",
             )
         if archive_result.failure_count:
-            append_log(f"Archivage automatique incomplet: {format_archive_result(archive_result)}")
+            append_log(f"Archivage automatique incomplet : {format_archive_result(archive_result)}")
             for failure in archive_result.failures[:5]:
-                append_log(f"Echec auto {failure.mail_id}: {failure.reason}")
+                append_log(f"Échec auto {failure.mail_id} : {failure.reason}")
             notify_user(
                 "Archivage automatique incomplet",
-                f"{archive_result.failure_count} mail(s) n'ont pas pu etre archives.",
+                f"{archive_result.failure_count} mail(s) n'ont pas pu être archivés.",
                 QSystemTrayIcon.MessageIcon.Warning,
             )
         if review_queue.count:
-            append_log(f"File a verifier: {review_queue.count} mail(s) en attente.")
+            append_log(f"File à vérifier : {review_queue.count} mail(s) en attente.")
             notify_user(
-                "Mails a verifier",
+                "Mails à vérifier",
                 f"{review_queue.count} mail(s) attendent une validation.",
                 QSystemTrayIcon.MessageIcon.Warning,
             )
         if archive_result.exported_count == 0 and new_pending_count == 0:
             notify_user(
-                "Nouveaux mails detectes",
+                "Nouveaux mails détectés",
                 f"{change.new_count} nouveau(x) mail(s), aucun archivage automatique.",
             )
 
@@ -2993,11 +3194,11 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             return
         sent_review_reminders.add(due_key)
         notify_user(
-            "Mails a verifier",
+            "Mails à vérifier",
             f"{review_queue.count} mail(s) attendent une validation dans MailFlow.",
             QSystemTrayIcon.MessageIcon.Warning,
         )
-        append_log(f"Rappel file a verifier: {review_queue.count} mail(s) en attente.")
+        append_log(f"Rappel file à vérifier : {review_queue.count} mail(s) en attente.")
 
     mailbox_row_entry_ids: list[str] = []
     projectflow_installation = ProjectFlowInstallation(None)
@@ -3008,7 +3209,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         try:
             projectflow_installation = find_projectflow(projectflow_input.text())
         except Exception as exc:
-            append_log(f"Detection ProjectFlow impossible: {exc}")
+            append_log(f"Détection ProjectFlow impossible : {exc}")
             projectflow_installation = ProjectFlowInstallation(None)
         projectflow_status.setText(projectflow_installation.status_text)
         update_mailbox_actions()
@@ -3081,7 +3282,17 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             )
         update_mailbox_actions()
 
-    def refresh_mailbox_table() -> None:
+    def mailbox_check_states() -> dict[str, bool]:
+        states: dict[str, bool] = {}
+        for row, entry_id in enumerate(mailbox_row_entry_ids):
+            item = mailbox_table.item(row, CHECK_COLUMN)
+            if item is not None and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                states[entry_id] = item.checkState() == Qt.CheckState.Checked
+        return states
+
+    def refresh_mailbox_table(*, keep_checks: bool = False) -> None:
+        # After a sort or a ProjectFlow run, the ticks stay as the user left them.
+        previous_checks = mailbox_check_states() if keep_checks else {}
         analysis = getattr(active_controller, "mailbox_analysis", None)
         proposals = analysis.proposals if analysis is not None else []
         folders = analysis.project_folders if analysis is not None else {}
@@ -3106,7 +3317,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
                     check_item.setFlags(check_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                     check_item.setCheckState(
                         Qt.CheckState.Checked
-                        if proposal.selected_by_default
+                        if previous_checks.get(proposal.entry_id, proposal.selected_by_default)
                         else Qt.CheckState.Unchecked
                     )
         finally:
@@ -3137,7 +3348,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         try:
             save_settings(settings)
         except Exception as exc:
-            append_log(f"Options de rangement non enregistrees: {exc}")
+            append_log(f"Options de rangement non enregistrées : {exc}")
 
     @exclusive_operation
     def on_analyze_mailbox() -> None:
@@ -3165,7 +3376,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         if mailbox_jev_checkbox.isChecked() and has_jev_api_key():
             matcher = build_project_suggester(settings)
             if matcher is None:
-                append_log("Aucune cle Jev: suggestions de projet desactivees.")
+                append_log("Aucune clé Jev : suggestions de projet désactivées.")
             else:
                 suggester = ResponsiveProjectSuggester(matcher)
         progress_dialog = QProgressDialog(
@@ -3203,7 +3414,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         except Exception as exc:
             refresh_mailbox_table()
             mailbox_summary_label.setText("Analyse de la boîte mail impossible.")
-            append_log(f"Erreur analyse boite mail: {exc}")
+            append_log(f"Erreur analyse boîte mail : {exc}")
             QMessageBox.warning(window, "Analyse de la boîte mail", str(exc))
             return
         finally:
@@ -3213,7 +3424,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         summary = summarize_mailbox_analysis(analysis, days=days)
         mailbox_summary_label.setText(summary)
         mailbox_status_label.setText(" ".join(analysis.warnings))
-        append_log(f"Boite mail analysee: {summary}")
+        append_log(f"Boîte mail analysée : {summary}")
         for warning in analysis.warnings:
             append_log(warning)
 
@@ -3231,22 +3442,27 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
-            append_log("Rangement Outlook annule.")
+            append_log("Rangement Outlook annulé.")
             return
         try:
             result = active_controller.sort_mailbox(choices)
         except Exception as exc:
-            append_log(f"Erreur rangement Outlook: {exc}")
+            append_log(f"Erreur rangement Outlook : {exc}")
             QMessageBox.warning(window, "Ranger la boîte mail", str(exc))
             return
-        refresh_mailbox_table()
+        refresh_mailbox_table(keep_checks=True)
+        remaining = getattr(active_controller, "mailbox_analysis", None)
+        if remaining is not None:
+            mailbox_summary_label.setText(
+                summarize_mailbox_analysis(remaining, days=mailbox_analysis_days)
+            )
         message = format_mailbox_sort_result(result)
         mailbox_status_label.setText(message)
         append_log(message)
         for failure in result.failures[:10]:
-            append_log(f"Echec rangement Outlook: {failure}")
+            append_log(f"Échec rangement Outlook : {failure}")
         if result.moved_count:
-            append_log("Les mails ranges seront repris au prochain scan des dossiers projet.")
+            append_log("Les mails rangés seront repris au prochain scan des dossiers projet.")
 
     @exclusive_operation
     def on_create_missing_folders() -> None:
@@ -3267,7 +3483,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
-            append_log("Creation des dossiers par ProjectFlow annulee.")
+            append_log("Création des dossiers par ProjectFlow annulée.")
             return
         progress_dialog = QProgressDialog(
             "ProjectFlow prépare les dossiers Outlook...", "", 0, 0, window
@@ -3284,20 +3500,30 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
             result = run_with_event_loop(lambda: link.ensure_outlook_folders(numbers))
             refreshed = active_controller.refresh_mailbox_project_folders()
         except ProjectFlowError as exc:
+            # Folders created before the failure (earlier batch, late answer) count.
+            try:
+                partial = active_controller.refresh_mailbox_project_folders()
+            except Exception:
+                partial = None
+            if partial is not None:
+                refresh_mailbox_table(keep_checks=True)
+                mailbox_summary_label.setText(
+                    summarize_mailbox_analysis(partial, days=mailbox_analysis_days)
+                )
             mailbox_status_label.setText(str(exc))
-            append_log(f"ProjectFlow: {exc}")
+            append_log(f"ProjectFlow : {exc}")
             QMessageBox.warning(window, "ProjectFlow", str(exc))
             return
         except Exception as exc:
             mailbox_status_label.setText("Les dossiers n'ont pas pu être préparés.")
-            append_log(f"Erreur ProjectFlow: {exc}")
+            append_log(f"Erreur ProjectFlow : {exc}")
             QMessageBox.warning(window, "ProjectFlow", str(exc))
             return
         finally:
             progress_dialog.close()
             progress_dialog.deleteLater()
         report = projectflow_report(result, refreshed.project_folders)
-        refresh_mailbox_table()
+        refresh_mailbox_table(keep_checks=True)
         mailbox_summary_label.setText(
             summarize_mailbox_analysis(refreshed, days=mailbox_analysis_days)
         )
@@ -3305,7 +3531,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         mailbox_status_label.setText(message)
         append_log(message)
         for number, reason in (*report.unknown, *report.failed):
-            append_log(f"ProjectFlow {number}: {reason}")
+            append_log(f"ProjectFlow {number} : {reason}")
 
     def open_mailbox_mail(row: int, _column: int) -> None:
         if operation_in_progress or not 0 <= row < len(mailbox_row_entry_ids):
@@ -3313,7 +3539,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         try:
             active_controller.open_mailbox_mail(mailbox_row_entry_ids[row])
         except Exception as exc:
-            append_log(f"Impossible d'ouvrir le mail dans Outlook: {exc}")
+            append_log(f"Impossible d'ouvrir le mail dans Outlook : {exc}")
 
     def selected_table_row_indexes() -> list[int]:
         selection_model = table.selectionModel()
@@ -3331,6 +3557,14 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         update_mail_preview(selected[0] if selected else table.currentRow())
         update_selection_actions()
 
+    def report_archive_result(result: ArchiveBatchResult) -> None:
+        notify(format_archive_result(result), success=not result.failure_count)
+        for failure in result.failures[:5]:
+            append_log(f"Échec {failure.mail_id} : {failure.reason}")
+        if result.failure_count:
+            # Failures must be seen: the journal is folded by default.
+            expand_logs()
+
     def confirm_archive(summary: ArchiveSelectionSummary, *, title: str) -> bool:
         response = QMessageBox.question(
             window,
@@ -3347,25 +3581,25 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         indexes = selected_table_row_indexes()
         summary = summarize_archive_selection(active_controller.preview_rows, indexes)
         if summary.selected_count == 0:
-            append_log("Aucune ligne selectionnee.")
+            append_log("Aucune ligne sélectionnée.")
             set_scan_status(
                 "Sélectionnez des mails, ou utilisez le menu Archiver tous les mails prêts."
             )
             return
         if not summary.can_archive:
-            append_log("Aucune ligne selectionnee n'est prete a archiver.")
+            notify("Aucune ligne sélectionnée n'est prête à archiver.")
             return
-        if not confirm_archive(summary, title="Confirmer l'archivage de la selection"):
-            append_log("Archivage annule.")
+        if not confirm_archive(summary, title="Confirmer l'archivage de la sélection"):
+            notify("Archivage annulé.")
             return
         try:
             result = active_controller.archive_selected(indexes, include_review=False)
-            refresh_table()
-            append_log(format_archive_result(result))
-            for failure in result.failures[:5]:
-                append_log(f"Echec {failure.mail_id}: {failure.reason}")
         except Exception as exc:
-            append_log(f"Erreur archivage: {exc}")
+            notify(f"Erreur archivage : {exc}", success=False)
+            expand_logs()
+            return
+        refresh_table()
+        report_archive_result(result)
 
     def on_archive_all_except_review() -> None:
         if operation_in_progress:
@@ -3373,22 +3607,22 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
         indexes = list(range(len(active_controller.preview_rows)))
         summary = summarize_archive_selection(active_controller.preview_rows, indexes)
         if summary.selected_count == 0:
-            append_log("Aucune ligne en previsualisation.")
+            notify("Aucune ligne en prévisualisation.")
             return
         if not summary.can_archive:
-            append_log("Aucune ligne n'est prete a archiver.")
+            notify("Aucune ligne n'est prête à archiver.")
             return
         if not confirm_archive(summary, title="Confirmer l'archivage global"):
-            append_log("Archivage annule.")
+            notify("Archivage annulé.")
             return
         try:
             result = active_controller.archive_ready(include_review=False)
-            refresh_table()
-            append_log(format_archive_result(result))
-            for failure in result.failures[:5]:
-                append_log(f"Echec {failure.mail_id}: {failure.reason}")
         except Exception as exc:
-            append_log(f"Erreur archivage global: {exc}")
+            notify(f"Erreur archivage global : {exc}", success=False)
+            expand_logs()
+            return
+        refresh_table()
+        report_archive_result(result)
 
     scan_button.clicked.connect(on_scan)
     search_input.textChanged.connect(apply_mail_filters)
@@ -3418,9 +3652,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     ignore_action.triggered.connect(lambda _checked=False: on_mark_ignored())
     restore_archivable_action.triggered.connect(lambda _checked=False: on_restore_archivable())
     reclassify_action.triggered.connect(lambda _checked=False: on_reclassify())
-    open_folder_action.triggered.connect(
-        lambda _checked=False: append_log(str(settings.local_projects_root))
-    )
+    open_folder_action.triggered.connect(lambda _checked=False: on_open_project_folder())
     report_action.triggered.connect(lambda _checked=False: on_export_report())
     import_directory_button.clicked.connect(on_import_directory)
     validate_suggestions_button.clicked.connect(
@@ -3434,7 +3666,7 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     rename_directory_button.clicked.connect(rename_selected_directory_organization)
     merge_directory_button.clicked.connect(merge_selected_directory_organization)
     navigation.currentRowChanged.connect(
-        lambda index: refresh_directory_table() if index == 2 else None
+        lambda index: refresh_directory_table() if index == DIRECTORY_PAGE else None
     )
     navigation.currentRowChanged.connect(
         lambda index: update_mailbox_jev_option() if index == MAILBOX_PAGE else None
@@ -3482,9 +3714,12 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     table.itemSelectionChanged.connect(update_preview_from_selection)
     shortcut_actions: list[Any] = []
     for sequence, callback in (
-        ("Ctrl+F", lambda: (navigation.setCurrentRow(0), search_input.setFocus())),
+        ("Ctrl+F", lambda: (navigation.setCurrentRow(MAIL_PAGE), search_input.setFocus())),
         ("Ctrl+R", on_scan),
-        ("Ctrl+Return", on_archive_selection),
+        (
+            "Ctrl+Return",
+            lambda: on_archive_selection() if navigation.currentRow() == MAIL_PAGE else None,
+        ),
         ("Ctrl+,", lambda: navigation.setCurrentRow(SETTINGS_PAGE)),
     ):
         shortcut_action = QAction(window)
@@ -3551,6 +3786,9 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     dynamic_window.mailflow_ollama_model_input = ollama_model_input
     dynamic_window.mailflow_ollama_base_url_input = ollama_base_url_input
     dynamic_window.mailflow_ollama_timeout_input = ollama_timeout_input
+    dynamic_window.mailflow_openai_timeout_input = openai_timeout_input
+    dynamic_window.mailflow_jev_timeout_input = jev_timeout_input
+    dynamic_window.mailflow_confidence_threshold_input = confidence_threshold_input
     dynamic_window.mailflow_ollama_status = ollama_status
     dynamic_window.mailflow_refresh_ollama_models_button = refresh_ollama_models_button
     dynamic_window.mailflow_test_ollama_button = test_ollama_button
@@ -3617,6 +3855,41 @@ def MainWindow(settings: AppSettings, controller: Any | None = None) -> Any:
     return window
 
 
+def project_folder_to_open(projects_root: Path, project_number: str) -> tuple[Path | None, bool]:
+    """Folder to show for a project: its own folder, else the projects root.
+
+    Returns the folder (None when even the root is missing) and whether it is the
+    project's own folder.
+    """
+    if project_number.strip():
+        try:
+            project_path = local_project_path(projects_root, project_number)
+        except ValueError:
+            project_path = None
+        if project_path is not None and project_path.is_dir():
+            return project_path, True
+    return (projects_root if projects_root.is_dir() else None), False
+
+
+def open_local_folder(path: Path) -> bool:
+    """Show a folder in the file manager of the system."""
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+
+    return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))))
+
+
+def install_french_translation(app: Any) -> bool:
+    """Show the standard buttons of Qt dialogs (Oui, Non, Annuler) in French."""
+    from PySide6.QtCore import QLibraryInfo, QLocale, QTranslator
+
+    translator = QTranslator(app)
+    directory = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    if not translator.load(QLocale(QLocale.Language.French), "qtbase", "_", directory):
+        return False
+    return bool(app.installTranslator(translator))
+
+
 def clean_optional_text(value: str) -> str | None:
     cleaned = value.strip()
     return cleaned or None
@@ -3634,15 +3907,16 @@ def format_outlook_account_label(account: OutlookAccount) -> str:
 
 def ai_mode_label(mode: AiMode) -> str:
     labels = {
-        AiMode.DISABLED: "desactivee",
-        AiMode.AMBIGUOUS_ONLY: "activee",
-        AiMode.ALL: "activee",
+        AiMode.DISABLED: "Désactivée",
+        AiMode.AMBIGUOUS_ONLY: "Activée",
+        AiMode.ALL: "Activée",
     }
     return labels[mode]
 
 
 def interlocutor_label(interlocutor: InterlocutorType) -> str:
-    return interlocutor.value
+    # Same wording as the Mails page: "intervenant externe", not the stored value.
+    return interlocutor_option_label(interlocutor)
 
 
 def ai_provider_hint_text(provider: str) -> str:
@@ -3669,12 +3943,12 @@ def openai_key_status_text(
     if testing:
         return "Test IA en cours..."
     if not has_key:
-        return "Aucune cle"
+        return "Aucune clé"
     if valid is True:
-        return "Cle valide - IA OK"
+        return "Clé valide - IA OK"
     if valid is False:
-        return "Cle invalide ou indisponible"
-    return "Cle enregistree (non testee)"
+        return "Clé invalide ou indisponible"
+    return "Clé enregistrée (non testée)"
 
 
 def openai_key_status_style(
@@ -3740,12 +4014,12 @@ def summarize_archive_selection(
 
 def build_archive_confirmation_message(summary: ArchiveSelectionSummary) -> str:
     lines = [
-        f"{summary.ready_count} mail(s) pret(s) vont etre archives.",
-        "Les mails a verifier, ignores ou deja archives ne seront pas exportes.",
-        "Aucun fichier .msg existant ne sera ecrase.",
+        f"{summary.ready_count} mail(s) prêt(s) vont être archivés.",
+        "Les mails à vérifier, ignorés ou déjà archivés ne seront pas exportés.",
+        "Aucun fichier .msg existant ne sera écrasé.",
     ]
     if summary.skipped_count:
-        lines.insert(1, f"{summary.skipped_count} ligne(s) selectionnee(s) seront ignorees.")
+        lines.insert(1, f"{summary.skipped_count} ligne(s) sélectionnée(s) seront ignorées.")
     return "\n".join(lines)
 
 
@@ -3766,7 +4040,7 @@ def tray_tooltip_text(watch_enabled: bool, review_count: int = 0) -> str:
     status = UI_TEXT["tray_watch_active"] if watch_enabled else UI_TEXT["tray_watch_inactive"]
     text = f"{UI_TEXT['window_title']} - {status}"
     if review_count > 0:
-        text = f"{text} - {review_count} a verifier"
+        text = f"{text} - {review_count} à vérifier"
     return text
 
 
@@ -3780,12 +4054,12 @@ def parse_reminder_times(value: str) -> list[str]:
             continue
         match = re.fullmatch(r"(\d{1,2}):(\d{2})", part)
         if match is None:
-            msg = f"Heure de rappel invalide: {part}"
+            msg = f"Heure de rappel invalide : {part}"
             raise ValueError(msg)
         hour = int(match.group(1))
         minute = int(match.group(2))
         if hour > 23 or minute > 59:
-            msg = f"Heure de rappel invalide: {part}"
+            msg = f"Heure de rappel invalide : {part}"
             raise ValueError(msg)
         normalized = f"{hour:02d}:{minute:02d}"
         if normalized not in result:
@@ -3805,43 +4079,38 @@ def review_reminder_due_key(
 ) -> str | None:
     if review_count <= 0:
         return None
-    current_time = now.strftime("%H:%M")
-    normalized_times = set(parse_reminder_times(", ".join(reminder_times)))
-    if current_time not in normalized_times:
-        return None
-    key = now.strftime("%Y-%m-%d %H:%M")
-    return None if key in sent_keys else key
+    for reminder in sorted(set(parse_reminder_times(", ".join(reminder_times)))):
+        hour, minute = (int(part) for part in reminder.split(":"))
+        due_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if due_at <= now < due_at + timedelta(minutes=REMINDER_GRACE_MINUTES):
+            key = f"{now:%Y-%m-%d} {reminder}"
+            return None if key in sent_keys else key
+    return None
 
 
-def confirm_html_overwrite(path: Path, *, parent: Any | None = None) -> bool:
+def confirm_html_overwrite(
+    paths: Path | Sequence[Path], *, parent: Any | None = None,
+) -> bool:
     from PySide6.QtWidgets import QMessageBox
 
+    existing = [paths] if isinstance(paths, Path) else list(paths)
+    listed = "\n".join(str(path) for path in existing[:10])
+    if len(existing) > 10:
+        listed += f"\n… et {len(existing) - 10} autre(s)"
+    if len(existing) == 1:
+        question = (
+            f"Le fichier HTML existe déjà :\n{listed}\n\n"
+            "Le mettre à jour avec la prévisualisation actuelle ?"
+        )
+    else:
+        question = (
+            f"{len(existing)} journaux HTML existent déjà :\n{listed}\n\n"
+            "Les mettre tous à jour avec la prévisualisation actuelle ?"
+        )
     response = QMessageBox.question(
         parent,
-        "Mettre a jour le journal HTML",
-        (
-            "Le fichier HTML existe deja:\n"
-            f"{path}\n\n"
-            "Le mettre a jour avec la previsualisation actuelle ?"
-        ),
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        QMessageBox.StandardButton.No,
-    )
-    return response == QMessageBox.StandardButton.Yes
-
-
-def confirm_watch_html_update(new_count: int, *, parent: Any | None = None) -> bool:
-    from PySide6.QtWidgets import QMessageBox
-
-    response = QMessageBox.question(
-        parent,
-        "Nouveaux mails detectes",
-        (
-            f"{new_count} nouveau(x) mail(s) ont ete detectes dans Outlook.\n\n"
-            "La previsualisation et l'arborescence sont affichees dans MailFlow.\n"
-            "Choisir Non pour verifier ou corriger les dossiers avant export.\n\n"
-            "Mettre a jour le journal HTML projet maintenant ?"
-        ),
+        "Mettre à jour le journal HTML",
+        question,
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         QMessageBox.StandardButton.No,
     )
@@ -3854,12 +4123,12 @@ def confirm_update_install(result: UpdateCheckResult, *, parent: Any | None = No
     asset_name = result.installer_asset.name if result.installer_asset is not None else "-"
     response = QMessageBox.question(
         parent,
-        "Mise a jour disponible",
+        "Mise à jour disponible",
         (
             f"La version {result.latest_version} est disponible.\n\n"
-            f"Installateur: {asset_name}\n\n"
-            "Telecharger et lancer l'installateur maintenant ?\n"
-            "Fermer MailFlow pendant l'installation si l'installateur le demande."
+            f"Installateur : {asset_name}\n\n"
+            "Télécharger et lancer l'installateur maintenant ?\n"
+            "MailFlow se fermera pour laisser l'installateur remplacer le programme."
         ),
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         QMessageBox.StandardButton.No,
@@ -3872,10 +4141,10 @@ def confirm_open_release_page(release_url: str, *, parent: Any | None = None) ->
 
     response = QMessageBox.question(
         parent,
-        "Mise a jour disponible",
+        "Mise à jour disponible",
         (
-            "Une mise a jour est disponible, mais aucun installateur automatique "
-            "n'a ete trouve pour cette plateforme.\n\n"
+            "Une mise à jour est disponible, mais aucun installateur automatique "
+            "n'a été trouvé pour cette plateforme.\n\n"
             f"Ouvrir la page de release ?\n{release_url}"
         ),
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -3886,13 +4155,13 @@ def confirm_open_release_page(release_url: str, *, parent: Any | None = None) ->
 
 def format_project_html_export_result(results: Sequence[object]) -> str:
     if not results:
-        return "Aucun journal HTML exporte."
-    lines = ["Export HTML termine:"]
+        return "Aucun journal HTML exporté."
+    lines = ["Export HTML terminé :"]
     for result in results:
         path = getattr(result, "html_path", "")
         count = getattr(result, "mail_count", 0)
         attachment_count = len(getattr(result, "attachment_paths", []))
-        lines.append(f"- {count} mail(s), {attachment_count} piece(s) jointe(s): {path}")
+        lines.append(f"- {count} mail(s), {attachment_count} pièce(s) jointe(s) : {path}")
     return "\n".join(lines)
 
 
@@ -3914,19 +4183,19 @@ def format_directory_entry_label(entry: Any) -> str:
 
 def format_directory_import_result(result: object) -> str:
     return (
-        "Import annuaire termine: "
-        f"{getattr(result, 'scanned_mail_count', 0)} mail(s) scanne(s), "
-        f"{getattr(result, 'imported_contact_count', 0)} contact(s) importe(s), "
-        f"{getattr(result, 'new_organizations', 0)} entreprise(s) creee(s), "
-        f"{getattr(result, 'new_domains', 0)} domaine(s) ajoute(s)."
+        "Import annuaire terminé : "
+        f"{getattr(result, 'scanned_mail_count', 0)} mail(s) scanné(s), "
+        f"{getattr(result, 'imported_contact_count', 0)} contact(s) importé(s), "
+        f"{getattr(result, 'new_organizations', 0)} entreprise(s) créée(s), "
+        f"{getattr(result, 'new_domains', 0)} domaine(s) ajouté(s)."
     )
 
 
 def format_archive_result(result: ArchiveBatchResult) -> str:
     message = (
-        "Archivage termine: "
-        f"{result.exported_count} exporte(s), "
-        f"{result.skipped_count} ignore(s), "
+        "Archivage terminé : "
+        f"{result.exported_count} exporté(s), "
+        f"{result.skipped_count} ignoré(s), "
         f"{result.failure_count} erreur(s)."
     )
     warnings = getattr(result, "warnings", [])

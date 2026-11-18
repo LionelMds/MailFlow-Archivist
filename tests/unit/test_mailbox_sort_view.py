@@ -102,7 +102,7 @@ def test_summary_counts_each_state_and_the_period() -> None:
 
     assert summarize_mailbox_analysis(analysis, days=90) == (
         "2 mail(s) prêt(s) à ranger (1 copie(s)) · 1 suggestion(s) Jev à vérifier · "
-        "1 dossier(s) projet absent(s) · 1 sans numéro · 1 illisible(s) — 90 derniers jours."
+        "1 mail(s) sans dossier projet · 1 sans numéro · 1 illisible(s) — 90 derniers jours."
     )
     analysis.cancelled = True
     assert summarize_mailbox_analysis(analysis, days=0).startswith("Analyse interrompue.")

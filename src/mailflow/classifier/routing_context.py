@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from mailflow.core.contact_directory import email_domain, is_internal_domain, split_contact
-from mailflow.core.correspondence_hierarchy import UNKNOWN_COMPANY, company_from_mail
+from mailflow.core.correspondence_hierarchy import UNKNOWN_COMPANY, company_for_mail
+from mailflow.core.domains import INTERNAL_COMPANY_FOLDER, is_internal_mail
+from mailflow.core.forwarded_mail import forwarded_counterparty_email
 from mailflow.models import (
     Direction,
     InterlocutorType,
@@ -14,6 +16,12 @@ from mailflow.models import (
 )
 
 EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
+# Only colleagues take part in the mail.
+INTERNAL_MAIL_SOURCE = "internal_mail"
+# A colleague forwarded an external mail to colleagues: its author is the counterparty.
+INTERNAL_FORWARD_SOURCE = "internal_forward"
+# The directory gives the role "interne" to the company of the counterparty.
+INTERNAL_ROLE_SOURCE = "directory_internal_role"
 
 
 class RoutingDirectoryProtocol(Protocol):
@@ -52,25 +60,34 @@ def resolve_counterparty(
     directory: RoutingDirectoryProtocol | None,
 ) -> ResolvedCounterparty:
     email, source = _primary_external_email(mail, directory)
+    if source == INTERNAL_MAIL_SOURCE:
+        return _internal_counterparty(None, source)
     organization_name = None
     role = None
     if email and directory is not None:
         organization_name = directory.organization_name_for_email(email)
         role = directory.interlocutor_for_email(mail.project_number, email)
+    if role == InterlocutorType.INTERNE:
+        return _internal_counterparty(email, INTERNAL_ROLE_SOURCE)
     locked = bool(organization_name)
     if not organization_name:
-        organization_name = company_from_mail(
-            mail.direction,
-            mail.sender_name,
-            mail.sender_email,
-            mail.recipients,
-            organization_directory=directory,
-        )
+        organization_name = company_for_mail(mail, organization_directory=directory)
     return ResolvedCounterparty(
         email=email,
         organization_name=organization_name or UNKNOWN_COMPANY,
         role=role,
         organization_locked=locked,
+        source=source,
+    )
+
+
+def _internal_counterparty(email: str | None, source: str) -> ResolvedCounterparty:
+    """An internal mail has no company to find: its folder is always the same."""
+    return ResolvedCounterparty(
+        email=email,
+        organization_name=INTERNAL_COMPANY_FOLDER,
+        role=InterlocutorType.INTERNE,
+        organization_locked=True,
         source=source,
     )
 
@@ -119,6 +136,12 @@ def _primary_external_email(
     mail: MailMetadata,
     directory: RoutingDirectoryProtocol | None,
 ) -> tuple[str | None, str]:
+    if is_internal_mail(mail.sender_email, mail.recipients):
+        forwarded = forwarded_counterparty_email(mail)
+        if forwarded is not None:
+            return forwarded, INTERNAL_FORWARD_SOURCE
+        # Decided on the addresses alone: an address quoted in the body changes nothing.
+        return None, INTERNAL_MAIL_SOURCE
     if mail.direction == Direction.SENT:
         for recipient in mail.recipients:
             email = _external_email_from_text(recipient)
@@ -130,6 +153,14 @@ def _primary_external_email(
         email = _external_email_from_text(value)
         if email:
             return email, "sender"
+
+    sender_domain = email_domain(mail.sender_email)
+    if sender_domain and is_internal_domain(sender_domain):
+        # A colleague's mail read from a copy: the counterparty is whom it was sent to.
+        for recipient in mail.recipients:
+            email = _external_email_from_text(recipient)
+            if email:
+                return email, "first_external_recipient"
 
     body_emails = _external_emails_from_text(mail.body_excerpt)
     if directory is not None:
