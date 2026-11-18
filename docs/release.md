@@ -1,9 +1,10 @@
 # Release
 
-## Version 0.17.0
+## Version 0.17.1
 
 Revue complète du projet (voir [la revue](project-review.md)) : corrections, réglages
-manquants et textes harmonisés.
+manquants et textes harmonisés. Le tag `v0.17.0` n'a donné lieu à aucune release : sa
+validation échouait faute de la dépendance de test `pytest-qt`, rétablie ici.
 
 - réglages : `Délai maximal par mail` pour OpenAI et Jev (comme Ollama) ; le seuil de
   vérification s'applique aussitôt à la session ; une clé saisie est enregistrée avec
@@ -32,7 +33,7 @@ manquants et textes harmonisés.
   laisser l'installateur remplacer le programme ;
 - rapport CSV : un objet de mail ne peut plus être interprété comme une formule ;
 - boutons standard des dialogues en français ; textes de l'interface accentués ;
-- dépendances `structlog` et `pytest-qt`, inutilisées, retirées ;
+- dépendance `structlog`, inutilisée, retirée ;
 - le numéro de version affiché suit à nouveau la release (la 0.16.0 affichait 0.15.0).
 
 ## Version 0.16.0
