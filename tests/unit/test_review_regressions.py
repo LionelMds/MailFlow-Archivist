@@ -587,7 +587,7 @@ def test_settings_page_saves_engine_timeouts_and_confidence_threshold(
 
     window.mailflow_openai_timeout_input.setValue(45.0)
     window.mailflow_jev_timeout_input.setValue(12.5)
-    window.mailflow_confidence_threshold_input.setValue(90)
+    window.mailflow_threshold_slider.setValue(90)
     window.mailflow_save_settings_button.click()
 
     saved = load_settings(settings.paths.config_file)
@@ -597,7 +597,7 @@ def test_settings_page_saves_engine_timeouts_and_confidence_threshold(
     # The threshold also applies to the session, without a restart.
     assert controller.preview_pipeline.decision_confidence_threshold == pytest.approx(0.9)
     # The AI contract already reviews below 80 %: the control cannot go lower.
-    assert window.mailflow_confidence_threshold_input.minimum() == 80
+    assert window.mailflow_threshold_slider.minimum() == 80
     window.close()
     qt_app.processEvents()
 

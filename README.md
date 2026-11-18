@@ -41,7 +41,9 @@ L'application comprend :
   automatiquement, les autres attendent une verification, avec rappels aux heures
   choisies ;
 - export CSV de rapport sans corps de mails ;
-- interface PySide6 avec recherche, filtres de statut et aperçu de lecture ;
+- interface PySide6 au style Industry (polices Barlow embarquées, icônes Lucide) : file de
+  vérification un mail à la fois, validation groupée, arborescence avec détection des
+  doublons, annuaire et réglages en trois colonnes ; vue tableau avec recherche et filtres ;
 - tests unitaires et smoke tests.
 
 ## Export HTML projet

@@ -187,7 +187,7 @@ poste : l'ancien répertoire temporaire global de pytest n'y est pas accessible.
 Les tests ne sollicitent pas Outlook réel ni l'API OpenAI. L'accès Astra, la précision
 sur les dossiers métier, les coûts et les temps réels restent donc à mesurer.
 
-# Revue du 17 novembre 2026 (version 0.16.0)
+# Revue du 17 novembre 2026 (version 0.17.0)
 
 Les sections ci-dessus décrivent l'état de la 0.8.6 et restent un instantané. Cette
 seconde revue a relu tout le code de la 0.15.0 (classification, Outlook et stockage,
